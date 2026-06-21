@@ -1,0 +1,250 @@
+CREATE DATABASE IF NOT EXISTS worktrack CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE worktrack;
+
+-- Users
+CREATE TABLE IF NOT EXISTS users (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  username     VARCHAR(50)  NOT NULL UNIQUE,
+  email        VARCHAR(100) NOT NULL UNIQUE,
+  password     VARCHAR(255) NOT NULL,
+  full_name    VARCHAR(100) NOT NULL,
+  role         ENUM('admin','manager','leader','user') NOT NULL DEFAULT 'user',
+  avatar_color VARCHAR(20)  DEFAULT '#3a7bd5',
+  is_active    TINYINT(1)   NOT NULL DEFAULT 1,
+  last_login   DATETIME,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Refresh tokens
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  user_id    INT          NOT NULL,
+  token      VARCHAR(512) NOT NULL,
+  expires_at DATETIME     NOT NULL,
+  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Groups (MES, QC, ...)
+CREATE TABLE IF NOT EXISTS `groups` (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(100) NOT NULL,
+  icon       VARCHAR(10)  DEFAULT '🏭',
+  leader_id  INT,
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (leader_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Group members
+CREATE TABLE IF NOT EXISTS group_members (
+  id        INT AUTO_INCREMENT PRIMARY KEY,
+  group_id  INT NOT NULL,
+  user_id   INT NOT NULL,
+  joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_gm (group_id, user_id),
+  FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)  REFERENCES users(id)    ON DELETE CASCADE
+);
+
+-- Daily task groups (MES có thể có nhiều nhóm CV: MES, Asuoo...)
+CREATE TABLE IF NOT EXISTS daily_task_groups (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  group_id   INT          NOT NULL,
+  name       VARCHAR(100) NOT NULL,
+  icon       VARCHAR(10)  DEFAULT '📋',
+  created_by INT          NOT NULL,
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (group_id)   REFERENCES `groups`(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id)    ON DELETE CASCADE
+);
+
+-- Daily tasks (from việc trong nhóm)
+CREATE TABLE IF NOT EXISTS daily_tasks (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  task_group_id  INT           NOT NULL,
+  name           VARCHAR(200)  NOT NULL,
+  max_score      DECIMAL(6,1)  NOT NULL DEFAULT 10,
+  frequency      ENUM('daily','weekly','monthly') NOT NULL DEFAULT 'daily',
+  frequency_day  TINYINT       DEFAULT NULL,
+  sort_order     INT           NOT NULL DEFAULT 0,
+  is_active      TINYINT(1)    NOT NULL DEFAULT 1,
+  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (task_group_id) REFERENCES daily_task_groups(id) ON DELETE CASCADE
+);
+
+-- Daily task logs (tick + điểm mỗi ngày mỗi người)
+CREATE TABLE IF NOT EXISTS daily_task_logs (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  daily_task_id INT           NOT NULL,
+  user_id       INT           NOT NULL,
+  log_date      DATE          NOT NULL,
+  is_done       TINYINT(1)    NOT NULL DEFAULT 0,
+  score         DECIMAL(6,1)  NOT NULL DEFAULT 0,
+  note          TEXT,
+  scored_by     INT,
+  scored_at     DATETIME,
+  created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_log (daily_task_id, user_id, log_date),
+  FOREIGN KEY (daily_task_id) REFERENCES daily_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)       REFERENCES users(id)       ON DELETE CASCADE,
+  FOREIGN KEY (scored_by)     REFERENCES users(id)       ON DELETE SET NULL
+);
+
+-- Request tasks (CV yêu cầu)
+CREATE TABLE IF NOT EXISTS request_tasks (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  title        VARCHAR(200) NOT NULL,
+  description  TEXT,
+  tools        TEXT,
+  priority     ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
+  status       ENUM('pending','assigned','in_progress','done','cancelled') NOT NULL DEFAULT 'pending',
+  created_by   INT      NOT NULL,
+  group_id     INT,
+  deadline     DATETIME,
+  started_at   DATETIME,
+  completed_at DATETIME,
+  score        DECIMAL(6,1),
+  scored_by    INT,
+  scored_at    DATETIME,
+  is_late      TINYINT(1) NOT NULL DEFAULT 0,
+  created_at   DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by) REFERENCES users(id)    ON DELETE CASCADE,
+  FOREIGN KEY (group_id)   REFERENCES `groups`(id) ON DELETE SET NULL,
+  FOREIGN KEY (scored_by)  REFERENCES users(id)    ON DELETE SET NULL
+);
+
+-- Request task assignees (người thực hiện + hỗ trợ)
+CREATE TABLE IF NOT EXISTS request_task_assignees (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  task_id     INT  NOT NULL,
+  user_id     INT  NOT NULL,
+  role        ENUM('main','support') NOT NULL DEFAULT 'main',
+  accepted_at DATETIME,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_ta (task_id, user_id),
+  FOREIGN KEY (task_id)  REFERENCES request_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)  REFERENCES users(id)          ON DELETE CASCADE
+);
+
+-- Request task files
+CREATE TABLE IF NOT EXISTS request_task_files (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  task_id     INT          NOT NULL,
+  filename    VARCHAR(255) NOT NULL,
+  filepath    VARCHAR(500) NOT NULL,
+  filesize    INT,
+  uploaded_by INT          NOT NULL,
+  uploaded_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (task_id)     REFERENCES request_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id)          ON DELETE CASCADE
+);
+
+-- Request task comments
+CREATE TABLE IF NOT EXISTS request_task_comments (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  task_id    INT  NOT NULL,
+  user_id    INT  NOT NULL,
+  message    TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (task_id)  REFERENCES request_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)  REFERENCES users(id)          ON DELETE CASCADE
+);
+
+-- Score periods (kỳ chốt điểm)
+CREATE TABLE IF NOT EXISTS score_periods (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(100) NOT NULL,
+  started_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at   DATETIME,
+  locked_at  DATETIME,
+  locked_by  INT,
+  excel_path VARCHAR(500),
+  is_locked  TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (locked_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Score snapshots (điểm tại thời điểm chốt)
+CREATE TABLE IF NOT EXISTS score_snapshots (
+  id                 INT AUTO_INCREMENT PRIMARY KEY,
+  period_id          INT          NOT NULL,
+  user_id            INT          NOT NULL,
+  score_daily        DECIMAL(8,1) NOT NULL DEFAULT 0,
+  score_request      DECIMAL(8,1) NOT NULL DEFAULT 0,
+  score_support      DECIMAL(8,1) NOT NULL DEFAULT 0,
+  score_total        DECIMAL(8,1) NOT NULL DEFAULT 0,
+  cv_daily_count     INT          NOT NULL DEFAULT 0,
+  cv_request_main    INT          NOT NULL DEFAULT 0,
+  cv_request_support INT          NOT NULL DEFAULT 0,
+  cv_ontime          INT          NOT NULL DEFAULT 0,
+  cv_late            INT          NOT NULL DEFAULT 0,
+  created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_ps (period_id, user_id),
+  FOREIGN KEY (period_id) REFERENCES score_periods(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)   REFERENCES users(id)          ON DELETE CASCADE
+);
+
+-- ── SEED DATA ──
+-- Admin: admin / Admin@123
+INSERT IGNORE INTO users (username, email, password, full_name, role, avatar_color)
+VALUES ('admin','admin@worktrack.local','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWq','System Admin','admin','#1e2a3a');
+
+-- First period
+INSERT IGNORE INTO score_periods (id, name, started_at, is_locked)
+VALUES (1, 'Period 1', NOW(), 0);
+
+
+
+USE worktrack;
+
+-- Xóa admin cũ nếu có
+DELETE FROM users WHERE username = 'admin';
+
+-- Tạo lại với hash đúng (Admin@123)
+INSERT INTO users (username, email, password, full_name, role, avatar_color)
+VALUES (
+  'admin',
+  'admin@worktrack.local',
+  '$2a$10$N1QXWotLpEt34CXSdwbfKe9ITN119X0ZIntyMYsn6VVb7iR/Zqo9a',
+  'System Admin',
+  'admin',
+  '#1e2a3a'
+);
+
+
+
+-- Chạy từng lệnh riêng, bỏ qua nếu index đã tồn tại
+
+-- daily_task_logs
+ALTER TABLE daily_task_logs ADD INDEX idx_log_date (log_date);
+ALTER TABLE daily_task_logs ADD INDEX idx_log_user_date (user_id, log_date);
+ALTER TABLE daily_task_logs ADD INDEX idx_log_task_user_date (daily_task_id, user_id, log_date);
+
+-- daily_tasks
+ALTER TABLE daily_tasks ADD INDEX idx_task_group (task_group_id);
+ALTER TABLE daily_tasks ADD INDEX idx_task_active (is_active);
+
+-- daily_task_groups
+ALTER TABLE daily_task_groups ADD INDEX idx_tg_group (group_id);
+ALTER TABLE daily_task_groups ADD INDEX idx_tg_active (is_active);
+
+-- group_members
+ALTER TABLE group_members ADD INDEX idx_gm_group (group_id);
+ALTER TABLE group_members ADD INDEX idx_gm_user (user_id);
+
+-- request_tasks
+ALTER TABLE request_tasks ADD INDEX idx_rt_status (status);
+ALTER TABLE request_tasks ADD INDEX idx_rt_completed (completed_at);
+
+-- request_task_assignees
+ALTER TABLE request_task_assignees ADD INDEX idx_rta_user (user_id);
+ALTER TABLE request_task_assignees ADD INDEX idx_rta_task (task_id);
+
+
+UPDATE users SET password = '$2a$10$N1QXWotLpEt34CXSdwbfKe9ITN119X0ZIntyMYsn6VVb7iR/Zqo9a' WHERE username = 'admin';

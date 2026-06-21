@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer components {
+  .btn { @apply inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer transition-all; }
+  .btn-primary { @apply bg-[#3a7bd5] text-white border-0 hover:bg-[#2563b5]; }
+  .btn-success { @apply bg-[#27ae60] text-white border-0 hover:bg-[#219a52]; }
+  .btn-danger  { @apply bg-red-50 text-red-500 border border-red-200 hover:bg-red-100; }
+  .btn-outline { @apply bg-white text-gray-600 border border-gray-200 hover:bg-gray-50; }
+  .btn-dark    { @apply bg-[#1e2a3a] text-white border-0 hover:bg-[#2d3f52]; }
+  .card        { @apply bg-white rounded-xl border border-gray-200 overflow-hidden; }
+  .input       { @apply w-full px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none transition focus:border-[#3a7bd5] focus:ring-2 focus:ring-blue-100; }
+  .label       { @apply block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1; }
+  .badge       { @apply inline-flex items-center text-xs font-bold px-2 py-0.5 rounded-lg; }
+  .badge-blue  { @apply bg-blue-50 text-blue-600; }
+  .badge-green { @apply bg-green-50 text-green-700; }
+  .badge-red   { @apply bg-red-50 text-red-600; }
+  .badge-orange{ @apply bg-orange-50 text-orange-600; }
+  .badge-gray  { @apply bg-gray-100 text-gray-500; }
+}
