@@ -78,3 +78,16 @@ exports.me = async (req, res) => {
     res.json({ success: true, data: { ...user, groups } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
+
+// POST /auth/change-password
+exports.changePassword = async (req, res) => {
+  try {
+    const { old_password, new_password } = req.body;
+    const [[user]] = await db.query('SELECT * FROM users WHERE id=?', [req.user.id]);
+    const ok = await bcrypt.compare(old_password, user.password);
+    if (!ok) return res.status(400).json({ success:false, message:'Mật khẩu hiện tại không đúng!' });
+    const hash = await bcrypt.hash(new_password, 10);
+    await db.query('UPDATE users SET password=? WHERE id=?', [hash, req.user.id]);
+    res.json({ success:true });
+  } catch(e) { res.status(500).json({ success:false, message:e.message }); }
+};

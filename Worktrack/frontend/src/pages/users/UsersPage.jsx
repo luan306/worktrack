@@ -61,6 +61,16 @@ const PERMS = [
   ['Import users',                     true, false,false,false],
 ];
 
+
+// Gen username: Nguyễn Văn A → a.nv (tên đầu + viết tắt họ đệm)
+const genUsername = (fullName) => {
+  const parts = fullName.trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().split(/\s+/);
+  if (!parts.length) return '';
+  const firstName = parts[parts.length - 1]; // tên
+  const initials  = parts.slice(0, parts.length - 1).map(p => p[0]).join(''); // viết tắt họ + đệm
+  return (firstName + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g, '');
+};
+
 export default function UsersPage(){
   const [tab,      setTab]      = useState('users');
   const [users,    setUsers]    = useState([]);
@@ -125,6 +135,12 @@ export default function UsersPage(){
     catch(e){ alert(e.message); }
   };
 
+  const deleteUser = async(u)=>{
+    if(!confirm(`Xóa user "${u.full_name}"?\nHành động này không thể hoàn tác!`)) return;
+    try { await api.delete(`/users/${u.id}`); fetchUsers(); }
+    catch(e){ alert(e.response?.data?.message||e.message); }
+  };
+
   // ── Group CRUD ──
   const createGroup = async(form)=>{
     try { await api.post('/groups',form); setShowAddGroup(false); fetchGroups(); }
@@ -157,13 +173,44 @@ export default function UsersPage(){
     const file = e.target.files[0];
     if(!file) return;
     setImportFile(file);
-    // Read CSV preview
-    const text = await file.text();
-    const lines = text.trim().split('\n').filter(Boolean).slice(0,20);
-    const rows = lines.map(line=>{
-      const [full_name,email,role,group] = line.split(',').map(s=>s.trim());
-      const valid = full_name && email && email.includes('@');
-      return {full_name,email,role:role||'user',group,valid};
+    // Đọc file — hỗ trợ UTF-8, UTF-8 BOM, Windows-1252 (Excel mặc định)
+    const readFile = (f, enc) => new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload  = e => res(e.target.result);
+      reader.onerror = rej;
+      reader.readAsText(f, enc);
+    });
+
+    const buffer = await file.arrayBuffer();
+    const bytes  = new Uint8Array(buffer);
+
+    // Detect BOM
+    let text = '';
+    if (bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF) {
+      // UTF-8 BOM
+      text = await readFile(file, 'utf-8');
+    } else if (bytes[0]===0xFF && bytes[1]===0xFE) {
+      // UTF-16 LE BOM
+      text = new TextDecoder('utf-16le').decode(buffer);
+    } else {
+      // Thử UTF-8 trước
+      const utf8 = new TextDecoder('utf-8').decode(buffer);
+      // Kiểm tra có ký tự lỗi không (dấu hiệu ANSI)
+      const hasGarbled = /[�Ãáà]/.test(utf8.slice(0,200));
+      if (hasGarbled) {
+        text = await readFile(file, 'windows-1252');
+      } else {
+        text = utf8;
+      }
+    }
+    text = text.replace('\uFEFF', ''); // strip BOM
+    const lines = text.trim().split('\n').map(l => l.replace('\r', '')).filter(Boolean).slice(0, 200);
+    // Bỏ qua dòng header nếu có
+    const dataLines = lines.filter(l => !l.startsWith('Họ tên'));
+    const rows = dataLines.map(line=>{
+      const [full_name='',email='',role='',group=''] = line.split(',').map(s=>s.trim());
+      const valid = !!full_name;
+      return {full_name, email, role:role||'user', group, valid};
     });
     setImportPreview(rows);
   };
@@ -173,8 +220,12 @@ export default function UsersPage(){
     setImporting(true);
     try {
       const rows = importPreview.filter(r=>r.valid).map(r=>({
-        full_name:r.full_name, email:r.email, role:r.role,
-        username: r.email.split('@')[0],
+        full_name:  r.full_name,
+        email:      r.email||'',
+        role:       r.role||'user',
+        group_name: r.group||'',
+        username:   genUsername(r.full_name),
+        password:   'Welcome00',
       }));
       await api.post('/users/import',{users:rows});
       alert(`✅ Đã import ${rows.length} user!`);
@@ -300,6 +351,8 @@ export default function UsersPage(){
                           style={{width:28,height:28,borderRadius:6,border:`1px solid ${u.is_active?'#fde8e8':'#e8f8ee'}`,background:u.is_active?'#fde8e8':'#e8f8ee',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:13}}>
                           {u.is_active?'🔒':'🔓'}
                         </button>
+                        <button onClick={()=>deleteUser(u)} title="Xóa user"
+                          style={{width:28,height:28,borderRadius:6,border:'1px solid #fde8e8',background:'#fde8e8',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:13}}>🗑️</button>
                       </div>
                     </td>
                   </tr>
@@ -435,8 +488,8 @@ export default function UsersPage(){
               📥 Import user từ CSV / Excel
             </div>
             <div style={{fontSize:12,color:'#888',marginBottom:16,lineHeight:1.6}}>
-              Format mỗi dòng: <code style={{background:'#f0f2f8',padding:'1px 6px',borderRadius:4}}>Họ tên, Email, Role, Nhóm</code>
-              <br/>Mật khẩu mặc định: <code style={{background:'#f0f2f8',padding:'1px 6px',borderRadius:4}}>Worktrack@123</code>
+              Format CSV: <code style={{background:'#f0f2f8',padding:'1px 6px',borderRadius:4}}>Họ tên, Email, Role, Nhóm</code>
+              <br/>Các cột không bắt buộc — để trống vẫn import được. Mật khẩu mặc định: <code style={{background:'#f0f2f8',padding:'1px 6px',borderRadius:4}}>Welcome00</code>
             </div>
 
             {/* Upload zone */}
@@ -453,7 +506,23 @@ export default function UsersPage(){
             </div>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{display:'none'}} onChange={handleFileChange}/>
 
-            <button style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:12,fontWeight:600,color:'#555',cursor:'pointer',marginTop:12}}>
+            <button onClick={()=>{
+                const csv = [
+                  'Họ tên,Email,Role,Nhóm',
+                  'Nguyễn Văn A,nva@smc.com,user,MES',
+                  'Trần Thị B,,,',
+                  'Lê Văn C,lvc@smc.com,leader,Office365',
+                ].join('\n');
+                const BOM = '\uFEFF';
+                const blob = new Blob([BOM + csv], {type:'text/csv;charset=utf-8;'});
+                const url  = URL.createObjectURL(blob);
+                const a    = document.createElement('a');
+                a.href     = url;
+                a.download = 'mau_import_user.csv';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:12,fontWeight:600,color:'#555',cursor:'pointer',marginTop:12}}>
               ⬇️ Tải file mẫu
             </button>
 
@@ -468,23 +537,28 @@ export default function UsersPage(){
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                   <thead>
                     <tr style={{background:C.bg}}>
-                      {['Họ tên','Email','Quyền','Nhóm','Trạng thái'].map(h=>(
-                        <th key={h} style={{padding:'8px 12px',textAlign:'left',borderBottom:`1px solid ${C.border}`,color:'#888'}}>{h}</th>
+                      {['STT','Họ tên','Email','Role','Nhóm','Username','Trạng thái'].map(h=>(
+                        <th key={h} style={{padding:'6px 10px',textAlign:'left',borderBottom:`1px solid ${C.border}`,color:'#888',fontSize:11,whiteSpace:'nowrap'}}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {importPreview.map((row,i)=>(
-                      <tr key={i} style={{borderBottom:`1px solid #f5f6f8`,background:row.valid?'transparent':'#fffafa'}}>
-                        <td style={{padding:'8px 12px'}}>{row.full_name||'—'}</td>
-                        <td style={{padding:'8px 12px',color:row.valid?'#333':C.danger}}>{row.email||'—'}</td>
-                        <td style={{padding:'8px 12px'}}><RoleBadge role={row.role||'user'}/></td>
-                        <td style={{padding:'8px 12px'}}>{row.group||'—'}</td>
-                        <td style={{padding:'8px 12px',color:row.valid?C.success:C.danger,fontWeight:700}}>
-                          {row.valid?'✓ Hợp lệ':'✗ Email không hợp lệ'}
-                        </td>
-                      </tr>
-                    ))}
+                    {importPreview.map((row,i)=>{
+                      const uname = genUsername(row.full_name||'');
+                      return (
+                        <tr key={i} style={{borderBottom:`1px solid #f5f6f8`,background:row.valid?'transparent':'#fffafa'}}>
+                          <td style={{padding:'6px 10px',color:'#aaa',fontSize:11}}>{i+1}</td>
+                          <td style={{padding:'6px 10px',fontWeight:600,color:row.valid?C.dark:C.danger,fontSize:12}}>{row.full_name||'—'}</td>
+                          <td style={{padding:'6px 10px',color:'#555',fontSize:11}}>{row.email||<span style={{color:'#ccc'}}>—</span>}</td>
+                          <td style={{padding:'6px 10px'}}><RoleBadge role={row.role||'user'}/></td>
+                          <td style={{padding:'6px 10px',color:'#555',fontSize:11}}>{row.group||<span style={{color:'#ccc'}}>—</span>}</td>
+                          <td style={{padding:'6px 10px',color:'#555',fontSize:11,fontFamily:'monospace'}}>{uname}</td>
+                          <td style={{padding:'6px 10px',color:row.valid?C.success:C.danger,fontWeight:700,fontSize:11}}>
+                            {row.valid?'✓':'✗ Tên trống'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:12}}>
@@ -507,7 +581,7 @@ export default function UsersPage(){
       <AddUserModal show={showAddUser} groups={groups} onClose={()=>setShowAddUser(false)} onSave={createUser}/>
 
       {/* ══ Modal: Sửa user ══ */}
-      <EditUserModal show={!!editUser} user={editUser} onClose={()=>setEditUser(null)} onSave={f=>updateUser(editUser.id,f)}/>
+      <EditUserModal show={!!editUser} user={editUser} groups={groups} onClose={()=>setEditUser(null)} onSave={f=>updateUser(editUser.id,f)}/>
 
       {/* ══ Modal: Tạo nhóm ══ */}
       <AddGroupModal show={showAddGroup} users={users} onClose={()=>setShowAddGroup(false)} onSave={createGroup}/>
@@ -566,20 +640,41 @@ function AddUserModal({show,groups,onClose,onSave}){
 }
 
 // ── Modal: Sửa user ──
-function EditUserModal({show,user,onClose,onSave}){
+function EditUserModal({show,user,groups=[],onClose,onSave}){
   const [f,setF]=useState({});
-  useEffect(()=>{ if(user) setF({full_name:user.full_name,email:user.email,role:user.role}); },[user]);
+  useEffect(()=>{
+    if(user) setF({
+      full_name:user.full_name,
+      email:user.email,
+      role:user.role,
+      group_id: user.groups?.[0]?.id||'',
+      avatar_color: user.avatar_color||'#3a7bd5',
+    });
+  },[user]);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   return (
     <Modal show={show} title="✏️ Sửa nhân viên" onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div><label style={FL}>Họ tên</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
         <div><label style={FL}>Email</label><input type="email" style={FI} value={f.email||''} onChange={e=>s('email',e.target.value)}/></div>
+        <div style={{display:'flex',gap:12}}>
+          <div style={{flex:1}}>
+            <label style={FL}>Quyền</label>
+            <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
+              {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1}}>
+            <label style={FL}>Nhóm</label>
+            <select style={FI} value={f.group_id||''} onChange={e=>s('group_id',e.target.value)}>
+              <option value="">-- Không có --</option>
+              {groups.map(g=><option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
+            </select>
+          </div>
+        </div>
         <div>
-          <label style={FL}>Quyền</label>
-          <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
-            {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
-          </select>
+          <label style={FL}>Màu avatar</label>
+          <input type="color" style={{...FI,height:38,cursor:'pointer'}} value={f.avatar_color||'#3a7bd5'} onChange={e=>s('avatar_color',e.target.value)}/>
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
           <button onClick={onClose} style={{padding:'7px 16px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>Huỷ</button>

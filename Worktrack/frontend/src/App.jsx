@@ -12,6 +12,7 @@ const RequestsPage  = lazy(() => import('./pages/requests/RequestsPage'));
 const CompletedPage = lazy(() => import('./pages/completed/CompletedPage'));
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const UsersPage     = lazy(() => import('./pages/users/UsersPage'));
+const ProfilePage = lazy(() => import('./pages/profile/ProfilePage.jsx'));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -58,6 +59,7 @@ export default function App() {
                 <Route path="completed" element={<CompletedPage />} />
                 <Route path="dashboard" element={<DashboardPage />} />
                 <Route path="users"     element={<UsersPage />} />
+                <Route path="profile"   element={<ProfilePage />} />
               </Route>
             </Route>
 

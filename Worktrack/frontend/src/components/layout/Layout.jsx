@@ -11,7 +11,8 @@ const NAV = [
   null,
   { to:'/dashboard', icon:'📊', label:'Dashboard',     roles:['admin','manager'] },
   { to:'/users',     icon:'👥', label:'Quản lý User',  roles:['admin'] },
-  { to:'/settings',  icon:'⚙️', label:'Cài đặt' },
+  null,
+  { to:'/profile',   icon:'👤', label:'Tài khoản của tôi' },
 ];
 
 export function Sidebar() {
