@@ -203,14 +203,21 @@ export default function UsersPage(){
         text = utf8;
       }
     }
-    text = text.replace('\uFEFF', ''); // strip BOM
-    const lines = text.trim().split('\n').map(l => l.replace('\r', '')).filter(Boolean).slice(0, 200);
-    // Bỏ qua dòng header nếu có
-    const dataLines = lines.filter(l => !l.startsWith('Họ tên'));
-    const rows = dataLines.map(line=>{
-      const [full_name='',email='',role='',group=''] = line.split(',').map(s=>s.trim());
-      const valid = !!full_name;
-      return {full_name, email, role:role||'user', group, valid};
+    text = text.replace(/^\uFEFF/, ''); // strip BOM
+    const lines = text.trim().split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0, 500);
+
+    // Bỏ qua dòng header
+    const isHeader = l => /^(h[oọ]\s*t[eê]n|full.?name|name|email|stt)/i.test(l.split(',')[0].trim());
+    const dataLines = lines.filter(l => !isHeader(l));
+
+    const rows = dataLines.map(line => {
+      const parts = line.split(',').map(s => s.trim());
+      const full_name = parts[0] || '';
+      const email     = parts[1] || '';
+      const role      = parts[2] || '';
+      const group     = parts[3] || '';
+      const valid     = full_name.length > 1;
+      return { full_name, email, role: role||'user', group, valid };
     });
     setImportPreview(rows);
   };
@@ -227,10 +234,15 @@ export default function UsersPage(){
         username:   genUsername(r.full_name),
         password:   'Welcome00',
       }));
-      await api.post('/users/import',{users:rows});
-      alert(`✅ Đã import ${rows.length} user!`);
+      const {data} = await api.post('/users/import',{users:rows});
+      const res = data.data;
+      let msg = `✅ Đã tạo: ${res.created} user`;
+      if (res.duplicates?.length) msg += `\n⚠️ Trùng username (${res.duplicates.length}):`;
+      res.duplicates?.forEach(d => { msg += `\n  • ${d.name} → "${d.username}" đã dùng bởi "${d.existing}"`; });
+      if (res.errors?.length)     msg += `\n❌ Lỗi: ${res.errors.map(e=>e.name).join(', ')}`;
+      alert(msg);
       setImportPreview(null); setImportFile(null);
-      fetchUsers();
+      fetchUsers(); fetchGroups();
     } catch(e){ alert(e.message); }
     finally{ setImporting(false); }
   };
@@ -509,9 +521,9 @@ export default function UsersPage(){
             <button onClick={()=>{
                 const csv = [
                   'Họ tên,Email,Role,Nhóm',
-                  'Nguyễn Văn A,nva@smc.com,user,MES',
+                  'Nguyễn Văn A,nva@company.com,user,MES',
                   'Trần Thị B,,,',
-                  'Lê Văn C,lvc@smc.com,leader,Office365',
+                  'Lê Văn C,lvc@company.com,leader,Bảo trì',
                 ].join('\n');
                 const BOM = '\uFEFF';
                 const blob = new Blob([BOM + csv], {type:'text/csv;charset=utf-8;'});

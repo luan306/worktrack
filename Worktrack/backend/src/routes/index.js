@@ -61,4 +61,13 @@ router.get ('/dashboard/scores',             auth(['admin','manager']), dbC.getS
 router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);
 router.get ('/dashboard/excel/:filename',    auth(['admin','manager']), dbC.downloadExcel);
 
+// Debug: đếm users
+router.get('/debug/users', auth(['admin']), async (req, res) => {
+  const db = require('../config/db');
+  const [all]    = await db.query('SELECT COUNT(*) as c FROM users');
+  const [active] = await db.query('SELECT COUNT(*) as c FROM users WHERE is_active=1');
+  const [rows]   = await db.query('SELECT id,username,full_name,is_active FROM users LIMIT 20');
+  res.json({ total: all[0].c, active: active[0].c, rows });
+});
+
 module.exports = router;

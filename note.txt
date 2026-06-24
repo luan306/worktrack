@@ -248,3 +248,20 @@ ALTER TABLE request_task_assignees ADD INDEX idx_rta_task (task_id);
 
 
 UPDATE users SET password = '$2a$10$N1QXWotLpEt34CXSdwbfKe9ITN119X0ZIntyMYsn6VVb7iR/Zqo9a' WHERE username = 'admin';
+
+
+SELECT id, username, full_name, is_active FROM users ORDER BY id;
+SELECT username FROM users WHERE username LIKE '%.%' ORDER BY created_at DESC LIMIT 10;
+
+
+-- Chạy từng lệnh, bỏ qua nếu báo "Duplicate column name"
+
+ALTER TABLE request_task_comments ADD COLUMN content TEXT;
+ALTER TABLE request_task_comments ADD COLUMN type VARCHAR(20) DEFAULT 'comment';
+
+-- Copy dữ liệu cũ sang content
+UPDATE request_task_comments SET content=message WHERE content IS NULL;
+
+UPDATE request_task_comments SET content=message WHERE id>0;
+
+select * from users

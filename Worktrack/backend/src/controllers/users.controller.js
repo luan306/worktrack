@@ -4,22 +4,28 @@ const db = require('../config/db');
 exports.list = async (req, res) => {
   try {
     const { group_id, role, search, is_active } = req.query;
+
+    // Tăng giới hạn GROUP_CONCAT
+    await db.query('SET SESSION group_concat_max_len = 10000');
+
     let sql = `SELECT u.id,u.username,u.email,u.full_name,u.role,u.avatar_color,u.is_active,u.last_login,u.created_at,
-               GROUP_CONCAT(DISTINCT CONCAT(g.id,':',g.name) SEPARATOR '|') as groups_raw
+               GROUP_CONCAT(DISTINCT CONCAT(g.id,':',g.name) ORDER BY g.name SEPARATOR '|') as groups_raw
                FROM users u
                LEFT JOIN group_members gm ON gm.user_id=u.id
                LEFT JOIN \`groups\` g ON g.id=gm.group_id AND g.is_active=1
-               WHERE 1=1`;
+               WHERE u.is_active=1`;
     const p = [];
-    if (role)      { sql += ' AND u.role=?'; p.push(role); }
-    if (is_active !== undefined) { sql += ' AND u.is_active=?'; p.push(is_active); }
-    if (search)    { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
-    if (group_id)  { sql += ' AND gm.group_id=?'; p.push(group_id); }
+    if (role)     { sql += ' AND u.role=?'; p.push(role); }
+    if (search)   { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
+    if (group_id) { sql += ' AND gm.group_id=?'; p.push(group_id); }
     sql += ' GROUP BY u.id ORDER BY u.full_name';
+
     const [rows] = await db.query(sql, p);
     const data = rows.map(r => ({
       ...r,
-      groups: r.groups_raw ? r.groups_raw.split('|').map(s => { const [id,name]=s.split(':'); return {id:+id,name}; }) : [],
+      groups: r.groups_raw
+        ? r.groups_raw.split('|').map(s => { const [id,...rest]=s.split(':'); return {id:+id, name:rest.join(':')}; })
+        : [],
       groups_raw: undefined,
     }));
     res.json({ success: true, data });
@@ -73,43 +79,83 @@ exports.resetPassword = async (req, res) => {
 exports.importUsers = async (req, res) => {
   try {
     const { users } = req.body;
-    let created = 0, errors = [];
     const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b'];
+
+    const genUsername = (name) => {
+      const parts = name.trim().normalize('NFD')
+        .replace(/[̀-ͯ]/g,'').toLowerCase().split(/\s+/);
+      if (!parts.length) return 'user';
+      const first    = parts[parts.length - 1];
+      const initials = parts.slice(0, parts.length - 1).map(p => p[0]).join('');
+      return (first + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g,'').substring(0, 30) || 'user';
+    };
+
+    let created = 0, duplicates = [], errors = [];
+
+    console.log('[import] Nhận', users.length, 'users:', JSON.stringify(users.slice(0,2)));
 
     for (const u of users) {
       try {
-        const hash  = await bcrypt.hash(u.password || 'Welcome00', 10);
-        const color = COLORS[Math.floor(Math.random() * COLORS.length)];
-        // Gen username: Nguyễn Văn A → a.nv
-        const genUsername = (name) => {
-          const parts = name.trim().normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().split(/\s+/);
-          if (!parts.length) return name.toLowerCase().substring(0,20);
-          const firstName = parts[parts.length - 1];
-          const initials  = parts.slice(0, parts.length - 1).map(p => p[0]).join('');
-          return (firstName + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g,'').substring(0,30);
-        };
-        const uname = u.username || genUsername(u.full_name);
-
-        const [r] = await db.query(
-          `INSERT IGNORE INTO users
-            (username, email, password, full_name, role, avatar_color)
-           VALUES (?,?,?,?,?,?)`,
-          [uname, u.email||null, hash, u.full_name, u.role||'user', color]
-        );
-
-        if (r.insertId) {
-          // Add vào nhóm nếu có group_id hoặc group_name
-          if (u.group_id) {
-            await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [u.group_id, r.insertId]);
-          } else if (u.group_name) {
-            const [gs] = await db.query('SELECT id FROM `groups` WHERE name=? LIMIT 1', [u.group_name]);
-            if (gs.length) await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [gs[0].id, r.insertId]);
-          }
-          created++;
+        if (!u.full_name || !u.full_name.trim()) {
+          errors.push({ name: '(trống)', error: 'Tên trống' });
+          continue;
         }
-      } catch (e) { errors.push({ user: u.full_name, error: e.message }); }
+
+        const uname = genUsername(u.full_name.trim());
+        const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+
+        console.log('[import] Processing:', u.full_name, '→ username:', uname);
+
+        // Kiểm tra trùng username
+        const [[exist]] = await db.query(
+          'SELECT id, full_name FROM users WHERE username=?', [uname]
+        );
+        if (exist) {
+          duplicates.push({ name: u.full_name, username: uname, existing: exist.full_name });
+          continue;
+        }
+
+        const hash = await bcrypt.hash('Welcome00', 10);
+        const [r]  = await db.query(
+          'INSERT INTO users (username,email,password,full_name,role,avatar_color) VALUES (?,?,?,?,?,?)',
+          [uname, u.email||null, hash, u.full_name.trim(), u.role||'user', color]
+        );
+        console.log('[import] Insert result:', r.insertId, r.affectedRows);
+
+        if (r.insertId && u.group_name && u.group_name.trim()) {
+          try {
+            // Tìm nhóm theo tên (không phân biệt hoa thường)
+            const [gs] = await db.query(
+              'SELECT id FROM `groups` WHERE LOWER(name)=LOWER(?) AND is_active=1 LIMIT 1',
+              [u.group_name.trim()]
+            );
+            let gid;
+            if (gs.length) {
+              gid = gs[0].id;
+            } else {
+              // Tạo nhóm mới
+              const [nr] = await db.query(
+                'INSERT INTO `groups` (name, icon, is_active) VALUES (?,?,1)',
+                [u.group_name.trim(), '🏭']
+              );
+              gid = nr.insertId;
+            }
+            await db.query(
+              'INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?,?)',
+              [gid, r.insertId]
+            );
+          } catch(ge) {
+            errors.push({ name: u.full_name, error: 'Add group failed: ' + ge.message });
+          }
+        }
+
+        created++;
+      } catch (e) { errors.push({ name: u.full_name, error: e.message }); }
     }
-    res.json({ success: true, data: { created, errors } });
+
+    res.json({ success: true, data: { created, duplicates, errors,
+      message: `Đã tạo ${created} user${duplicates.length ? `, ${duplicates.length} trùng username` : ''}${errors.length ? `, ${errors.length} lỗi` : ''}`
+    }});
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
