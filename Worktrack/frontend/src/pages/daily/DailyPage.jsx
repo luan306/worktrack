@@ -117,15 +117,26 @@ export default function DailyPage() {
 
       setTasks(pageRes.data.data?.tasks || []);
       const m = pageRes.data.data?.members || [];
-      const scorableMembers = can('admin','manager')
+
+      // Phân quyền chấm điểm:
+      // - Admin: chấm được cho tất cả thành viên trong nhóm.
+      // - Manager / Leader: chỉ chấm được cho "user" (không chấm cho leader,
+      //   manager, admin khác, và không tự chấm cho chính mình).
+      const scorableMembers = isAdmin
         ? m
-        : m.filter(x => x.id !== user?.id);
+        : m.filter(x =>
+            x.id !== user?.id &&
+            !['admin', 'manager', 'leader'].includes(x.role)
+          );
+
       setMembers(scorableMembers);
       if (scorableMembers.length) {
         setActiveMember(prev => {
           if (prev && scorableMembers.find(x=>x.id===prev.id)) return prev;
           return scorableMembers[0];
         });
+      } else {
+        setActiveMember(null);
       }
 
       // Logs — dùng week endpoint thay vì 7 request riêng lẻ
@@ -259,12 +270,83 @@ export default function DailyPage() {
   if (!user) return <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center'}}><div>⏳</div></div>;
 
   return (
-    <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff'}}>
+    <div className="dp-root" style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff',minWidth:0}}>
+      <style>{`
+        .dp-root { box-sizing: border-box; }
+        .dp-root *, .dp-root *::before, .dp-root *::after { box-sizing: border-box; }
+        .dp-root input[type="number"]::-webkit-outer-spin-button,
+        .dp-root input[type="number"]::-webkit-inner-spin-button { margin: 0; }
+
+        /* ── Cảm giác chạm mượt & phản hồi khi nhấn (mobile/touch) ── */
+        .dp-root button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
+        .dp-root button:active { transform: scale(0.96); }
+        .dp-root .dp-tick { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        .dp-root .dp-tick:active { transform: scale(0.88) !important; }
+        .dp-root .dp-member-item { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        .dp-root .dp-member-item:active { transform: scale(0.97); }
+
+        /* ── Focus rõ ràng cho bàn phím (a11y) ── */
+        .dp-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
+
+        /* ── Chặn Safari iOS tự zoom khi focus input chữ/số lớn ── */
+        .dp-root input:not(.dp-score-input):focus { font-size: 16px !important; }
+        .dp-root .dp-score-input:focus { font-size: 16px !important; }
+
+        /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
+        .dp-root ::-webkit-scrollbar { width: 8px; height: 8px; }
+        .dp-root ::-webkit-scrollbar-track { background: transparent; }
+        .dp-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
+        .dp-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
+
+        /* ── Hiệu ứng mở nhẹ cho popup / modal ── */
+        @keyframes dpFadeIn { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .dp-root .dp-calendar-popup, .dp-root .dp-modal { animation: dpFadeIn .16s ease-out; }
+
+        /* ── Tôn trọng cài đặt giảm chuyển động của người dùng ── */
+        @media (prefers-reduced-motion: reduce) {
+          .dp-root, .dp-root * { animation: none !important; transition: none !important; }
+        }
+
+        @media (max-width: 768px) {
+          .dp-root .dp-topbar { flex-wrap: wrap !important; padding: 8px 12px !important; gap: 6px !important; }
+          .dp-root .dp-breadcrumb { font-size: 11px !important; min-width: 0 !important; }
+          .dp-root .dp-weekbar { padding: 8px 12px !important; gap: 6px !important; }
+          .dp-root .dp-weeklabel { font-size: 12px !important; padding: 4px 8px !important; }
+          .dp-root .dp-body { flex-direction: column !important; overflow: auto !important; }
+          .dp-root .dp-sidebar { position: relative; width: 100% !important; border-right: none !important; border-bottom: 1.5px solid ${C.border} !important; max-height: 140px !important; }
+          .dp-root .dp-sidebar::after { content: ''; position: absolute; top: 34px; right: 0; bottom: 0; width: 28px; background: linear-gradient(to left, rgba(255,255,255,0.95), rgba(255,255,255,0)); pointer-events: none; z-index: 4; }
+          .dp-root .dp-members-list { display: flex !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; padding: 8px 10px !important; gap: 8px !important; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+          .dp-root .dp-member-item { scroll-snap-align: start; flex-direction: column !important; align-items: center !important; text-align: center !important; min-width: 84px !important; flex-shrink: 0 !important; border-left: none !important; border-bottom: none !important; border-radius: 12px !important; padding: 8px !important; gap: 4px !important; }
+          .dp-root .dp-member-name { max-width: 76px !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+          .dp-root .dp-sidebar-footer { display: none !important; }
+          .dp-root .dp-matrix-panel { padding: 10px 8px !important; }
+          .dp-root .dp-member-header { flex-wrap: wrap !important; padding: 10px 12px !important; row-gap: 8px !important; }
+          .dp-root .dp-stickycol { min-width: 150px !important; }
+          .dp-root .dp-daycol-week { min-width: 54px !important; }
+          .dp-root .dp-daycol-month { min-width: 30px !important; }
+          .dp-root .dp-sumcol { min-width: 54px !important; }
+          .dp-root .dp-modal { width: calc(100vw - 32px) !important; padding: 18px !important; max-height: 88vh !important; }
+          .dp-root .dp-calendar-popup { left: 8px !important; width: calc(100vw - 16px) !important; }
+          .dp-root .dp-bottombar { padding-bottom: calc(11px + env(safe-area-inset-bottom)) !important; }
+        }
+        @media (max-width: 480px) {
+          .dp-root .dp-stickycol { min-width: 122px !important; }
+          .dp-root .dp-tick { width: 26px !important; height: 26px !important; font-size: 13px !important; }
+          .dp-root .dp-score-input { width: 34px !important; font-size: 11px !important; }
+          .dp-root .dp-modal { padding: 14px !important; }
+          .dp-root .dp-member-item { min-width: 76px !important; }
+          .dp-root .dp-topbar button, .dp-root .dp-topbar { font-size: 11px !important; }
+        }
+        @media (min-width: 1440px) {
+          .dp-root .dp-sidebar { width: 240px !important; }
+          .dp-root .dp-matrix-panel { padding: 20px 28px !important; }
+        }
+      `}</style>
 
       {/* ── Topbar ── */}
-      <div style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
-        <div style={{flex:1,display:'flex',alignItems:'center',gap:6,fontSize:13,color:'#888'}}>
-          <span onClick={()=>navigate('/board')} style={{cursor:'pointer',color:C.primary}}>🗂 Bảng CV</span>
+      <div className="dp-topbar" style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
+        <div className="dp-breadcrumb" style={{flex:1,display:'flex',alignItems:'center',gap:6,fontSize:13,color:'#888',flexWrap:'wrap',minWidth:0}}>
+          <span onClick={()=>navigate('/board')} style={{cursor:'pointer',color:C.primary,whiteSpace:'nowrap'}}>🗂 Bảng CV</span>
           <span style={{color:'#ccc'}}>›</span>
           <span style={{color:C.primary}}>📋 CV Hằng ngày</span>
           {selectedGroup&&<><span style={{color:'#ccc'}}>›</span><span style={{color:C.dark,fontWeight:700}}>{selectedGroup.icon||'🏭'} {selectedGroup.name}</span></>}
@@ -282,14 +364,14 @@ export default function DailyPage() {
           </button>
         )}
         <button onClick={saveLogs} disabled={saving}
-          style={{padding:'6px 14px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+          style={{padding:'6px 14px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',boxShadow:hasPending?'0 4px 14px rgba(58,123,213,0.35)':'none'}}>
           {saving?'...':hasPending?`💾 Lưu (${Object.keys(pending).length})`:'💾 Lưu hôm nay'}
         </button>
       </div>
 
       {/* ── Week bar + Group tabs ── */}
-      <div style={{padding:'10px 20px',background:C.bg,borderBottom:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0,flexWrap:'wrap'}}>
-        <div onClick={()=>setShowCalendar(p=>!p)} style={{fontSize:13,fontWeight:700,color:C.dark,cursor:'pointer',padding:'4px 10px',borderRadius:7,border:`1.5px solid ${showCalendar?C.primary:C.border}`,background:showCalendar?'#eef3ff':'#fff',display:'flex',alignItems:'center',gap:6}}>📅 {weekLabel} <span style={{fontSize:10,color:'#aaa'}}>▼</span></div>
+      <div className="dp-weekbar" style={{padding:'10px 20px',background:C.bg,borderBottom:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0,flexWrap:'wrap'}}>
+        <div className="dp-weeklabel" onClick={()=>setShowCalendar(p=>!p)} style={{fontSize:13,fontWeight:700,color:C.dark,cursor:'pointer',padding:'4px 10px',borderRadius:7,border:`1.5px solid ${showCalendar?C.primary:C.border}`,background:showCalendar?'#eef3ff':'#fff',display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>📅 {weekLabel} <span style={{fontSize:10,color:'#aaa'}}>▼</span></div>
 
         {/* View mode tabs */}
         <div style={{display:'flex',gap:3,background:'#e8eaed',borderRadius:8,padding:3}}>
@@ -332,11 +414,11 @@ export default function DailyPage() {
       {/* ── Calendar Popup ── */}
       {showCalendar && (
         <div style={{position:'relative',zIndex:20,flexShrink:0}}>
-          <div style={{
+          <div className="dp-calendar-popup" style={{
             position:'absolute',top:0,left:20,
             background:'#fff',borderRadius:12,border:`1.5px solid ${C.border}`,
             boxShadow:'0 8px 32px rgba(0,0,0,0.15)',
-            padding:16,width:300,
+            padding:16,width:300,maxWidth:'calc(100vw - 16px)',
           }}>
             {/* Cal header */}
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
@@ -421,20 +503,20 @@ export default function DailyPage() {
       )}
 
       {/* ── Body: 2 panel ── */}
-      <div style={{flex:1,display:'flex',overflow:'hidden'}}>
+      <div className="dp-body" style={{flex:1,display:'flex',overflow:'hidden'}}>
 
         {/* LEFT: Danh sách thành viên */}
-        <div style={{width:200,flexShrink:0,borderRight:`1.5px solid ${C.border}`,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff'}}>
+        <div className="dp-sidebar" style={{width:200,flexShrink:0,borderRight:`1.5px solid ${C.border}`,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff'}}>
           <div style={{padding:'10px 14px',borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:'0.4px'}}>
             👥 Thành viên
           </div>
-          <div style={{flex:1,overflowY:'auto'}}>
+          <div className="dp-members-list" style={{flex:1,overflowY:'auto'}}>
             {members.map(m=>{
               const isActive = activeMember?.id===m.id;
               const weekPts  = memberWeekTotal(m.id);
               const hasPend  = Object.keys(pending).some(k=>k.includes(`_${m.id}_`));
               return (
-                <div key={m.id} onClick={()=>setActiveMember(m)}
+                <div key={m.id} className="dp-member-item" onClick={()=>setActiveMember(m)}
                   style={{
                     padding:'10px 14px',display:'flex',alignItems:'center',gap:8,cursor:'pointer',
                     borderLeft:`3px solid ${isActive?C.primary:'transparent'}`,
@@ -450,7 +532,7 @@ export default function DailyPage() {
                     {hasPend&&<div style={{position:'absolute',top:-2,right:-2,width:8,height:8,borderRadius:'50%',background:C.warning,border:'2px solid #fff'}}/>}
                   </div>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontWeight:600,color:isActive?C.primary:C.dark,truncate:true,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    <div className="dp-member-name" style={{fontSize:12,fontWeight:600,color:isActive?C.primary:C.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                       {m.full_name}
                     </div>
                     <div style={{fontSize:10,color:isActive?C.primary:'#aaa',marginTop:2}}>
@@ -471,7 +553,7 @@ export default function DailyPage() {
 
           {/* Tổng kết tuần */}
           {members.length>0&&(
-            <div style={{padding:'10px 14px',borderTop:`1px solid ${C.border}`,background:C.bg}}>
+            <div className="dp-sidebar-footer" style={{padding:'10px 14px',borderTop:`1px solid ${C.border}`,background:C.bg}}>
               <div style={{fontSize:10,color:'#aaa',fontWeight:700,textTransform:'uppercase',marginBottom:6}}>Tổng tuần</div>
               {members.map(m=>(
                 <div key={m.id} style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
@@ -487,7 +569,7 @@ export default function DailyPage() {
         </div>
 
         {/* RIGHT: Matrix của member đang chọn */}
-        <div style={{flex:1,overflow:'auto',padding:'16px 20px',background:C.bg}}>
+        <div className="dp-matrix-panel" style={{flex:1,overflow:'auto',padding:'16px 20px',background:C.bg,minWidth:0}}>
           {!activeMember&&selectedGroup&&(
             <div style={{textAlign:'center',padding:40,color:'#aaa'}}>
               <div style={{fontSize:32,marginBottom:8}}>👈</div>
@@ -498,7 +580,7 @@ export default function DailyPage() {
           {activeMember&&selectedGroup&&(
             <>
               {/* Member header */}
-              <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,background:'#fff',padding:'12px 16px',borderRadius:10,border:`1.5px solid ${C.border}`}}>
+              <div className="dp-member-header" style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,background:'#fff',padding:'12px 16px',borderRadius:10,border:`1.5px solid ${C.border}`}}>
                 <Chip color={activeMember.avatar_color||C.primary} name={activeMember.full_name} size={42}/>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.dark}}>{activeMember.full_name}</div>
@@ -526,10 +608,11 @@ export default function DailyPage() {
               </div>
 
               {/* Matrix table */}
+              <div style={{width:'100%',overflowX:'auto',borderRadius:12,WebkitOverflowScrolling:'touch'}}>
               <table style={{borderCollapse:'collapse',minWidth:'100%',background:'#fff',borderRadius:12,overflow:'hidden',border:'1.5px solid #dde8ff',boxShadow:'0 2px 12px rgba(58,123,213,.07)'}}>
                 <thead>
                   <tr>
-                    <th style={{background:'#162030',borderRight:'2px solid #2d3f52',minWidth:260,position:'sticky',left:0,zIndex:2}}>
+                    <th className="dp-stickycol" style={{background:'#162030',borderRight:'2px solid #2d3f52',minWidth:260,position:'sticky',left:0,zIndex:2}}>
                       <div style={{padding:'14px 16px',fontSize:11,color:'#7a9bbf'}}>
                         {selectedGroup.icon||'🏭'} {selectedGroup.name} · Công việc
                       </div>
@@ -542,7 +625,7 @@ export default function DailyPage() {
                       const dow    = day.getDay()===0?6:day.getDay()-1; // 0=Mon
                       const isWeekend = day.getDay()===0||day.getDay()===6;
                       return (
-                        <th key={i} style={{
+                        <th key={i} className={viewMode==='month'?'dp-daycol-month':'dp-daycol-week'} style={{
                           background: today?'rgba(46,204,113,0.15)':'#1e2a3a',
                           border:'1px solid #2d3f52',
                           minWidth: viewMode==='month'?40:80,
@@ -563,7 +646,7 @@ export default function DailyPage() {
                         </th>
                       );
                     })}
-                    <th style={{background:'#162030',borderLeft:'2px solid #3a7bd5',minWidth:70}}>
+                    <th className="dp-sumcol" style={{background:'#162030',borderLeft:'2px solid #3a7bd5',minWidth:70}}>
                       <div style={{padding:'8px 4px',display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
                         <div style={{fontSize:11,fontWeight:700,color:'#f1c40f'}}>∑</div>
                         <div style={{fontSize:10,color:'#f1c40f'}}>Tổng</div>
@@ -592,7 +675,7 @@ export default function DailyPage() {
 
                     return (
                       <tr key={task.id} style={{borderLeft:task.frequency==='weekly'?`3px solid ${C.primary}`:task.frequency==='monthly'?`3px solid ${C.warning}`:undefined}}>
-                        <td style={{background:'#f8f9fc',borderRight:'2px solid #dde3f0',position:'sticky',left:0,zIndex:1}}>
+                        <td className="dp-stickycol" style={{background:'#f8f9fc',borderRight:'2px solid #dde3f0',position:'sticky',left:0,zIndex:1}}>
                           <div style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:8}}>
                             <div style={{flex:1}}>
                               <div style={{fontSize:13,color:'#2c3e50',fontWeight:500}}>{task.name}</div>
@@ -632,7 +715,7 @@ export default function DailyPage() {
                             }}>
                               <div style={{padding:'8px 6px',display:'flex',flexDirection:'column',alignItems:'center',gap:5}}>
                                 {/* Tick */}
-                                <div onClick={()=>!future&&toggleTick(task.id,activeMember.id,dateStr)} style={{
+                                <div className="dp-tick" onClick={()=>!future&&toggleTick(task.id,activeMember.id,dateStr)} style={{
                                   width:32,height:32,borderRadius:8,fontSize:16,
                                   display:'flex',alignItems:'center',justifyContent:'center',
                                   transition:'all .15s',userSelect:'none',
@@ -645,7 +728,7 @@ export default function DailyPage() {
                                   {!future&&isDone?'✓':''}
                                 </div>
                                 {/* Score */}
-                                <input type="number" min="0" max={task.max_score} step="0.5"
+                                <input className="dp-score-input" type="number" inputMode="decimal" min="0" max={task.max_score} step="0.5"
                                   value={future?'':(score||0)}
                                   disabled={future||!isLeader}
                                   onChange={e=>setScore(task.id,activeMember.id,dateStr,e.target.value)}
@@ -690,7 +773,7 @@ export default function DailyPage() {
 
                 <tfoot>
                   <tr>
-                    <td style={{background:'#1e2a3a',color:'#9db8d2',padding:'10px 16px',fontSize:11,textAlign:'left',borderColor:'#2d3f52',position:'sticky',left:0}}>
+                    <td className="dp-stickycol" style={{background:'#1e2a3a',color:'#9db8d2',padding:'10px 16px',fontSize:11,textAlign:'left',borderColor:'#2d3f52',position:'sticky',left:0}}>
                       🏆 Tổng {activeMember.full_name.split(' ').pop()}
                     </td>
                     {weekDays.map((day,i)=>{
@@ -713,6 +796,7 @@ export default function DailyPage() {
                   </tr>
                 </tfoot>
               </table>
+              </div>
             </>
           )}
 
@@ -726,7 +810,7 @@ export default function DailyPage() {
       </div>
 
       {/* Bottom bar */}
-      <div style={{padding:'11px 20px',background:'#fff',borderTop:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+      <div className="dp-bottombar" style={{padding:'11px 20px',background:'#fff',borderTop:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
         <div style={{flex:1,fontSize:12,color:'#aaa'}}>
           <span style={{color:C.success,fontWeight:600}}>📅 Hằng ngày</span> ·&nbsp;
           <span style={{color:C.primary,fontWeight:600}}>📆 Tuần 1 lần</span> ·&nbsp;
@@ -734,7 +818,7 @@ export default function DailyPage() {
           &nbsp;— Ô trống = ngày không có lịch · <span style={{color:C.warning}}>Ô vàng = chưa lưu</span>
         </div>
         <button onClick={saveLogs} disabled={saving}
-          style={{padding:'6px 18px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+          style={{padding:'6px 18px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',boxShadow:hasPending?'0 4px 14px rgba(58,123,213,0.35)':'none'}}>
           {saving?'...':hasPending?`💾 Lưu (${Object.keys(pending).length} thay đổi)`:'💾 Đã lưu'}
         </button>
       </div>
@@ -767,9 +851,9 @@ export default function DailyPage() {
 
 function ConfirmModal({ icon, title, desc, warn, onCancel, onConfirm, confirmLabel, danger }) {
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}
       onClick={e=>e.target===e.currentTarget&&onCancel()}>
-      <div style={{background:'#fff',borderRadius:14,padding:28,width:380,boxShadow:'0 8px 40px rgba(0,0,0,.18)',textAlign:'center'}}>
+      <div className="dp-modal" style={{background:'#fff',borderRadius:14,padding:28,width:380,maxWidth:'92vw',boxShadow:'0 8px 40px rgba(0,0,0,.18)',textAlign:'center'}}>
         <div style={{fontSize:40,marginBottom:12}}>{icon}</div>
         <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:8}}>{title}</div>
         <div style={{fontSize:13,color:'#888',marginBottom:6}}>{desc}</div>
@@ -798,17 +882,17 @@ function TaskModal({ task, onClose, onSave }) {
   const FREQS=[{key:'daily',icon:'📅',label:'Hằng ngày',sub:'Mỗi ngày'},{key:'weekly',icon:'📆',label:'Tuần 1 lần',sub:'Chọn ngày/tuần'},{key:'monthly',icon:'🗓',label:'Tháng 1 lần',sub:'Chọn ngày/tháng'}];
   const DAYS=['T2','T3','T4','T5','T6','T7','CN'];
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}
       onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:'#fff',borderRadius:14,padding:28,width:460,boxShadow:'0 8px 40px rgba(0,0,0,.18)',maxHeight:'90vh',overflowY:'auto'}}>
+      <div className="dp-modal" style={{background:'#fff',borderRadius:14,padding:28,width:460,maxWidth:'92vw',boxShadow:'0 8px 40px rgba(0,0,0,.18)',maxHeight:'90vh',overflowY:'auto'}}>
         <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:20}}>{task?'✏️ Sửa công việc':'➕ Thêm công việc mới'}</div>
         <div style={{marginBottom:16}}><label style={FL}>Tên công việc *</label><input style={FI} value={form.name} onChange={e=>set('name',e.target.value)} autoFocus placeholder="Vd: Kiểm tra máy đầu ca"/></div>
-        <div style={{marginBottom:16}}><label style={FL}>Điểm tối đa *</label><input type="number" min="1" max="100" style={FI} value={form.max_score} onChange={e=>set('max_score',e.target.value)}/></div>
+        <div style={{marginBottom:16}}><label style={FL}>Điểm tối đa *</label><input type="number" inputMode="numeric" min="1" max="100" style={FI} value={form.max_score} onChange={e=>set('max_score',e.target.value)}/></div>
         <div style={{marginBottom:16}}>
           <label style={FL}>Tần suất *</label>
-          <div style={{display:'flex',gap:8}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             {FREQS.map(f=>(
-              <div key={f.key} onClick={()=>set('frequency',f.key)} style={{flex:1,padding:10,borderRadius:9,cursor:'pointer',textAlign:'center',border:`2px solid ${form.frequency===f.key?'#3a7bd5':'#e8eaed'}`,background:form.frequency===f.key?'#eef3ff':'#fff'}}>
+              <div key={f.key} onClick={()=>set('frequency',f.key)} style={{flex:'1 1 100px',padding:10,borderRadius:9,cursor:'pointer',textAlign:'center',border:`2px solid ${form.frequency===f.key?'#3a7bd5':'#e8eaed'}`,background:form.frequency===f.key?'#eef3ff':'#fff'}}>
                 <div style={{fontSize:20,marginBottom:4}}>{f.icon}</div>
                 <div style={{fontSize:12,fontWeight:700,color:form.frequency===f.key?'#3a7bd5':'#333'}}>{f.label}</div>
                 <div style={{fontSize:10,color:'#888',marginTop:2}}>{f.sub}</div>
@@ -818,7 +902,7 @@ function TaskModal({ task, onClose, onSave }) {
         </div>
         {form.frequency==='weekly'&&(
           <div style={{marginBottom:16}}><label style={FL}>Ngày trong tuần *</label>
-            <div style={{display:'flex',gap:6}}>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
               {DAYS.map((d,i)=>(
                 <div key={d} onClick={()=>set('frequency_day',i+1)} style={{width:38,height:38,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,cursor:'pointer',border:`2px solid ${form.frequency_day===(i+1)?'#3a7bd5':'#e8eaed'}`,background:form.frequency_day===(i+1)?'#3a7bd5':'#fff',color:form.frequency_day===(i+1)?'#fff':'#888'}}>{d}</div>
               ))}
@@ -826,7 +910,7 @@ function TaskModal({ task, onClose, onSave }) {
           </div>
         )}
         {form.frequency==='monthly'&&(
-          <div style={{marginBottom:16}}><label style={FL}>Ngày trong tháng *</label><input type="number" min="1" max="31" style={FI} value={form.frequency_day} onChange={e=>set('frequency_day',e.target.value)} placeholder="Vd: 1, 15..."/></div>
+          <div style={{marginBottom:16}}><label style={FL}>Ngày trong tháng *</label><input type="number" inputMode="numeric" min="1" max="31" style={FI} value={form.frequency_day} onChange={e=>set('frequency_day',e.target.value)} placeholder="Vd: 1, 15..."/></div>
         )}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:22}}>
           <button onClick={onClose} style={{padding:'8px 20px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>Huỷ</button>

@@ -28,42 +28,44 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="flex w-full max-w-3xl bg-white rounded-2xl shadow-xl overflow-hidden" style={{minHeight:520}}>
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 py-8">
+      <div className="flex w-full max-w-3xl flex-col md:flex-row bg-white rounded-2xl shadow-xl overflow-hidden md:min-h-[520px]">
 
         {/* Branding */}
-        <div className="flex-1 bg-[#1e2a3a] p-10 flex flex-col justify-center relative overflow-hidden">
-          <div className="absolute w-64 h-64 rounded-full bg-blue-500/10 -top-16 -right-16" />
-          <div className="absolute w-44 h-44 rounded-full bg-blue-500/10 -bottom-10 -left-10" />
+        <div className="md:flex-1 bg-[#1e2a3a] p-6 sm:p-8 md:p-10 flex flex-col justify-center relative overflow-hidden">
+          <div className="absolute w-40 h-40 md:w-64 md:h-64 rounded-full bg-blue-500/10 -top-10 -right-10 md:-top-16 md:-right-16" />
+          <div className="absolute w-28 h-28 md:w-44 md:h-44 rounded-full bg-blue-500/10 -bottom-6 -left-6 md:-bottom-10 md:-left-10" />
           <div className="relative z-10">
-<div className="mb-4 flex justify-start">
-  <div className="bg-white px-3 py-2 rounded">
-    <img
-      src="./src/assets/smc_logo.png"
-      alt="Logo"
-      className="h-10 w-auto"
-    />
-  </div>
-</div>
-            <h1 className="text-2xl font-black text-white">WorkTrack</h1>
+            <div className="mb-4 flex justify-start">
+              <div className="bg-white px-3 py-2 rounded">
+                <img
+                  src="./src/assets/smc_logo.png"
+                  alt="Logo"
+                  className="h-8 md:h-10 w-auto"
+                />
+              </div>
+            </div>
+            <h1 className="text-xl md:text-2xl font-black text-white">WorkTrack</h1>
             <p className="text-[#7a9bbf] text-sm mt-1 leading-relaxed">Internal task management<br/>system for your team</p>
             <div className="w-8 h-0.5 bg-[#3a7bd5] rounded my-5" />
-            {[
-              ['📋','Daily task tracking by group'],
-              ['📨','Request tasks & deadlines'],
-            ].map(([icon, text]) => (
-              <div key={text} className="flex items-center gap-3 mb-3">
-                <div className="w-7 h-7 rounded-lg bg-blue-500/20 flex items-center justify-center text-sm flex-shrink-0">{icon}</div>
-                <span className="text-[#9db8d2] text-xs">{text}</span>
-              </div>
-            ))}
+            <div className="hidden sm:block">
+              {[
+                ['📋','Daily task tracking by group'],
+                ['📨','Request tasks & deadlines'],
+              ].map(([icon, text]) => (
+                <div key={text} className="flex items-center gap-3 mb-3">
+                  <div className="w-7 h-7 rounded-lg bg-blue-500/20 flex items-center justify-center text-sm flex-shrink-0">{icon}</div>
+                  <span className="text-[#9db8d2] text-xs">{text}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
         {/* Form */}
-        <div className="w-96 p-10 flex flex-col justify-center">
+        <div className="w-full md:w-96 p-6 sm:p-8 md:p-10 flex flex-col justify-center">
           {/* Lang */}
-          <div className="flex gap-2 mb-6">
+          <div className="flex gap-2 mb-6 flex-wrap">
             {LANGS.map(l => (
               <button key={l.c} onClick={() => switchLang(l.c)}
                 className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${
@@ -80,7 +82,7 @@ export default function LoginPage() {
               <label className="label">{t('username')}</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">👤</span>
-                <input className={`input pl-9 ${err ? 'border-red-400' : ''}`}
+                <input className={`input pl-9 w-full ${err ? 'border-red-400' : ''}`}
                   value={form.username} onChange={e => setForm(p=>({...p,username:e.target.value}))}
                   placeholder="username or email" autoComplete="username" />
               </div>
@@ -89,7 +91,7 @@ export default function LoginPage() {
               <label className="label">{t('password')}</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔑</span>
-                <input className={`input pl-9 pr-9 ${err ? 'border-red-400' : ''}`}
+                <input className={`input pl-9 pr-9 w-full ${err ? 'border-red-400' : ''}`}
                   type={show ? 'text' : 'password'} value={form.password}
                   onChange={e => setForm(p=>({...p,password:e.target.value}))}
                   placeholder="••••••••" autoComplete="current-password" />

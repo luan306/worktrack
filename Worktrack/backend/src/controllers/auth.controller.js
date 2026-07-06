@@ -12,9 +12,14 @@ const makeTokens = (user) => {
 
 exports.login = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    let { username, password } = req.body;
     if (!username || !password)
-      return res.status(400).json({ success: false, message: 'Username and password required' });
+      return res.status(400).json({ success: false, message: 'Username và password bắt buộc' });
+
+    // Sanitize — chặn SQL injection và brute force
+    username = String(username).trim().toLowerCase().substring(0, 50);
+    if (!/^[a-z0-9._@-]+$/.test(username))
+      return res.status(400).json({ success: false, message: 'Username không hợp lệ' });
 
     const [[user]] = await db.query(
       'SELECT * FROM users WHERE (username=? OR email=?) AND is_active=1', [username, username]
@@ -62,6 +67,19 @@ exports.refresh = async (req, res) => {
 exports.logout = async (req, res) => {
   const { refresh_token } = req.body;
   if (refresh_token) await db.query('DELETE FROM refresh_tokens WHERE token=?', [refresh_token]).catch(() => {});
+
+  // Blacklist access token ngay lập tức
+  try {
+    const token = req.headers?.authorization?.split(' ')[1];
+    if (token) {
+      const authMiddleware = require('../middleware/auth');
+      if (authMiddleware.blacklist) {
+        authMiddleware.blacklist.add(token);
+        setTimeout(() => authMiddleware.blacklist.delete(token), 24*60*60*1000);
+      }
+    }
+  } catch(_) {}
+
   res.json({ success: true });
 };
 

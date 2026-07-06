@@ -265,3 +265,9 @@ UPDATE request_task_comments SET content=message WHERE content IS NULL;
 UPDATE request_task_comments SET content=message WHERE id>0;
 
 select * from users
+
+
+
+USE worktrack;
+ALTER TABLE request_tasks ADD COLUMN hours_spent DECIMAL(5,1) DEFAULT NULL;
+npm install helmet express-rate-limit

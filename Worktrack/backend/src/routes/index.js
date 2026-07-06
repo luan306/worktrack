@@ -54,6 +54,12 @@ router.post  ('/requests/:id/assign',         auth(['admin','manager','leader'])
 router.delete('/requests/:id/assign/:userId', auth(['admin','manager','leader']), rC.removeAssignee);
 router.post  ('/requests/:id/comments',       auth(), rC.addComment);
 router.post  ('/requests/:id/score',          auth(['admin','manager','leader']), rC.score);
+router.delete('/requests/:id',                auth(), rC.remove);
+
+// File upload
+const upload = require('../middleware/upload');
+router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
+router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
 
 // ── Dashboard ──
 router.get ('/dashboard/debug',              auth(),                    dbC.debug);

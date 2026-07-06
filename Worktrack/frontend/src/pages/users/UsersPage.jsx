@@ -29,9 +29,9 @@ const FL = {display:'block',fontSize:11,fontWeight:700,color:'#777',textTransfor
 function Modal({show,title,onClose,children,width=460}){
   if(!show) return null;
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.4)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.4)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}
       onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:'#fff',borderRadius:14,padding:26,width,maxWidth:'95vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 10px 40px rgba(0,0,0,.2)'}}>
+      <div className="users-modal-box" style={{background:'#fff',borderRadius:14,padding:26,width,maxWidth:'95vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 10px 40px rgba(0,0,0,.2)'}}>
         <div style={{fontSize:15,fontWeight:800,color:C.dark,marginBottom:18,display:'flex',alignItems:'center',gap:8}}>
           {title}
           <button onClick={onClose} style={{marginLeft:'auto',background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#aaa',lineHeight:1}}>×</button>
@@ -251,11 +251,55 @@ export default function UsersPage(){
   const invalidCount = importPreview?.filter(r=>!r.valid).length||0;
 
   return (
-    <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff'}}>
+    <div className="users-root" style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff',minWidth:0}}>
+      <style>{`
+        .users-root { box-sizing: border-box; }
+        .users-root *, .users-root *::before, .users-root *::after { box-sizing: border-box; }
+
+        /* ── Cảm giác chạm mượt & phản hồi khi nhấn ── */
+        .users-root button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
+        .users-root button:active { transform: scale(0.96); }
+        .users-root tbody tr { -webkit-tap-highlight-color: transparent; }
+
+        /* ── Focus rõ ràng cho bàn phím (a11y) ── */
+        .users-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
+
+        /* ── Chặn Safari iOS tự zoom khi focus input/select ── */
+        .users-root input:focus, .users-root select:focus { font-size: 16px !important; }
+
+        /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
+        .users-root ::-webkit-scrollbar { width: 8px; height: 8px; }
+        .users-root ::-webkit-scrollbar-track { background: transparent; }
+        .users-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
+        .users-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
+
+        @keyframes usersFadeIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .users-root .users-modal-box { animation: usersFadeIn .16s ease-out; }
+
+        @media (prefers-reduced-motion: reduce) {
+          .users-root, .users-root * { animation: none !important; transition: none !important; }
+        }
+
+        @media (max-width: 900px) {
+          .users-root .users-topbar { flex-wrap: wrap !important; padding: 10px 14px !important; gap: 8px !important; }
+          .users-root .users-title { flex-basis: 100% !important; }
+          .users-root .users-topbar button { flex: 1 1 auto !important; justify-content: center !important; }
+
+          .users-root .users-tabs { overflow-x: auto !important; padding: 0 10px !important; }
+          .users-root .users-tab-item { flex-shrink: 0 !important; white-space: nowrap !important; }
+
+          .users-root .users-toolbar { flex-wrap: wrap !important; padding: 10px 14px !important; }
+          .users-root .users-toolbar input, .users-root .users-toolbar select { width: auto !important; flex: 1 1 130px !important; }
+          .users-root .users-toolbar-count { flex-basis: 100% !important; text-align: right !important; }
+
+          .users-root .users-table-panel { padding: 10px 12px !important; }
+          .users-root .users-group-header { flex-wrap: wrap !important; row-gap: 8px !important; }
+        }
+      `}</style>
 
       {/* Topbar */}
-      <div style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
-        <div style={{fontSize:15,fontWeight:800,color:C.dark,flex:1}}>👥 Quản lý User</div>
+      <div className="users-topbar" style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
+        <div className="users-title" style={{fontSize:15,fontWeight:800,color:C.dark,flex:1}}>👥 Quản lý User</div>
         {tab==='users'&&<>
           <button onClick={()=>setTab('import')}
             style={{padding:'6px 14px',borderRadius:7,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',color:'#555',display:'flex',alignItems:'center',gap:5}}>
@@ -275,9 +319,9 @@ export default function UsersPage(){
       </div>
 
       {/* Sub tabs */}
-      <div style={{display:'flex',borderBottom:`2px solid ${C.border}`,background:'#fff',padding:'0 20px',flexShrink:0}}>
+      <div className="users-tabs" style={{display:'flex',borderBottom:`2px solid ${C.border}`,background:'#fff',padding:'0 20px',flexShrink:0}}>
         {TABS.map(t=>(
-          <div key={t.key} onClick={()=>setTab(t.key)} style={{
+          <div key={t.key} className="users-tab-item" onClick={()=>setTab(t.key)} style={{
             padding:'11px 20px',fontSize:13,fontWeight:600,cursor:'pointer',
             borderBottom:`2.5px solid ${tab===t.key?C.primary:'transparent'}`,
             marginBottom:-2,color:tab===t.key?C.primary:'#888',
@@ -294,7 +338,7 @@ export default function UsersPage(){
       {tab==='users'&&(
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
           {/* Toolbar */}
-          <div style={{padding:'10px 20px',background:'#fff',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+          <div className="users-toolbar" style={{padding:'10px 20px',background:'#fff',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
             <input style={{...FI,width:220,padding:'7px 12px'}} placeholder="🔍 Tìm tên, email..."
               value={search} onChange={e=>setSearch(e.target.value)}/>
             <select style={{...FI,width:160,padding:'7px 12px'}} value={groupF} onChange={e=>setGroupF(e.target.value)}>
@@ -306,12 +350,13 @@ export default function UsersPage(){
               {['admin','manager','leader','user'].map(r=><option key={r} value={r}>{r}</option>)}
             </select>
             <div style={{flex:1}}/>
-            <span style={{fontSize:12,color:'#aaa'}}>{users.length} người</span>
+            <span className="users-toolbar-count" style={{fontSize:12,color:'#aaa'}}>{users.length} người</span>
           </div>
 
           {/* Table */}
-          <div style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.bg}}>
-            <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:12,overflow:'hidden',border:`1.5px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,.05)'}}>
+          <div className="users-table-panel" style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.bg}}>
+            <div style={{overflowX:'auto',borderRadius:12,WebkitOverflowScrolling:'touch'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:12,overflow:'hidden',border:`1.5px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,.05)',minWidth:680}}>
               <thead>
                 <tr>
                   {['Nhân viên','Quyền','Nhóm','Trạng thái','Ngày tạo',''].map(h=>(
@@ -374,6 +419,7 @@ export default function UsersPage(){
                 )}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}
@@ -384,7 +430,7 @@ export default function UsersPage(){
           {groups.map(g=>(
             <div key={g.id} style={{background:'#fff',borderRadius:12,border:`1.5px solid ${C.border}`,overflow:'hidden'}}>
               {/* Header */}
-              <div style={{padding:'13px 18px',background:C.bg,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:12}}>
+              <div className="users-group-header" style={{padding:'13px 18px',background:C.bg,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:12}}>
                 <span style={{fontSize:20}}>{g.icon||'🏭'}</span>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:800,color:C.dark}}>{g.name}</div>
@@ -464,7 +510,8 @@ export default function UsersPage(){
             <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,fontWeight:700,color:C.dark,fontSize:13}}>
               🔐 Bảng phân quyền
             </div>
-            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,minWidth:520}}>
               <thead>
                 <tr style={{background:C.bg}}>
                   <th style={{padding:'8px 12px',textAlign:'left',fontSize:11,fontWeight:700,color:'#888',borderBottom:`1px solid ${C.border}`,minWidth:260}}>Tính năng</th>
@@ -488,6 +535,7 @@ export default function UsersPage(){
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}
@@ -546,7 +594,8 @@ export default function UsersPage(){
                   {validCount>0&&<span style={{fontSize:11,background:'#e8f8ee',color:C.success,fontWeight:700,padding:'2px 8px',borderRadius:8}}>{validCount} hợp lệ</span>}
                   {invalidCount>0&&<span style={{fontSize:11,background:'#fde8e8',color:C.danger,fontWeight:700,padding:'2px 8px',borderRadius:8}}>{invalidCount} lỗi</span>}
                 </div>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,minWidth:640}}>
                   <thead>
                     <tr style={{background:C.bg}}>
                       {['STT','Họ tên','Email','Role','Nhóm','Username','Trạng thái'].map(h=>(
@@ -573,7 +622,8 @@ export default function UsersPage(){
                     })}
                   </tbody>
                 </table>
-                <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:12}}>
+                </div>
+                <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:12,flexWrap:'wrap'}}>
                   <button onClick={()=>{ setImportPreview(null); setImportFile(null); }}
                     style={{padding:'7px 16px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',color:'#555'}}>
                     ✕ Huỷ
@@ -617,20 +667,20 @@ function AddUserModal({show,groups,onClose,onSave}){
   return (
     <Modal show={show} title="➕ Thêm user mới" onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
-        <div style={{display:'flex',gap:12}}>
-          <div style={{flex:1}}><label style={FL}>Họ tên *</label><input style={FI} value={f.full_name} onChange={e=>s('full_name',e.target.value)} placeholder="Nguyễn Văn A"/></div>
-          <div style={{flex:1}}><label style={FL}>Username *</label><input style={FI} value={f.username} onChange={e=>s('username',e.target.value)} placeholder="nguyenvana"/></div>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 160px'}}><label style={FL}>Họ tên *</label><input style={FI} value={f.full_name} onChange={e=>s('full_name',e.target.value)} placeholder="Nguyễn Văn A"/></div>
+          <div style={{flex:'1 1 160px'}}><label style={FL}>Username *</label><input style={FI} value={f.username} onChange={e=>s('username',e.target.value)} placeholder="nguyenvana"/></div>
         </div>
         <div><label style={FL}>Email *</label><input type="email" style={FI} value={f.email} onChange={e=>s('email',e.target.value)} placeholder="email@company.com"/></div>
         <div><label style={FL}>Mật khẩu *</label><input type="password" style={FI} value={f.password} onChange={e=>s('password',e.target.value)}/></div>
-        <div style={{display:'flex',gap:12}}>
-          <div style={{flex:1}}>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 140px'}}>
             <label style={FL}>Quyền</label>
             <select style={FI} value={f.role} onChange={e=>s('role',e.target.value)}>
               {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
             </select>
           </div>
-          <div style={{flex:1}}>
+          <div style={{flex:'1 1 140px'}}>
             <label style={FL}>Nhóm</label>
             <select style={FI} value={f.group_id} onChange={e=>s('group_id',e.target.value)}>
               <option value="">-- Chọn nhóm --</option>
@@ -669,14 +719,14 @@ function EditUserModal({show,user,groups=[],onClose,onSave}){
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div><label style={FL}>Họ tên</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
         <div><label style={FL}>Email</label><input type="email" style={FI} value={f.email||''} onChange={e=>s('email',e.target.value)}/></div>
-        <div style={{display:'flex',gap:12}}>
-          <div style={{flex:1}}>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 140px'}}>
             <label style={FL}>Quyền</label>
             <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
               {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
             </select>
           </div>
-          <div style={{flex:1}}>
+          <div style={{flex:'1 1 140px'}}>
             <label style={FL}>Nhóm</label>
             <select style={FI} value={f.group_id||''} onChange={e=>s('group_id',e.target.value)}>
               <option value="">-- Không có --</option>
