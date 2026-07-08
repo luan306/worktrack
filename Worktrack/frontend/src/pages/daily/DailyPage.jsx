@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 import useAuth from '../../store/authStore';
 
@@ -8,8 +9,6 @@ const C = {
   warning: '#e67e22', danger: '#e74c3c',
   border: '#e8eaed', bg: '#f7f8fb',
 };
-
-const DAYS_VI = ['T2','T3','T4','T5','T6','T7','CN'];
 
 function getWeekStart(d) {
   const date = new Date(d);
@@ -45,6 +44,9 @@ function Chip({ color=C.primary, name='?', size=32, active=false }) {
 }
 
 export default function DailyPage() {
+  const { t, i18n } = useTranslation();
+  const DAYS_VI = t('weekdays_mon_first', { returnObjects: true });
+  const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
   const { user, can } = useAuth();
   const navigate = useNavigate();
   const isAdmin  = can('admin');
@@ -224,9 +226,9 @@ export default function DailyPage() {
   const weekLabel = viewMode === 'month'
     ? (() => {
         const d = new Date(weekStart);
-        return `Tháng ${d.getMonth()+1}/${d.getFullYear()} — ${fmtDate(viewDays[0])} đến ${fmtDate(viewDays[viewDays.length-1])}`;
+        return `${t('daily_month')} ${d.getMonth()+1}/${d.getFullYear()} — ${fmtDate(viewDays[0])} ${t('daily_to')} ${fmtDate(viewDays[viewDays.length-1])}`;
       })()
-    : `Tuần ${getWeekNum(weekStart)} — ${fmtDate(weekDays[0])} đến ${fmtDate(weekDays[6])}/${weekDays[6].getFullYear()}`;
+    : `${t('daily_week')} ${getWeekNum(weekStart)} — ${fmtDate(weekDays[0])} ${t('daily_to')} ${fmtDate(weekDays[6])}/${weekDays[6].getFullYear()}`;
   const hasPending = Object.keys(pending).length > 0;
 
   const taskShowsOnDay = (task,day) => {
@@ -346,26 +348,26 @@ export default function DailyPage() {
       {/* ── Topbar ── */}
       <div className="dp-topbar" style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
         <div className="dp-breadcrumb" style={{flex:1,display:'flex',alignItems:'center',gap:6,fontSize:13,color:'#888',flexWrap:'wrap',minWidth:0}}>
-          <span onClick={()=>navigate('/board')} style={{cursor:'pointer',color:C.primary,whiteSpace:'nowrap'}}>🗂 Bảng CV</span>
+          <span onClick={()=>navigate('/board')} style={{cursor:'pointer',color:C.primary,whiteSpace:'nowrap'}}>🗂 {t('nav_board')}</span>
           <span style={{color:'#ccc'}}>›</span>
-          <span style={{color:C.primary}}>📋 CV Hằng ngày</span>
+          <span style={{color:C.primary}}>📋 {t('nav_daily')}</span>
           {selectedGroup&&<><span style={{color:'#ccc'}}>›</span><span style={{color:C.dark,fontWeight:700}}>{selectedGroup.icon||'🏭'} {selectedGroup.name}</span></>}
         </div>
         {isAdmin&&selectedGroup&&(
           <button onClick={()=>setConfirmDelGroup(selectedGroup)}
             style={{padding:'6px 14px',borderRadius:7,border:'1px solid #fde8e8',background:'#fde8e8',fontSize:12,fontWeight:600,cursor:'pointer',color:C.danger}}>
-            🗑 Xóa nhóm
+            🗑 {t('daily_delete_group')}
           </button>
         )}
         {isLeader&&selectedGroup&&(
           <button onClick={()=>setShowAddTask(true)}
             style={{padding:'6px 14px',borderRadius:7,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',color:'#555'}}>
-            ➕ Thêm công việc
+            ➕ {t('daily_add_task')}
           </button>
         )}
         <button onClick={saveLogs} disabled={saving}
           style={{padding:'6px 14px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',boxShadow:hasPending?'0 4px 14px rgba(58,123,213,0.35)':'none'}}>
-          {saving?'...':hasPending?`💾 Lưu (${Object.keys(pending).length})`:'💾 Lưu hôm nay'}
+          {saving?'...':hasPending?`💾 ${t('save')} (${Object.keys(pending).length})`:`💾 ${t('daily_save_today')}`}
         </button>
       </div>
 
@@ -376,10 +378,10 @@ export default function DailyPage() {
         {/* View mode tabs */}
         <div style={{display:'flex',gap:3,background:'#e8eaed',borderRadius:8,padding:3}}>
           {[
-            { label:'Tuần này',   fn:()=>{ setViewMode('week'); setWeekStart(getWeekStart(new Date())); }},
-            { label:'Tuần trước', fn:()=>{ setViewMode('week'); const d=getWeekStart(new Date()); d.setDate(d.getDate()-7); setWeekStart(d); }},
-            { label:'Tháng này',  fn:()=>{ setViewMode('month'); setWeekStart(getWeekStart(new Date())); }},
-            { label:'Tháng trước',fn:()=>{ setViewMode('month'); const d=new Date(); d.setMonth(d.getMonth()-1); d.setDate(1); setWeekStart(getWeekStart(d)); }},
+            { label:t('daily_this_week'),   fn:()=>{ setViewMode('week'); setWeekStart(getWeekStart(new Date())); }},
+            { label:t('daily_last_week'), fn:()=>{ setViewMode('week'); const d=getWeekStart(new Date()); d.setDate(d.getDate()-7); setWeekStart(d); }},
+            { label:t('daily_this_month'),  fn:()=>{ setViewMode('month'); setWeekStart(getWeekStart(new Date())); }},
+            { label:t('daily_last_month'),fn:()=>{ setViewMode('month'); const d=new Date(); d.setMonth(d.getMonth()-1); d.setDate(1); setWeekStart(getWeekStart(d)); }},
           ].map(b=>(
             <button key={b.label} onClick={b.fn} style={{
               padding:'4px 10px',borderRadius:6,border:'none',fontSize:11,fontWeight:600,cursor:'pointer',
@@ -407,7 +409,7 @@ export default function DailyPage() {
               <span>{g.icon||'🏭'}</span><span>{g.name}</span>
             </button>
           ))}
-          {!groups.length&&<span style={{fontSize:12,color:'#bbb'}}>Chưa có nhóm — Admin vào Quản lý User → Nhóm để tạo</span>}
+          {!groups.length&&<span style={{fontSize:12,color:'#bbb'}}>{t('daily_no_groups')}</span>}
         </div>
       </div>
 
@@ -425,7 +427,7 @@ export default function DailyPage() {
               <button onClick={()=>setCalMonth(p=>{ const d=new Date(p.y,p.m-1); return {y:d.getFullYear(),m:d.getMonth()}; })}
                 style={{width:28,height:28,borderRadius:6,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:14}}>◀</button>
               <div style={{flex:1,textAlign:'center',fontSize:14,fontWeight:700,color:C.dark}}>
-                Tháng {calMonth.m+1}/{calMonth.y}
+                {t('daily_month')} {calMonth.m+1}/{calMonth.y}
               </div>
               <button onClick={()=>setCalMonth(p=>{ const d=new Date(p.y,p.m+1); return {y:d.getFullYear(),m:d.getMonth()}; })}
                 style={{width:28,height:28,borderRadius:6,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:14}}>▶</button>
@@ -433,7 +435,7 @@ export default function DailyPage() {
 
             {/* Day names */}
             <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:4}}>
-              {['T2','T3','T4','T5','T6','T7','CN'].map(d=>(
+              {DAYS_VI.map(d=>(
                 <div key={d} style={{textAlign:'center',fontSize:10,fontWeight:700,color:'#aaa',padding:'2px 0'}}>{d}</div>
               ))}
             </div>
@@ -488,9 +490,9 @@ export default function DailyPage() {
             {/* Footer shortcuts */}
             <div style={{display:'flex',gap:6,marginTop:12,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
               {[
-                {label:'Tuần này',  fn:()=>{ setWeekStart(getWeekStart(new Date())); setViewMode('week'); setShowCalendar(false); }},
-                {label:'Tháng này', fn:()=>{ const d=new Date(); setWeekStart(getWeekStart(new Date(d.getFullYear(),d.getMonth(),1))); setViewMode('month'); setShowCalendar(false); }},
-                {label:'Đóng',      fn:()=>setShowCalendar(false)},
+                {label:t('daily_this_week'),  fn:()=>{ setWeekStart(getWeekStart(new Date())); setViewMode('week'); setShowCalendar(false); }},
+                {label:t('daily_this_month'), fn:()=>{ const d=new Date(); setWeekStart(getWeekStart(new Date(d.getFullYear(),d.getMonth(),1))); setViewMode('month'); setShowCalendar(false); }},
+                {label:t('users_close'),      fn:()=>setShowCalendar(false)},
               ].map(b=>(
                 <button key={b.label} onClick={b.fn} style={{
                   flex:1,padding:'5px 0',borderRadius:7,fontSize:11,fontWeight:600,cursor:'pointer',
@@ -508,7 +510,7 @@ export default function DailyPage() {
         {/* LEFT: Danh sách thành viên */}
         <div className="dp-sidebar" style={{width:200,flexShrink:0,borderRight:`1.5px solid ${C.border}`,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fff'}}>
           <div style={{padding:'10px 14px',borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:'0.4px'}}>
-            👥 Thành viên
+            👥 {t('req_section_assignees')}
           </div>
           <div className="dp-members-list" style={{flex:1,overflowY:'auto'}}>
             {members.map(m=>{
@@ -536,7 +538,7 @@ export default function DailyPage() {
                       {m.full_name}
                     </div>
                     <div style={{fontSize:10,color:isActive?C.primary:'#aaa',marginTop:2}}>
-                      {+weekPts>0?<span style={{fontWeight:700,color:C.success}}>⭐ {weekPts}đ tuần này</span>:'Chưa có điểm'}
+                      {+weekPts>0?<span style={{fontWeight:700,color:C.success}}>⭐ {t('daily_points_this_week',{score:weekPts})}</span>:t('daily_no_score')}
                     </div>
                   </div>
                   {isActive&&<div style={{width:6,height:6,borderRadius:'50%',background:C.primary,flexShrink:0}}/>}
@@ -545,8 +547,8 @@ export default function DailyPage() {
             })}
             {!members.length&&(
               <div style={{padding:20,textAlign:'center',fontSize:12,color:'#bbb'}}>
-                Chưa có thành viên<br/>
-                <span style={{fontSize:11}}>Admin thêm vào nhóm</span>
+                {t('daily_no_members')}<br/>
+                <span style={{fontSize:11}}>{t('daily_admin_add_to_group')}</span>
               </div>
             )}
           </div>
@@ -554,7 +556,7 @@ export default function DailyPage() {
           {/* Tổng kết tuần */}
           {members.length>0&&(
             <div className="dp-sidebar-footer" style={{padding:'10px 14px',borderTop:`1px solid ${C.border}`,background:C.bg}}>
-              <div style={{fontSize:10,color:'#aaa',fontWeight:700,textTransform:'uppercase',marginBottom:6}}>Tổng tuần</div>
+              <div style={{fontSize:10,color:'#aaa',fontWeight:700,textTransform:'uppercase',marginBottom:6}}>{t('daily_week_total')}</div>
               {members.map(m=>(
                 <div key={m.id} style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
                   <Chip color={m.avatar_color||C.primary} name={m.full_name} size={18}/>
@@ -573,7 +575,7 @@ export default function DailyPage() {
           {!activeMember&&selectedGroup&&(
             <div style={{textAlign:'center',padding:40,color:'#aaa'}}>
               <div style={{fontSize:32,marginBottom:8}}>👈</div>
-              <div style={{fontSize:13}}>Chọn thành viên bên trái để chấm điểm</div>
+              <div style={{fontSize:13}}>{t('daily_select_member_hint')}</div>
             </div>
           )}
 
@@ -585,12 +587,12 @@ export default function DailyPage() {
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.dark}}>{activeMember.full_name}</div>
                   <div style={{fontSize:11,color:'#aaa',marginTop:2}}>
-                    Đang chấm điểm tuần này · {hasPending?<span style={{color:C.warning,fontWeight:600}}>⚠ {Object.keys(pending).length} thay đổi chưa lưu</span>:<span style={{color:C.success}}>✓ Đã lưu</span>}
+                    {t('daily_scoring_this_week')} · {hasPending?<span style={{color:C.warning,fontWeight:600}}>⚠ {t('daily_unsaved_changes',{count:Object.keys(pending).length})}</span>:<span style={{color:C.success}}>✓ {t('daily_saved')}</span>}
                   </div>
                 </div>
                 <div style={{textAlign:'right'}}>
                   <div style={{fontSize:22,fontWeight:900,color:C.success}}>{memberWeekTotal(activeMember.id)}đ</div>
-                  <div style={{fontSize:10,color:'#aaa'}}>tổng tuần này</div>
+                  <div style={{fontSize:10,color:'#aaa'}}>{t('daily_total_this_week')}</div>
                 </div>
                 {/* Nút prev/next member */}
                 {members.length>1&&(

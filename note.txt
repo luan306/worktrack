@@ -271,3 +271,67 @@ select * from users
 USE worktrack;
 ALTER TABLE request_tasks ADD COLUMN hours_spent DECIMAL(5,1) DEFAULT NULL;
 npm install helmet express-rate-limit
+
+ALTER TABLE request_tasks ADD COLUMN hours_spent DECIMAL(5,1) DEFAULT NULL;
+
+
+
+
+
+
+
+
+
+
+ALTER TABLE request_tasks MODIFY COLUMN created_by INT NULL;
+ALTER TABLE request_tasks MODIFY COLUMN created_by INT NULL;
+
+SELECT CONSTRAINT_NAME 
+FROM information_schema.KEY_COLUMN_USAGE 
+WHERE TABLE_NAME = 'request_tasks' 
+AND TABLE_SCHEMA = 'worktrack'
+AND REFERENCED_TABLE_NAME = 'users';
+
+ALTER TABLE request_tasks MODIFY COLUMN created_by INT NULL;
+ALTER TABLE request_tasks DROP FOREIGN KEY request_tasks_ibfk_3;
+ALTER TABLE request_tasks ADD CONSTRAINT request_tasks_ibfk_3 
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
+
+
+
+ALTER TABLE request_tasks DROP FOREIGN KEY request_tasks_ibfk_1;
+ALTER TABLE request_tasks ADD CONSTRAINT request_tasks_ibfk_1 
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
+  
+  
+  
+  ALTER TABLE request_task_files ADD COLUMN stored_name VARCHAR(255);
+ALTER TABLE request_task_files ADD COLUMN mimetype VARCHAR(100);
+ALTER TABLE request_task_files ADD COLUMN uploaded_by INT;
+ALTER TABLE request_task_files ADD COLUMN filesize INT;
+
+
+
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id          INT NOT NULL AUTO_INCREMENT,
+  user_id     INT NOT NULL,                       -- người NHẬN thông báo — phải khớp kiểu users.id
+  actor_id    INT NULL,                            -- người GÂY ra sự kiện (NULL nếu hệ thống) — phải khớp kiểu users.id
+  type        VARCHAR(40) NOT NULL,                -- 'request_assigned' | 'request_status_changed' | 'request_commented' | 'request_scored'
+  entity_type VARCHAR(30) NOT NULL DEFAULT 'request',
+  entity_id   INT NOT NULL,
+  payload     JSON NULL,                           -- {title, status, score, comment_preview, actorName, ...}
+  is_read     TINYINT(1) NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_user_unread (user_id, is_read),
+  KEY idx_user_created (user_id, created_at),
+  CONSTRAINT fk_notif_user  FOREIGN KEY (user_id)  REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_notif_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+SHOW COLUMNS FROM users LIKE 'id';
+
+
+SELECT * FROM notifications ORDER BY id DESC LIMIT 5;

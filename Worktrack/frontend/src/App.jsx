@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './i18n';
 import useAuth from './store/authStore';
-import { ProtectedRoute, MainLayout } from './components/layout/Layout';
+import { ProtectedRoute, GuestRoute, MainLayout } from './components/layout/Layout';
 import LoginPage from './pages/auth/LoginPage';
 
 const BoardPage     = lazy(() => import('./pages/board/BoardPage'));
@@ -13,6 +13,7 @@ const CompletedPage = lazy(() => import('./pages/completed/CompletedPage'));
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const UsersPage     = lazy(() => import('./pages/users/UsersPage'));
 const ProfilePage = lazy(() => import('./pages/profile/ProfilePage.jsx'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -46,7 +47,10 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={<Loader />}>
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
+            {/* GuestRoute chặn user đã đăng nhập vào lại /login — tự động đưa về trang chính */}
+            <Route element={<GuestRoute />}>
+              <Route path="/login" element={<LoginPage />} />
+            </Route>
 
             <Route element={<ProtectedRoute />}>
               <Route element={<MainLayout />}>
@@ -63,7 +67,8 @@ export default function App() {
               </Route>
             </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Route không khớp cái nào ở trên → trang 404, thay vì âm thầm redirect về home */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

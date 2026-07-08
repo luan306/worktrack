@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express      = require('express');
+const http         = require('http');
+const { Server }   = require('socket.io');
 const cors         = require('cors');
 const path         = require('path');
 const compression  = require('compression');
@@ -90,7 +92,34 @@ app.use((err, _, res, __) => {
   res.status(500).json({ success: false, message: 'Server error' });
 });
 
+// ── Socket.IO ──
+// Bọc app Express trong 1 http.Server, rồi attach Socket.IO vào server đó
+// (không phải attach vào app) — đây là phần trước giờ CHƯA từng tồn tại.
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+
+io.on('connection', (socket) => {
+  // Frontend (lib/socket.js) connect kèm `auth: { userId }`
+  const userId = socket.handshake.auth?.userId;
+  if (userId) {
+    socket.join(`user:${userId}`);
+    console.log(`🔌 socket ${socket.id} joined room user:${userId}`);
+  }
+
+  socket.on('disconnect', () => {
+    console.log(`🔌 socket ${socket.id} disconnected`);
+  });
+});
+
+// Cho các route/controller lấy io qua req.app.get('io')
+app.set('io', io);
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, '0.0.0.0', () => {
+// ⚠️ Đổi app.listen(...) thành server.listen(...) — phải listen trên http.Server
+// đã attach Socket.IO, listen thẳng trên `app` như cũ sẽ làm Socket.IO không hoạt động.
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 WorkTrack API → http://localhost:${PORT}`);
+  console.log(`🔌 Socket.IO đã sẵn sàng`);
 });

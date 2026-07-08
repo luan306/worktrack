@@ -1,4 +1,13 @@
 const db = require('../config/db');
+const { notify, notifyMany } = require('../services/notificationService');
+
+// Gom creator + tất cả assignees của 1 task (để gửi thông báo status/comment)
+async function getRecipients(taskId, createdBy) {
+  const [assignees] = await db.query('SELECT user_id FROM request_task_assignees WHERE task_id=?', [taskId]);
+  const ids = assignees.map(a => a.user_id);
+  if (createdBy) ids.push(createdBy);
+  return ids;
+}
 
 exports.list = async (req, res) => {
   try {
@@ -83,6 +92,17 @@ exports.create = async (req, res) => {
       [taskId, req.user.id, `CV được tạo bởi ${req.user.full_name || req.user.username}`, 'system']
     ).catch(()=>{}); // ignore nếu chưa có cột type
 
+    // 🔔 Thông báo cho những người được assign ngay lúc tạo (nếu có)
+    if (assignees.length) {
+      const io = req.app.get('io');
+      await notifyMany(io, assignees.map(a => a.user_id), {
+        actorId: req.user.id,
+        type: 'request_assigned',
+        entityId: taskId,
+        payload: { title, actorName: req.user.full_name || req.user.username },
+      });
+    }
+
     res.status(201).json({ success: true, data: { id: taskId } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -115,8 +135,10 @@ exports.update = async (req, res) => {
     if (started_at   !== undefined) { fields.push('started_at=?');   vals.push(started_at?toMySQL(started_at):null); }
     if (completed_at !== undefined) { fields.push('completed_at=?'); vals.push(completed_at?toMySQL(completed_at):null); }
 
+    const statusChanged = status !== undefined && status !== task.status;
+
     // Status transitions
-    if (status !== undefined && status !== task.status) {
+    if (statusChanged) {
       const now = new Date().toISOString().slice(0,19).replace('T',' ');
 
       if (status === 'in_progress' && !task.started_at) {
@@ -145,8 +167,10 @@ exports.update = async (req, res) => {
       }
     }
 
+    const scoreChanged = score !== undefined && (isAdmin||isCreator);
+
     // Score chỉ leader/admin chấm
-    if (score !== undefined && (isAdmin||isCreator)) {
+    if (scoreChanged) {
       fields.push('score=?');     vals.push(score);
       fields.push('scored_by=?'); vals.push(req.user.id);
       fields.push('scored_at=?'); vals.push(new Date().toISOString().slice(0,19).replace('T',' '));
@@ -154,6 +178,31 @@ exports.update = async (req, res) => {
 
     if (!fields.length) return res.json({ success: true });
     await db.query(`UPDATE request_tasks SET ${fields.join(',')} WHERE id=?`, [...vals, id]);
+
+    // 🔔 Thông báo — bắn SAU khi update thành công, không chặn response nếu lỗi
+    const io = req.app.get('io');
+    const actorName = req.user.full_name || req.user.username;
+
+    if (statusChanged) {
+      const recipients = await getRecipients(id, task.created_by);
+      notifyMany(io, recipients, {
+        actorId: req.user.id,
+        type: 'request_status_changed',
+        entityId: id,
+        payload: { title: task.title, status, actorName },
+      }).catch(err => console.error('[notify status_changed]', err.message));
+    }
+
+    if (scoreChanged) {
+      const [assignees] = await db.query('SELECT user_id FROM request_task_assignees WHERE task_id=?', [id]);
+      notifyMany(io, assignees.map(a => a.user_id), {
+        actorId: req.user.id,
+        type: 'request_scored',
+        entityId: id,
+        payload: { title: task.title, score, actorName },
+      }).catch(err => console.error('[notify scored]', err.message));
+    }
+
     res.json({ success: true });
   } catch (e) { console.error('[update error]', e.message, e.stack); res.status(500).json({ success: false, message: e.message }); }
 };
@@ -161,17 +210,106 @@ exports.update = async (req, res) => {
 exports.addAssignee = async (req, res) => {
   try {
     const { user_id, role='main' } = req.body;
+    const { id } = req.params;
+
+    const [[task]] = await db.query('SELECT title, status FROM request_tasks WHERE id=?', [id]);
+    if (!task) return res.status(404).json({ success: false, message: 'Not found' });
+
+    // Đã hoàn thành/hủy thì không cho thêm người nữa
+    if (['done', 'cancelled'].includes(task.status)) {
+      return res.status(400).json({ success: false, message: 'CV đã hoàn thành, không thể thêm người nữa' });
+    }
+
+    // Leader/manager/admin: assign được cho CV bất kỳ.
+    // User thường: chỉ được thêm người khi CHÍNH MÌNH đã là assignee của CV này
+    // (mời đồng nghiệp vào làm chung), không được assign cho CV mình không liên quan.
+    const isPrivileged = ['admin','manager','leader'].includes(req.user.role);
+    if (!isPrivileged) {
+      const [rows] = await db.query(
+        'SELECT 1 FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]
+      );
+      if (!rows.length) {
+        return res.status(403).json({ success: false, message: 'Bạn cần đang tham gia CV này mới được thêm người khác vào làm chung' });
+      }
+    }
+
     await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES (?,?,?)',
-      [req.params.id, user_id, role]);
-    await db.query("UPDATE request_tasks SET status='assigned' WHERE id=? AND status='pending'", [req.params.id]);
+      [id, user_id, role]);
+    await db.query("UPDATE request_tasks SET status='assigned' WHERE id=? AND status='pending'", [id]);
+
+    // 🔔 Thông báo cho người được gán
+    const io = req.app.get('io');
+    notify(io, {
+      userId: +user_id,
+      actorId: req.user.id,
+      type: 'request_assigned',
+      entityId: id,
+      payload: { title: task?.title, actorName: req.user.full_name || req.user.username },
+    }).catch(err => console.error('[notify assigned]', err.message));
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
 exports.removeAssignee = async (req, res) => {
   try {
-    await db.query('DELETE FROM request_task_assignees WHERE task_id=? AND user_id=?',
-      [req.params.id, req.params.userId]);
+    const { id, userId } = req.params;
+
+    const [[task]] = await db.query('SELECT status FROM request_tasks WHERE id=?', [id]);
+    if (!task) return res.status(404).json({ success: false, message: 'Not found' });
+
+    if (['done', 'cancelled'].includes(task.status)) {
+      return res.status(400).json({ success: false, message: 'CV đã hoàn thành, không thể chỉnh sửa người thực hiện nữa' });
+    }
+
+    const isPrivileged = ['admin','manager','leader'].includes(req.user.role);
+    if (!isPrivileged) {
+      const [rows] = await db.query(
+        'SELECT 1 FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]
+      );
+      if (!rows.length) {
+        return res.status(403).json({ success: false, message: 'Bạn cần đang tham gia CV này mới được xóa người khác' });
+      }
+    }
+
+    await db.query('DELETE FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, userId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// POST /requests/:id/claim — user thường tự "nhận" 1 CV đang ở trạng thái chờ (pending),
+// khác với addAssignee (chỉ leader/manager/admin mới gán được cho NGƯỜI KHÁC).
+// Không nhận user_id từ req.body — luôn tự gán cho chính req.user.id, tránh user
+// tự gán CV cho người khác qua endpoint này.
+exports.claim = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [[task]] = await db.query('SELECT * FROM request_tasks WHERE id=?', [id]);
+    if (!task) return res.status(404).json({ success: false, message: 'Not found' });
+
+    const [[{ cnt }]] = await db.query(
+      'SELECT COUNT(*) AS cnt FROM request_task_assignees WHERE task_id=?', [id]
+    );
+
+    // Chỉ được nhận khi CV còn "pending" và chưa có ai nhận trước
+    if (task.status !== 'pending' || cnt > 0) {
+      return res.status(400).json({ success: false, message: 'CV này đã có người nhận hoặc không còn ở trạng thái chờ' });
+    }
+
+    await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES (?,?,?)',
+      [id, req.user.id, 'main']);
+    await db.query("UPDATE request_tasks SET status='assigned' WHERE id=?", [id]);
+
+    // 🔔 Báo cho người tạo CV biết đã có người nhận
+    const io = req.app.get('io');
+    notify(io, {
+      userId: task.created_by,
+      actorId: req.user.id,
+      type: 'request_claimed',
+      entityId: id,
+      payload: { title: task.title, actorName: req.user.full_name || req.user.username },
+    }).catch(err => console.error('[notify claimed]', err.message));
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -187,6 +325,8 @@ exports.addComment = async (req, res) => {
       'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
       [req.params.id, req.user.id, text, 'comment']
     );
+
+    await notifyComment(req).catch(err => console.error('[notify commented]', err.message));
     res.status(201).json({ success: true, data: { id: r.insertId } });
   } catch (e) {
     // Fallback nếu cột content/type chưa có
@@ -196,17 +336,44 @@ exports.addComment = async (req, res) => {
         'INSERT INTO request_task_comments (task_id,user_id,message) VALUES (?,?,?)',
         [req.params.id, req.user.id, content || message]
       );
+      await notifyComment(req).catch(err => console.error('[notify commented]', err.message));
       res.status(201).json({ success: true, data: { id: r.insertId } });
     } catch(e2) { res.status(500).json({ success: false, message: e2.message }); }
   }
 };
 
+// 🔔 Helper dùng chung cho cả 2 nhánh (try + fallback) của addComment
+async function notifyComment(req) {
+  const [[task]] = await db.query('SELECT title, created_by FROM request_tasks WHERE id=?', [req.params.id]);
+  if (!task) return;
+  const recipients = await getRecipients(req.params.id, task.created_by);
+  const io = req.app.get('io');
+  await notifyMany(io, recipients, {
+    actorId: req.user.id,
+    type: 'request_commented',
+    entityId: req.params.id,
+    payload: { title: task.title, actorName: req.user.full_name || req.user.username },
+  });
+}
+
+// Endpoint chấm điểm riêng (nếu frontend còn dùng route này thay vì PUT /requests/:id)
 exports.score = async (req, res) => {
   try {
     const { score } = req.body;
     if (score === undefined) return res.status(400).json({ success: false, message: 'score required' });
     await db.query('UPDATE request_tasks SET score=?,scored_by=?,scored_at=NOW() WHERE id=?',
       [score, req.user.id, req.params.id]);
+
+    const [[task]] = await db.query('SELECT title FROM request_tasks WHERE id=?', [req.params.id]);
+    const [assignees] = await db.query('SELECT user_id FROM request_task_assignees WHERE task_id=?', [req.params.id]);
+    const io = req.app.get('io');
+    notifyMany(io, assignees.map(a => a.user_id), {
+      actorId: req.user.id,
+      type: 'request_scored',
+      entityId: req.params.id,
+      payload: { title: task?.title, score, actorName: req.user.full_name || req.user.username },
+    }).catch(err => console.error('[notify scored]', err.message));
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -231,10 +398,10 @@ exports.uploadFile = async (req, res) => {
     // Kiểm tra cột nào tồn tại
     const [cols] = await db.query("SHOW COLUMNS FROM request_task_files");
     const colNames = cols.map(c => c.Field);
-    
+
     const fields = ['task_id','filename'];
     const vals   = [id, originalname];
-    
+
     if (colNames.includes('stored_name'))  { fields.push('stored_name');  vals.push(filename); }
     if (colNames.includes('filesize'))     { fields.push('filesize');      vals.push(size); }
     if (colNames.includes('mimetype'))     { fields.push('mimetype');      vals.push(mimetype); }

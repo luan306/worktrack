@@ -18,9 +18,16 @@ export default function LoginPage() {
 
   const switchLang = c => { setLang(c); i18n.changeLanguage(c); localStorage.setItem('lang', c); };
 
+  // Xóa lỗi khi người dùng bắt đầu sửa lại thông tin — nhưng lỗi vẫn hiển thị
+  // liên tục cho đến lúc đó, không tự động biến mất sau vài giây.
+  const updateField = (key, value) => {
+    setForm(p => ({ ...p, [key]: value }));
+    if (err) setErr('');
+  };
+
   const submit = async e => {
     e.preventDefault();
-    if (!form.username || !form.password) { setErr('Please fill in all fields'); return; }
+    if (!form.username || !form.password) { setErr(t('login_fill_required')); return; }
     setBusy(true); setErr('');
     try { await login(form.username, form.password); navigate('/'); }
     catch { setErr(t('bad_creds')); }
@@ -46,12 +53,12 @@ export default function LoginPage() {
               </div>
             </div>
             <h1 className="text-xl md:text-2xl font-black text-white">WorkTrack</h1>
-            <p className="text-[#7a9bbf] text-sm mt-1 leading-relaxed">Internal task management<br/>system for your team</p>
+            <p className="text-[#7a9bbf] text-sm mt-1 leading-relaxed">{t('sidebar_tagline')}<br/>{t('brand_subtitle')}</p>
             <div className="w-8 h-0.5 bg-[#3a7bd5] rounded my-5" />
             <div className="hidden sm:block">
               {[
-                ['📋','Daily task tracking by group'],
-                ['📨','Request tasks & deadlines'],
+                ['📋', t('nav_board_short')],
+                ['📨', t('nav_requests_short')],
               ].map(([icon, text]) => (
                 <div key={text} className="flex items-center gap-3 mb-3">
                   <div className="w-7 h-7 rounded-lg bg-blue-500/20 flex items-center justify-center text-sm flex-shrink-0">{icon}</div>
@@ -75,7 +82,15 @@ export default function LoginPage() {
           </div>
 
           <h2 className="text-xl font-black text-[#1e2a3a] mb-1">{t('sign_in')}</h2>
-          <p className="text-gray-400 text-sm mb-7">{t('welcome')}</p>
+          <p className="text-gray-400 text-sm mb-3">{t('welcome')}</p>
+
+          {/* Banner lỗi — to, rõ, đứng yên cho đến khi người dùng sửa lại thông tin */}
+          {err && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-600 text-sm font-medium rounded-lg px-3 py-2.5 mb-4">
+              <span className="flex-shrink-0">⚠️</span>
+              <span>{err}</span>
+            </div>
+          )}
 
           <form onSubmit={submit} className="flex flex-col gap-4">
             <div>
@@ -83,7 +98,7 @@ export default function LoginPage() {
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">👤</span>
                 <input className={`input pl-9 w-full ${err ? 'border-red-400' : ''}`}
-                  value={form.username} onChange={e => setForm(p=>({...p,username:e.target.value}))}
+                  value={form.username} onChange={e => updateField('username', e.target.value)}
                   placeholder="username or email" autoComplete="username" />
               </div>
             </div>
@@ -93,14 +108,13 @@ export default function LoginPage() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔑</span>
                 <input className={`input pl-9 pr-9 w-full ${err ? 'border-red-400' : ''}`}
                   type={show ? 'text' : 'password'} value={form.password}
-                  onChange={e => setForm(p=>({...p,password:e.target.value}))}
+                  onChange={e => updateField('password', e.target.value)}
                   placeholder="••••••••" autoComplete="current-password" />
                 <button type="button" onClick={() => setShow(p=>!p)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#3a7bd5] text-sm">
                   {show ? '🙈' : '👁'}
                 </button>
               </div>
-              {err && <p className="text-red-500 text-xs mt-1">⚠ {err}</p>}
             </div>
 
             <div className="text-right -mt-2">
@@ -115,7 +129,7 @@ export default function LoginPage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
                   </svg>
-                  Signing in...
+                  {t('login_signing_in')}
                 </span>
               ) : t('login_btn')}
             </button>

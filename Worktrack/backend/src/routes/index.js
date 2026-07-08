@@ -6,6 +6,7 @@ const gC  = require('../controllers/groups.controller');
 const dC  = require('../controllers/daily.controller');
 const rC  = require('../controllers/requests.controller');
 const dbC = require('../controllers/dashboard.controller');
+const nC  = require('../controllers/notifications.controller');
 
 // ── Auth ──
 router.post('/auth/login',   aC.login);
@@ -48,10 +49,11 @@ router.delete('/daily/tasks/:id',             auth(['admin','manager','leader'])
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);
 router.get   ('/requests/:id',                auth(), rC.getOne);
-router.post  ('/requests',                    auth(), rC.create);
+router.post  ('/requests',                    auth(['admin','manager','leader']), rC.create);
 router.put   ('/requests/:id',                auth(), rC.update);
-router.post  ('/requests/:id/assign',         auth(['admin','manager','leader']), rC.addAssignee);
-router.delete('/requests/:id/assign/:userId', auth(['admin','manager','leader']), rC.removeAssignee);
+router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
+router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);
+router.post  ('/requests/:id/claim',          auth(), rC.claim);
 router.post  ('/requests/:id/comments',       auth(), rC.addComment);
 router.post  ('/requests/:id/score',          auth(['admin','manager','leader']), rC.score);
 router.delete('/requests/:id',                auth(), rC.remove);
@@ -66,6 +68,12 @@ router.get ('/dashboard/debug',              auth(),                    dbC.debu
 router.get ('/dashboard/scores',             auth(['admin','manager']), dbC.getScores);
 router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);
 router.get ('/dashboard/excel/:filename',    auth(['admin','manager']), dbC.downloadExcel);
+
+// ── Notifications — static routes TRƯỚC dynamic :id ──
+router.get ('/notifications/unread-count', auth(), nC.unreadCount);
+router.post('/notifications/read-all',     auth(), nC.markAllRead);
+router.get ('/notifications',              auth(), nC.list);
+router.post('/notifications/:id/read',     auth(), nC.markRead);
 
 // Debug: đếm users
 router.get('/debug/users', auth(['admin']), async (req, res) => {

@@ -223,7 +223,7 @@ export default function BoardPage(){
       <div className="brd-topbar" style={{padding:'12px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,background:'#fff',flexShrink:0}}>
         <div className="brd-title" style={{fontSize:15,fontWeight:700,color:C.dark,flex:1}}>🗂 {t('board_title')}</div>
         <div className="brd-date" style={{fontSize:12,color:'#888',background:'#f5f6f8',padding:'4px 12px',borderRadius:20,border:'1px solid #e0e0e0',whiteSpace:'nowrap'}}>{fmtDate(today)}</div>
-        <button className="brd-create-btn" onClick={()=>navigate('/requests?create=1')} style={{padding:'6px 14px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>＋ {t('board_create_request')}</button>
+        {isLeader&&<button className="brd-create-btn" onClick={()=>navigate('/requests?create=1')} style={{padding:'6px 14px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>＋ {t('board_create_request')}</button>}
       </div>
 
       {/* Gợi ý vuốt ngang — chỉ hiện trên mobile/tablet nhỏ */}
@@ -247,7 +247,7 @@ export default function BoardPage(){
         {/* Col 2: Yêu cầu */}
         <div className="brd-col" style={{flex:1,display:'flex',flexDirection:'column',borderRight:`1.5px solid ${C.border}`,overflow:'hidden',minWidth:0}}>
           <ColHdr icon="📨" title={t('board_col_requests')} count={requests.length} countBg="#fff4e8" countColor={C.warning}
-            extra={<button onClick={()=>navigate('/requests?create=1')} style={{padding:'4px 10px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>＋ {t('create')}</button>}/>
+            extra={isLeader&&<button onClick={()=>navigate('/requests?create=1')} style={{padding:'4px 10px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>＋ {t('create')}</button>}/>
           <div style={{flex:1,overflowY:'auto',padding:10,background:C.bg,display:'flex',flexDirection:'column',gap:8}}>
             {loading?<Spin/>:<>
               {requests.map(t=><RequestCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}

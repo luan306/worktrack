@@ -1,7 +1,10 @@
-import { useState } from 'react';
-import { NavLink, useNavigate, Outlet } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { NavLink, useNavigate, Outlet, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
+import useNotificationStore from '../../store/notificationStore';
+import NotificationBell from '../NotificationBell';
+import NotificationToast from '../NotificationToast';
 
 const NAV = [
   { to: '/board',     icon: '🗂',  key: 'nav_board' },
@@ -94,11 +97,12 @@ export default function Sidebar({ collapsed, onToggle }) {
           {initials}
         </div>
         {!collapsed && (
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-semibold text-white">{user?.full_name}</div>
             <div className="text-[10px] capitalize text-[#7a9bbf]">{user?.role}</div>
           </div>
         )}
+        <NotificationBell />
       </div>
 
       {/* Nav */}
@@ -180,6 +184,16 @@ export function MainLayout() {
     catch { return false; }
   });
 
+  const { user } = useAuthStore();
+  const { connect, disconnect } = useNotificationStore();
+
+  // Kết nối socket 1 lần khi có user đăng nhập, ngắt khi rời layout (logout/unmount)
+  useEffect(() => {
+    if (!user?.id) return;
+    connect(user.id);
+    return () => disconnect();
+  }, [user?.id]);
+
   const toggleCollapsed = () => {
     setCollapsed(prev => {
       const next = !prev;
@@ -195,6 +209,7 @@ export function MainLayout() {
         <Outlet />
       </main>
       <MobileNav />
+      <NotificationToast />
     </div>
   );
 }
@@ -214,5 +229,25 @@ export function ProtectedRoute({ roles = [] }) {
 
   if (!authenticated) { window.location.href = '/login'; return null; }
   if (roles.length && !roles.includes(user?.role)) { window.location.href = '/board'; return null; }
+  return <Outlet />;
+}
+
+// Ngược lại với ProtectedRoute: chặn user ĐÃ đăng nhập vào lại /login,
+// tự động đưa về trang chính (dùng Navigate của react-router thay vì
+// window.location.href để không phải reload cả trang).
+export function GuestRoute() {
+  const { t } = useTranslation();
+  const { authenticated, loading } = useAuthStore();
+
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-[#f0f2f5] px-4">
+      <div className="flex max-w-[92vw] flex-col items-center gap-3 rounded-2xl bg-white p-8 shadow-xl">
+        <div className="animate-spin text-4xl">⚙️</div>
+        <div className="text-sm text-gray-400">{t('loading')}</div>
+      </div>
+    </div>
+  );
+
+  if (authenticated) return <Navigate to="/" replace />;
   return <Outlet />;
 }
