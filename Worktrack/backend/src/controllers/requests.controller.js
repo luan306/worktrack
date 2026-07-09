@@ -69,15 +69,22 @@ exports.getOne = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    const { title, description, priority='medium', group_id, deadline, assignees=[] } = req.body;
+    const { title, description, priority='medium', group_id, deadline, assignees=[], score } = req.body;
     if (!title) return res.status(400).json({ success: false, message: 'title required' });
 
+    const fields = ['title','description','priority','status','created_by','group_id','deadline'];
+    const vals   = [title, description||null, priority,
+                     assignees.length ? 'assigned' : 'pending',
+                     req.user.id, group_id||null, deadline||null];
+
+    // Điểm dự kiến nhập lúc tạo — không bắt buộc, để trống nếu không cần
+    if (score !== undefined && score !== null && score !== '') {
+      fields.push('score'); vals.push(+score);
+    }
+
     const [r] = await db.query(
-      `INSERT INTO request_tasks (title,description,priority,status,created_by,group_id,deadline)
-       VALUES (?,?,?,?,?,?,?)`,
-      [title, description||null, priority,
-       assignees.length ? 'assigned' : 'pending',
-       req.user.id, group_id||null, deadline||null]
+      `INSERT INTO request_tasks (${fields.join(',')}) VALUES (${fields.map(()=>'?').join(',')})`,
+      vals
     );
     const taskId = r.insertId;
 
@@ -117,6 +124,7 @@ exports.update = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
 
     const isAdmin   = ['admin','manager'].includes(req.user.role);
+    const isLeaderRole = ['admin','manager','leader'].includes(req.user.role);
     const isCreator = task.created_by === req.user.id;
     const isAssignee = (await db.query('SELECT 1 FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]))[0].length > 0;
 
@@ -167,9 +175,10 @@ exports.update = async (req, res) => {
       }
     }
 
-    const scoreChanged = score !== undefined && (isAdmin||isCreator);
+    const scoreChanged = score !== undefined && (isLeaderRole||isCreator);
 
-    // Score chỉ leader/admin chấm
+    // Score do leader/manager/admin (hoặc creator) chấm — thường xảy ra ở bước
+    // reviewing→done, khi leader chấm điểm chính xác lại lần cuối.
     if (scoreChanged) {
       fields.push('score=?');     vals.push(score);
       fields.push('scored_by=?'); vals.push(req.user.id);
@@ -314,31 +323,61 @@ exports.claim = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
+// POST /requests/:id/comments
+// Hỗ trợ 2 kiểu gửi lên:
+//   1) JSON thường:          { content: "..." }
+//   2) multipart/form-data:  content (có thể rỗng) + file (đính kèm)
+// ⚠️ Route này cần middleware multer (upload.single('file')) gắn ở routes/index.js
+// thì req.file mới có giá trị khi client gửi multipart/form-data.
+//
+// Thay vì dùng try/catch với fallback (dễ âm thầm bỏ sót cột file_* nếu nhánh
+// chính lỗi vì lý do khác), hàm này kiểm tra trực tiếp cột nào đang thực sự
+// tồn tại trong bảng (giống cách uploadFile() đang làm) rồi mới build câu INSERT
+// — đảm bảo file luôn được lưu nếu cột đã có, và báo lỗi rõ ràng nếu có vấn đề khác.
 exports.addComment = async (req, res) => {
   try {
-    const { content, message } = req.body; // hỗ trợ cả 2 field
-    const text = content || message;
-    if (!text) return res.status(400).json({ success: false, message: 'content required' });
+    const { content, message, type } = req.body;
+    const text = content || message || '';
 
-    // Thêm cột content nếu cần
+    if (!text && !req.file) {
+      return res.status(400).json({ success: false, message: 'content required' });
+    }
+
+    const [cols] = await db.query('SHOW COLUMNS FROM request_task_comments');
+    const colNames = cols.map(c => c.Field);
+
+    const fields = ['task_id', 'user_id'];
+    const vals   = [req.params.id, req.user.id];
+
+    if (colNames.includes('content')) { fields.push('content'); vals.push(text); }
+    if (colNames.includes('message')) { fields.push('message'); vals.push(text); }
+
+    if (colNames.includes('type')) {
+      const safeType = ['comment', 'history', 'system'].includes(type) ? type : 'comment';
+      fields.push('type'); vals.push(safeType);
+    }
+
+    if (req.file) {
+      if (colNames.includes('file_name'))   { fields.push('file_name');   vals.push(req.file.originalname); }
+      if (colNames.includes('stored_name')) { fields.push('stored_name'); vals.push(req.file.filename); }
+      if (colNames.includes('file_url'))    { fields.push('file_url');    vals.push('/uploads/' + req.file.filename); }
+      // Log ra console nếu backend nhận được file nhưng DB chưa có cột để lưu —
+      // để không còn phải đoán mò lý do "gửi được nhưng hiện ô trắng" nữa.
+      if (!colNames.includes('file_name')) {
+        console.warn('[addComment] Nhận được file nhưng bảng request_task_comments chưa có cột file_name/stored_name/file_url — file sẽ KHÔNG được lưu.');
+      }
+    }
+
     const [r] = await db.query(
-      'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
-      [req.params.id, req.user.id, text, 'comment']
+      `INSERT INTO request_task_comments (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`,
+      vals
     );
 
     await notifyComment(req).catch(err => console.error('[notify commented]', err.message));
     res.status(201).json({ success: true, data: { id: r.insertId } });
   } catch (e) {
-    // Fallback nếu cột content/type chưa có
-    try {
-      const { content, message } = req.body;
-      const [r] = await db.query(
-        'INSERT INTO request_task_comments (task_id,user_id,message) VALUES (?,?,?)',
-        [req.params.id, req.user.id, content || message]
-      );
-      await notifyComment(req).catch(err => console.error('[notify commented]', err.message));
-      res.status(201).json({ success: true, data: { id: r.insertId } });
-    } catch(e2) { res.status(500).json({ success: false, message: e2.message }); }
+    console.error('[addComment error]', e.message, e.stack);
+    res.status(500).json({ success: false, message: e.message });
   }
 };
 

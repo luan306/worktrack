@@ -64,9 +64,17 @@ export default function NotificationBell() {
   }, []);
 
   // Đóng khi cuộn trang hoặc resize để tránh dropdown "lơ lửng" sai vị trí
+  // Lưu ý: sự kiện 'scroll' không bubble, nhưng vẫn được bắt ở capture phase
+  // trên mọi ancestor kể cả window. Vì vậy nếu không loại trừ, việc cuộn
+  // bên trong chính panel (danh sách thông báo có overflowY: auto) cũng sẽ
+  // kích hoạt listener này và đóng dropdown ngay lập tức — đây chính là lỗi
+  // "lăn chuột" mà bạn gặp phải.
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
+    const close = (e) => {
+      if (panelRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => {

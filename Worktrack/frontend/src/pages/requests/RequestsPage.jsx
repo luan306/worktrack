@@ -64,6 +64,31 @@ function Countdown({deadline, status}) {
   return <span style={{fontSize:11,fontWeight:700,color,background:bg,padding:'3px 8px',borderRadius:6}}>⏱ {label}</span>;
 }
 
+// Giờ công tự động: đếm lên liên tục kể từ started_at trong lúc đang làm,
+// và đứng yên = khoảng thời gian thực (started_at → completed_at) khi task đã "done".
+function WorkDuration({startedAt, completedAt, status}) {
+  const { t } = useTranslation();
+  const finished = status==='done' && !!completedAt;
+  const [now, setNow] = useState(Date.now());
+  useEffect(()=>{
+    if (!startedAt || finished) return;
+    const timer = setInterval(()=>setNow(Date.now()), 1000);
+    return ()=>clearInterval(timer);
+  },[startedAt, finished]);
+
+  if (!startedAt) return <span style={{fontSize:12,color:'#bbb'}}>{t('req_not_started')}</span>;
+
+  const endMs = finished ? new Date(completedAt).getTime() : now;
+  const ms = Math.max(0, endMs - new Date(startedAt).getTime());
+  const totalMin = Math.floor(ms/60000);
+  const h = Math.floor(totalMin/60), m = totalMin%60, s = Math.floor((ms%60000)/1000);
+
+  if (finished) {
+    return <span style={{fontSize:13,fontWeight:700,color:C.success}}>✅ {t('req_hours_worked_total', { defaultValue:`{{h}}h {{m}}p`, h, m })}</span>;
+  }
+  return <span style={{fontSize:13,fontWeight:700,color:C.warning}}>⏱ {String(h).padStart(2,'0')}:{String(m).padStart(2,'0')}:{String(s).padStart(2,'0')}</span>;
+}
+
 function Section({icon,title,extra,children}){
   return (
     <div style={{background:'#fff',borderRadius:10,border:`1.5px solid ${C.border}`,overflow:'hidden',marginBottom:14}}>
@@ -108,7 +133,13 @@ export default function RequestsPage() {
     setTasks(data.data||[]);
   };
 
-  const filtered = tasks
+  // User thường chỉ thấy các request liên quan đến mình (do mình tạo hoặc được giao)
+  // Leader/manager/admin vẫn thấy toàn bộ
+  const visibleTasks = isLeader
+    ? tasks
+    : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id));
+
+  const filtered = visibleTasks
     .filter(t=>{
       if (filter!=='all' && t.status!==filter) return false;
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
@@ -127,7 +158,7 @@ export default function RequestsPage() {
     });
 
   const counts = {};
-  tasks.forEach(t=>{ counts[t.status]=(counts[t.status]||0)+1; });
+  visibleTasks.forEach(t=>{ counts[t.status]=(counts[t.status]||0)+1; });
 
   return (
     <div className="req-root" style={{flex:1,display:'flex',overflow:'hidden',background:'#fff',minWidth:0}}>
@@ -188,7 +219,7 @@ export default function RequestsPage() {
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`🔍 ${t('req_search_title')}`}
             style={{...FI,padding:'6px 10px',fontSize:12,marginBottom:8}}/>
           <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            {[['all',t('req_filter_all'),tasks.length],['pending',t('req_filter_pending'),counts.pending||0],['assigned',t('req_filter_assigned'),counts.assigned||0],['in_progress',t('req_filter_in_progress'),counts.in_progress||0],['scoring',t('req_filter_scoring'),counts.scoring||0],['done',t('req_filter_done'),counts.done||0]].map(([k,l,c])=>(
+            {[['all',t('req_filter_all'),visibleTasks.length],['pending',t('req_filter_pending'),counts.pending||0],['assigned',t('req_filter_assigned'),counts.assigned||0],['in_progress',t('req_filter_in_progress'),counts.in_progress||0],['scoring',t('req_filter_scoring'),counts.scoring||0],['done',t('req_filter_done'),counts.done||0]].map(([k,l,c])=>(
               <button key={k} onClick={()=>setFilter(k)} style={{padding:'3px 10px',borderRadius:15,fontSize:11,fontWeight:600,cursor:'pointer',border:`1.5px solid ${filter===k?C.primary:C.border}`,background:filter===k?C.primary:'#fff',color:filter===k?'#fff':'#888'}}>
                 {l} {c>0&&<span style={{opacity:.7}}>{c}</span>}
               </button>
@@ -252,10 +283,12 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [comment, setComment] = useState('');
-  const [tab,     setTab]     = useState('chat');
-  const [scoreInput,  setScoreInput]  = useState('');
   const [showAddUser, setShowAddUser] = useState(false);
+  const [scoreInput,  setScoreInput]  = useState('');
+  const [attachFile, setAttachFile]   = useState(null); // tệp đang chuẩn bị đính kèm vào tin nhắn
+  const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
+  const chatFileRef = useRef();
 
   useEffect(()=>{ loadTask(); },[taskId]);
 
@@ -278,10 +311,49 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   };
 
   const sendComment = async()=>{
-    if(!comment.trim()) return;
-    try{await api.post(`/requests/${taskId}/comments`,{content:comment});setComment('');loadTask();}
-    catch(e){alert(e.message);}
+    if(!comment.trim() && !attachFile) return;
+    setSendingMsg(true);
+    try{
+      if (attachFile) {
+        const form = new FormData();
+        form.append('content', comment);
+        form.append('file', attachFile);
+        await api.post(`/requests/${taskId}/comments`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+      } else {
+        await api.post(`/requests/${taskId}/comments`,{content:comment});
+      }
+      setComment('');
+      setAttachFile(null);
+      loadTask();
+    }
+    catch(e){alert(e.response?.data?.message||e.message);}
+    finally{setSendingMsg(false);}
   };
+
+  const pickChatFile = e=>{
+    const f = e.target.files[0];
+    if (f) setAttachFile(f);
+    e.target.value = '';
+  };
+
+  const chatFileIcon = (name)=>{
+    const ext = (name||'').split('.').pop().toLowerCase();
+    if (['jpg','jpeg','png','gif'].includes(ext)) return '🖼';
+    if (ext==='pdf') return '📄';
+    if (['doc','docx'].includes(ext)) return '📝';
+    if (['xls','xlsx'].includes(ext)) return '📊';
+    if (['zip','rar'].includes(ext)) return '🗜';
+    if (['mp4','mov'].includes(ext)) return '🎬';
+    return '📎';
+  };
+
+  // Backend chạy ở origin khác frontend (vd localhost:3001 vs localhost:5173),
+  // nên link file phải trỏ đầy đủ về backend, không thể để đường dẫn tương đối
+  // như "/uploads/xxx.png" — nếu không trình duyệt sẽ tự ghép vào domain frontend → 404.
+  const CHAT_BASE = (import.meta.env.VITE_API_URL||'http://localhost:3001/api').replace('/api','');
+  const resolveFileUrl = (url)=> url && url.startsWith('/') ? CHAT_BASE + url : url;
 
   const addAssignee = async uid=>{
     try{await api.post(`/requests/${taskId}/assign`,{user_id:uid,role:'main'});loadTask();setShowAddUser(false);}
@@ -298,8 +370,10 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     catch(e){alert(e.response?.data?.message||e.message);}
   };
 
+  // Assignee nộp bài xong → chuyển sang "scoring" (chờ leader duyệt), KHÔNG nhảy thẳng
+  // "done" nữa. Backend tự set completed_at khi nhận status='scoring'.
   const markDone = async()=>{
-    await save({status:'done',completed_at:new Date().toISOString()});
+    await save({status:'scoring'});
   };
 
   const deleteTask = async()=>{
@@ -320,8 +394,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const canManageAssignees = (isAdmin||isLeader||isAssignee) && !['done','cancelled'].includes(task.status);
   const overdue=task.deadline&&new Date(task.deadline)<new Date()&&task.status!=='done';
   const existingIds=new Set((task.assignees||[]).map(a=>a.user_id));
-  const chatItems=(task.comments||[]).filter(c=>!c.type||c.type==='comment');
-  const histItems=(task.comments||[]).filter(c=>c.type&&c.type!=='comment');
+  const chatItems=task.comments||[];
 
   return (
     <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
@@ -346,10 +419,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
         {(task.status==='in_progress'||(task.status==='assigned'&&isAssignee))&&!isAdmin&&(
           <button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_mark_done')}</button>
         )}
-        {/* Manager/admin: Duyệt hoàn thành */}
-        {task.status==='scoring'&&isAdmin&&(
-          <button onClick={()=>save({status:'done'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_approve_done')}</button>
-        )}
+        {/* Leader: Duyệt hoàn thành + chấm điểm cuối cùng — thực hiện trong khung "🏆 Duyệt CV" bên dưới, không có nút tắt ở đây nữa */}
         <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'#aaa':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
         <button onClick={onClose} style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:16,color:'#aaa',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
       </div>
@@ -399,7 +469,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                   <div style={{flex:'1 1 160px'}}><label style={FL}>{t('req_creator_label')}</label>
                     <input style={{...FI,background:'#f7f8fb',color:'#888'}} value={task.creator_name||'—'} readOnly/>
                   </div>
-                  <div style={{flex:'1 1 160px'}}><label style={FL}>{t('req_score_leader_label')}</label>
+                  <div style={{flex:'1 1 120px'}}><label style={FL}>{t('req_score_leader_label')}</label>
                     <input style={{...FI,background:'#f7f8fb',color:task.score!=null?C.success:'#bbb'}} value={task.score!=null?`${task.score}đ`:t('req_not_scored')} readOnly/>
                   </div>
                 </div>
@@ -419,17 +489,11 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </select>
                   </div>
                   <div style={{flex:'1 1 160px'}}><label style={FL}>{t('status')}</label>
-                    <select style={FI} value={task.status} onChange={e=>save({status:e.target.value})}
-                      disabled={!isAdmin&&!isCreator}>
-                      {Object.entries(STATUS)
-                        .filter(([k])=>{
-                          if (['pending','assigned'].includes(k)) return false;
-                          // User chỉ thấy in_progress và done
-                          if (!isAdmin&&!isCreator) return ['in_progress','done','cancelled'].includes(k);
-                          return true;
-                        })
-                        .map(([k,v])=><option key={k} value={k}>{v.icon} {t(v.key)}</option>)}
-                    </select>
+                    {/* Không cho chọn trạng thái tự do nữa — chuyển trạng thái chỉ qua các nút hành động
+                        (Bắt đầu làm / Chấm điểm xong / Trả / Hoàn thành...) để tránh nhảy cóc bước. */}
+                    <div style={{...FI,display:'flex',alignItems:'center',background:'#f7f8fb'}}>
+                      <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color}}>{st.icon} {t(st.key)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -481,8 +545,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     onBlur={e=>(isCreator||isAdmin)&&save({deadline:e.target.value})}/>
                 </div>
                 <div style={{flex:'1 1 160px'}}><label style={FL}>{t('req_hours_log')}</label>
-                  <input type="number" style={FI} defaultValue={task.hours_spent||''} placeholder={t('req_hours_placeholder')}
-                    onBlur={e=>save({hours_spent:+e.target.value})}/>
+                  <div style={{...FI,background:'#f7f8fb',display:'flex',alignItems:'center'}}>
+                    <WorkDuration startedAt={task.started_at} completedAt={task.completed_at} status={task.status}/>
+                  </div>
                 </div>
               </div>
             </Section>
@@ -499,6 +564,13 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     {canManageAssignees&&<span onClick={()=>removeAssignee(a.user_id)} style={{cursor:'pointer',color:'#aaa',fontSize:15,lineHeight:1}} onMouseEnter={e=>e.target.style.color=C.danger} onMouseLeave={e=>e.target.style.color='#aaa'}>×</span>}
                   </div>
                 ))}
+                {/* Leader chưa gán ai cho task này (pending, chưa có assignee) →
+                    cho user thường tự bấm nhận việc ngay tại đây, không chỉ ở nút trên topbar */}
+                {task.status==='pending' && (task.assignees||[]).length===0 && !isLeader && !isAdmin && (
+                  <div onClick={claimTask} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:`1.5px dashed ${C.primary}`,color:C.primary,fontSize:12,fontWeight:600,cursor:'pointer'}}>
+                    🙋 {t('req_claim_task')}
+                  </div>
+                )}
                 {canManageAssignees&&(task.assignees||[]).length<12&&(
                   <div onClick={()=>setShowAddUser(p=>!p)} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:'1.5px dashed #c0cce0',color:'#7a9bbf',fontSize:12,cursor:'pointer'}}
                     onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.color=C.primary;}}
@@ -528,22 +600,39 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               <FileSection taskId={task.id} files={task.files||[]} user={user} onReload={loadTask}/>
             </Section>
 
-            {/* Leader chấm điểm */}
+            {/* Leader duyệt CV — thay cho chấm điểm số cũ */}
             {isLeader&&(
-              <Section icon="🏆" title={t('req_leader_scoring')}
-                extra={<span style={{fontSize:11,fontWeight:700,color:task.score!=null?C.success:C.warning}}>{task.score!=null?t('req_scored',{score:task.score}):t('req_waiting_completion')}</span>}>
-                <div style={{display:'flex',alignItems:'center',gap:14,background:'#f0f4ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
-                  <div style={{flex:'1 1 160px'}}>
-                    <div style={{fontSize:13,fontWeight:700,color:C.primary}}>{t('req_score_rating')}</div>
-                    <div style={{fontSize:11,color:'#7a9bbf',marginTop:3}}>{t('req_leader_label',{name:user?.full_name})} · {task.score!=null?t('req_leader_scored_state'):t('req_leader_not_scored_state')}</div>
+              <Section icon="🏆" title={t('req_leader_scoring')}>
+                {task.status==='scoring'&&(
+                  <div style={{display:'flex',alignItems:'center',gap:10,background:'#f0f4ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
+                    <div style={{flex:'1 1 160px',fontSize:12,color:'#7a9bbf'}}>{t('req_waiting_completion')}</div>
+                    <button onClick={()=>save({status:'in_progress',completed_at:null})}
+                      style={{padding:'7px 14px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',color:'#888',fontSize:12,fontWeight:600,cursor:'pointer'}}>↩️ {t('req_send_back')}</button>
+                    <button onClick={()=>save({status:'reviewing'})}
+                      style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_scoring_done')}</button>
                   </div>
-                  <input type="number" min="0" max="10" step="0.5" value={scoreInput}
-                    onChange={e=>setScoreInput(e.target.value)}
-                    placeholder="–"
-                    style={{width:70,textAlign:'center',border:'2px solid #3a7bd5',borderRadius:10,padding:'8px',fontSize:20,fontWeight:900,color:C.primary,background:'#fff',outline:'none'}}/>
-                  <div style={{fontSize:13,color:'#aaa'}}>/ 10</div>
-                  <button onClick={()=>save({score:+scoreInput})} style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>{t('req_save_score')}</button>
-                </div>
+                )}
+                {task.status==='reviewing'&&(
+                  <div style={{display:'flex',alignItems:'center',gap:12,background:'#eef3ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
+                    <div style={{flex:'1 1 160px'}}>
+                      <div style={{fontSize:12,color:C.primary,fontWeight:600}}>{t('req_ready_for_final_approval')}</div>
+                      <div style={{fontSize:11,color:'#7a9bbf',marginTop:2}}>{t('req_rescore_hint')}</div>
+                    </div>
+                    <input type="number" min="0" max="10" step="0.5" value={scoreInput}
+                      onChange={e=>setScoreInput(e.target.value)}
+                      placeholder="–"
+                      style={{width:70,textAlign:'center',border:'2px solid #3a7bd5',borderRadius:10,padding:'8px',fontSize:20,fontWeight:900,color:C.primary,background:'#fff',outline:'none'}}/>
+                    <div style={{fontSize:13,color:'#aaa'}}>/ 10</div>
+                    <button onClick={()=>save({status:'done', score: scoreInput===''?undefined:+scoreInput})}
+                      style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_approve_done')}</button>
+                  </div>
+                )}
+                {task.status==='done'&&(
+                  <div style={{fontSize:12,color:C.success,fontWeight:600}}>✅ {t('req_status_done')}</div>
+                )}
+                {!['scoring','reviewing','done'].includes(task.status)&&(
+                  <div style={{fontSize:12,color:'#bbb'}}>{t('req_waiting_completion')}</div>
+                )}
               </Section>
             )}
 
@@ -553,67 +642,65 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           <div style={{padding:'10px 16px',borderTop:`1.5px solid ${C.border}`,display:'flex',gap:8,alignItems:'center',background:'#fff',flexShrink:0}}>
             <div style={{flex:1,fontSize:12,color:'#aaa'}}>{t('req_created_by',{time:fmtDt(task.created_at),name:task.creator_name})}</div>
             {isLeader&&<button onClick={deleteTask} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #fde8e8',background:'#fde8e8',color:C.danger,fontSize:12,fontWeight:600,cursor:'pointer'}}>🗑 {t('delete')}</button>}
-            {task.status==='scoring'&&isAdmin&&<button onClick={()=>save({status:'done'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_approve_done')}</button>}
             {(task.status==='in_progress'||task.status==='assigned')&&<button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #fff4e8',background:'#fff4e8',color:C.warning,fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_submit_done')}</button>}
             <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 14px',borderRadius:7,border:'none',background:saving?'#aaa':C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
           </div>
         </div>
 
-        {/* RIGHT: Chat + History */}
+        {/* RIGHT: Chat */}
         <div className="req-chat-panel" style={{width:300,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fafbfc'}}>
-          <div style={{display:'flex',borderBottom:`2px solid ${C.border}`,flexShrink:0}}>
-            {[['chat',`💬 ${t('req_messages_tab')}`],['history',`📋 ${t('req_history_tab')}`]].map(([k,l])=>(
-              <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px',textAlign:'center',fontSize:12,fontWeight:600,cursor:'pointer',color:tab===k?C.primary:'#888',borderBottom:`2.5px solid ${tab===k?C.primary:'transparent'}`,marginBottom:-2}}>{l}</div>
-            ))}
-          </div>
+          <div style={{padding:'11px',textAlign:'center',fontSize:12,fontWeight:600,color:C.primary,borderBottom:`2.5px solid ${C.primary}`,flexShrink:0}}>💬 {t('req_messages_tab')}</div>
 
           <div ref={feedRef} style={{flex:1,overflowY:'auto',padding:12,display:'flex',flexDirection:'column',gap:10}}>
-            {tab==='chat'&&<>
-              {chatItems.length===0&&<div style={{textAlign:'center',padding:20,color:'#bbb',fontSize:12}}>{t('req_no_messages')}</div>}
-              {chatItems.map((c,i)=>{
-                const isMe=c.user_id===user?.id;
-                return (
-                  <div key={i} style={{display:'flex',gap:8,flexDirection:isMe?'row-reverse':'row'}}>
-                    <Chip color={c.avatar_color||C.primary} name={c.full_name||'?'} size={26}/>
-                    <div style={{maxWidth:'80%'}}>
-                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3,flexDirection:isMe?'row-reverse':'row'}}>
-                        <span style={{fontSize:11,fontWeight:700,color:isMe?C.primary:C.dark}}>{c.full_name}</span>
-                        <span style={{fontSize:10,color:'#bbb'}}>{fmtDt(c.created_at)}</span>
-                      </div>
-                      <div style={{background:isMe?'#eef3ff':'#fff',border:`1px solid ${isMe?'#c8d8f0':C.border}`,borderRadius:isMe?'12px 4px 12px 12px':'4px 12px 12px 12px',padding:'8px 12px',fontSize:12,color:'#333',lineHeight:1.5}}>
-                        {c.content||c.message}
-                      </div>
+            {chatItems.length===0&&<div style={{textAlign:'center',padding:20,color:'#bbb',fontSize:12}}>{t('req_no_messages')}</div>}
+            {chatItems.map((c,i)=>{
+              const isMe=c.user_id===user?.id;
+              return (
+                <div key={i} style={{display:'flex',gap:8,flexDirection:isMe?'row-reverse':'row'}}>
+                  <Chip color={c.avatar_color||C.primary} name={c.full_name||'?'} size={26}/>
+                  <div style={{maxWidth:'80%'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3,flexDirection:isMe?'row-reverse':'row'}}>
+                      <span style={{fontSize:11,fontWeight:700,color:isMe?C.primary:C.dark}}>{c.full_name}</span>
+                      <span style={{fontSize:10,color:'#bbb'}}>{fmtDt(c.created_at)}</span>
                     </div>
-                  </div>
-                );
-              })}
-            </>}
-            {tab==='history'&&<>
-              {histItems.length===0&&<div style={{textAlign:'center',padding:20,color:'#bbb',fontSize:12}}>{t('req_no_history')}</div>}
-              {histItems.map((h,i)=>(
-                <div key={i} style={{display:'flex',gap:8}}>
-                  <div style={{width:26,height:26,borderRadius:'50%',background:'#95a5a6',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,flexShrink:0}}>⚙</div>
-                  <div style={{flex:1,background:'#f5f5f5',border:'1px solid #ebebeb',borderRadius:10,padding:'8px 12px'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
-                      <span style={{fontSize:11,fontWeight:700,color:'#888'}}>{t('req_system')}</span>
-                      <span style={{fontSize:10,color:'#bbb',marginLeft:'auto'}}>{fmtDt(h.created_at)}</span>
+                    <div style={{background:isMe?'#eef3ff':'#fff',border:`1px solid ${isMe?'#c8d8f0':C.border}`,borderRadius:isMe?'12px 4px 12px 12px':'4px 12px 12px 12px',padding:'8px 12px',fontSize:12,color:'#333',lineHeight:1.5}}>
+                      {(c.content||c.message)&&<div>{c.content||c.message}</div>}
+                      {(c.file_name||c.filename)&&(
+                        <a href={resolveFileUrl(c.file_url||c.url)} target="_blank" rel="noreferrer"
+                          style={{display:'flex',alignItems:'center',gap:6,marginTop:(c.content||c.message)?6:0,padding:'6px 9px',borderRadius:8,background:'#fff',border:`1px solid ${C.border}`,textDecoration:'none',color:C.primary,fontSize:11,fontWeight:600}}>
+                          <span>{chatFileIcon(c.file_name||c.filename)}</span>
+                          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.file_name||c.filename}</span>
+                        </a>
+                      )}
                     </div>
-                    <div style={{fontSize:12,color:'#555'}}>{h.content||h.message}</div>
                   </div>
                 </div>
-              ))}
-            </>}
+              );
+            })}
           </div>
 
           <div style={{padding:'10px 12px',borderTop:`1.5px solid ${C.border}`,flexShrink:0}}>
+            {attachFile&&(
+              <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,padding:'5px 9px',borderRadius:8,background:'#eef3ff',border:'1px solid #c8d8f0',fontSize:11,color:C.primary,fontWeight:600}}>
+                <span>{chatFileIcon(attachFile.name)}</span>
+                <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{attachFile.name}</span>
+                <span onClick={()=>setAttachFile(null)} style={{cursor:'pointer',color:'#aaa',fontSize:14}}>×</span>
+              </div>
+            )}
             <textarea value={comment} onChange={e=>setComment(e.target.value)}
               placeholder={t('req_message_placeholder')}
-              onKeyDown={e=>e.ctrlKey&&e.key==='Enter'&&sendComment()}
+              onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendComment(); } }}
               style={{width:'100%',padding:'8px 10px',border:`1.5px solid ${C.border}`,borderRadius:8,fontSize:12,resize:'none',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}
               rows={3}/>
-            <div style={{display:'flex',justifyContent:'flex-end',gap:6,marginTop:6}}>
-
-              <button onClick={sendComment} disabled={!comment.trim()} style={{padding:'5px 14px',borderRadius:7,border:'none',background:comment.trim()?C.primary:'#ddd',color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>➤ {t('send')}</button>
+            <input ref={chatFileRef} type="file" style={{display:'none'}} onChange={pickChatFile}
+              accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.txt,.csv,.mp4,.mov"/>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginTop:6}}>
+              <button onClick={()=>chatFileRef.current.click()} title={t('req_attach_file')}
+                style={{width:28,height:28,borderRadius:7,border:`1.5px solid ${C.border}`,background:'#fff',color:'#7a9bbf',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>📎</button>
+              <button onClick={sendComment} disabled={sendingMsg||(!comment.trim()&&!attachFile)}
+                style={{padding:'5px 14px',borderRadius:7,border:'none',background:(comment.trim()||attachFile)&&!sendingMsg?C.primary:'#ddd',color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                {sendingMsg?'…':`➤ ${t('send')}`}
+              </button>
             </div>
           </div>
         </div>
@@ -625,14 +712,18 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 // ── Create Panel ──
 function CreatePanel({groups,users,onClose,onSaved}){
   const { t } = useTranslation();
-  const [form,setForm]=useState({title:'',description:'',priority:'medium',deadline:'',group_id:'',assignees:[]});
+  const [form,setForm]=useState({title:'',description:'',priority:'medium',deadline:'',group_id:'',assignees:[],score:''});
   const [saving,setSaving]=useState(false);
   const s=(k,v)=>setForm(p=>({...p,[k]:v}));
 
   const submit=async()=>{
     if(!form.title.trim()) return alert(t('req_title_required_alert'));
     setSaving(true);
-    try{const{data}=await api.post('/requests',form);onSaved(data.data?.id);}
+    try{
+      const payload = { ...form, score: form.score===''?undefined:+form.score };
+      const{data}=await api.post('/requests',payload);
+      onSaved(data.data?.id);
+    }
     catch(e){alert(e.response?.data?.message||e.message);}
     finally{setSaving(false);}
   };
@@ -659,6 +750,10 @@ function CreatePanel({groups,users,onClose,onSaved}){
                   <option value="">{t('req_no_group')}</option>
                   {groups.map(g=><option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
                 </select>
+              </div>
+              <div style={{flex:'1 1 100px'}}><label style={FL}>{t('req_score_rating')}</label>
+                <input type="number" min="0" max="10" step="0.5" style={FI} value={form.score}
+                  onChange={e=>s('score',e.target.value)} placeholder="–"/>
               </div>
             </div>
             <div><label style={FL}>{t('deadline')}</label><input type="datetime-local" style={FI} value={form.deadline} onChange={e=>s('deadline',e.target.value)}/></div>

@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const auth   = require('../middleware/auth');
+const upload = require('../middleware/upload');
 const aC  = require('../controllers/auth.controller');
 const uC  = require('../controllers/users.controller');
 const gC  = require('../controllers/groups.controller');
@@ -54,12 +55,13 @@ router.put   ('/requests/:id',                auth(), rC.update);
 router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
 router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);
 router.post  ('/requests/:id/claim',          auth(), rC.claim);
-router.post  ('/requests/:id/comments',       auth(), rC.addComment);
+// ⚠️ Thêm upload.single('file') để đọc được multipart/form-data khi frontend gửi kèm tệp đính kèm.
+// Không có middleware này thì req.file/req.body luôn rỗng với request dạng multipart → lỗi 400 "content required".
+router.post  ('/requests/:id/comments',       auth(), upload.single('file'), rC.addComment);
 router.post  ('/requests/:id/score',          auth(['admin','manager','leader']), rC.score);
 router.delete('/requests/:id',                auth(), rC.remove);
 
 // File upload
-const upload = require('../middleware/upload');
 router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
 router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
 

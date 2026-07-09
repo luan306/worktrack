@@ -335,3 +335,34 @@ SHOW COLUMNS FROM users LIKE 'id';
 
 
 SELECT * FROM notifications ORDER BY id DESC LIMIT 5;
+
+
+
+
+ALTER TABLE request_task_comments
+  ADD COLUMN file_name   VARCHAR(255) NULL AFTER content,
+  ADD COLUMN stored_name VARCHAR(255) NULL AFTER file_name,
+  ADD COLUMN file_url    VARCHAR(500) NULL AFTER stored_name;
+  
+  
+  SELECT DATABASE();
+  
+  SHOW TABLES LIKE '%comment%';
+  
+  
+  USE worktrack;  -- (hoặc đúng tên trong DB_NAME nếu khác)
+
+
+SHOW TABLES LIKE '%comment%';
+
+
+
+ALTER TABLE request_task_comments
+  ADD COLUMN file_name   VARCHAR(255) NULL AFTER content,
+  ADD COLUMN stored_name VARCHAR(255) NULL AFTER file_name,
+  ADD COLUMN file_url    VARCHAR(500) NULL AFTER stored_name;
+SHOW COLUMNS FROM request_tasks LIKE 'status';
+
+ALTER TABLE request_tasks
+  MODIFY COLUMN status ENUM('pending','assigned','in_progress','scoring','reviewing','done','cancelled')
+  NOT NULL DEFAULT 'pending';
