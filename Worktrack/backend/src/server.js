@@ -116,10 +116,27 @@ io.on('connection', (socket) => {
 // Cho các route/controller lấy io qua req.app.get('io')
 app.set('io', io);
 
+// ── Lấy IP LAN để log ra cho tiện test từ điện thoại/Expo ──
+function getLocalIp() {
+  const os = require('os');
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const iface of ifaces[name]) {
+      // Bỏ qua IPv6 và địa chỉ loopback (127.0.0.1)
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost'; // fallback nếu không tìm thấy interface nào
+}
+
 const PORT = process.env.PORT || 3001;
 // ⚠️ Đổi app.listen(...) thành server.listen(...) — phải listen trên http.Server
 // đã attach Socket.IO, listen thẳng trên `app` như cũ sẽ làm Socket.IO không hoạt động.
 server.listen(PORT, '0.0.0.0', () => {
+  const localIp = getLocalIp();
   console.log(`🚀 WorkTrack API → http://localhost:${PORT}`);
+  console.log(`🌐 LAN            → http://${localIp}:${PORT}`);
   console.log(`🔌 Socket.IO đã sẵn sàng`);
 });

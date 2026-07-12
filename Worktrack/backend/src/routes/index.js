@@ -17,20 +17,20 @@ router.get ('/auth/me',      auth(), aC.me);
 router.post('/auth/change-password', auth(), aC.changePassword);
 
 // ── Users — static routes TRƯỚC dynamic :id ──
-router.get   ('/users',                    auth(),                    uC.list);
-router.post  ('/users',                    auth(['admin']),           uC.create);
-router.post  ('/users/import',             auth(['admin']),           uC.importUsers);
-router.put   ('/users/:id',                auth(['admin','manager']), uC.update);
-router.delete('/users/:id',                auth(['admin']),           uC.remove);
-router.post  ('/users/:id/reset-password', auth(['admin']),           uC.resetPassword);
+router.get   ('/users',                    auth(),                              uC.list);
+router.post  ('/users',                    auth(['admin','manager','leader']), uC.create);
+router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
+router.put   ('/users/:id',                auth(['admin','manager']),          uC.update);
+router.delete('/users/:id',                auth(['admin']),                    uC.remove);
+router.post  ('/users/:id/reset-password', auth(['admin']),                    uC.resetPassword);
 
-// ── Groups ──
-router.get   ('/groups',                     auth(),                    gC.list);
-router.post  ('/groups',                     auth(['admin','manager']), gC.create);
-router.put   ('/groups/:id',                 auth(['admin','manager']), gC.update);
-router.delete('/groups/:id',                 auth(['admin']),           gC.remove);
-router.post  ('/groups/:id/members',         auth(['admin','manager']), gC.addMember);
-router.delete('/groups/:id/members/:userId', auth(['admin','manager']), gC.removeMember);
+// ── Groups ── Leader KHÔNG có quyền gì ở đây — chỉ được tạo tài khoản user (ở trên)
+router.get   ('/groups',                     auth(),                              gC.list);
+router.post  ('/groups',                     auth(['admin','manager']),          gC.create);
+router.put   ('/groups/:id',                 auth(['admin','manager']),          gC.update);
+router.delete('/groups/:id',                 auth(['admin']),                    gC.remove);
+router.post  ('/groups/:id/members',         auth(['admin','manager']),          gC.addMember);
+router.delete('/groups/:id/members/:userId', auth(['admin','manager']),          gC.removeMember);
 
 // ── Daily Tasks — static routes TRƯỚC dynamic ──
 router.get('/daily/board',                    auth(),                          dC.getBoardData);
@@ -65,11 +65,12 @@ router.delete('/requests/:id',                auth(), rC.remove);
 router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
 router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
 
-// ── Dashboard ──
-router.get ('/dashboard/debug',              auth(),                    dbC.debug);
+// ── Dashboard ── Leader KHÔNG được xem — chỉ admin/manager
+router.get ('/dashboard/debug',              auth(['admin','manager']), dbC.debug);
 router.get ('/dashboard/scores',             auth(['admin','manager']), dbC.getScores);
 router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);
 router.get ('/dashboard/excel/:filename',    auth(['admin','manager']), dbC.downloadExcel);
+router.get ('/dashboard/last-export',        auth(['admin','manager']), dbC.getLastExport);
 
 // ── Notifications — static routes TRƯỚC dynamic :id ──
 router.get ('/notifications/unread-count', auth(), nC.unreadCount);

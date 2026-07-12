@@ -305,6 +305,30 @@ exports.lockPeriod = async (req, res) => {
   }
 };
 
+// GET /dashboard/last-export — trả về file Excel của kỳ đã CHỐT gần nhất,
+// không đụng gì tới việc chốt/reset điểm (khác hẳn POST /dashboard/lock).
+// Dùng cho nút "Xuất Excel" ở topbar — chỉ tải lại báo cáo đã có sẵn.
+exports.getLastExport = async (req, res) => {
+  try {
+    const [[period]] = await db.query(
+      `SELECT id, name, excel_path, locked_at FROM score_periods
+        WHERE is_locked=1 AND excel_path IS NOT NULL
+        ORDER BY locked_at DESC LIMIT 1`
+    );
+    if (!period) {
+      return res.status(404).json({ success: false, message: 'Chưa có kỳ nào được chốt để xuất Excel' });
+    }
+    // Kiểm tra file vật lý còn tồn tại không (phòng trường hợp đã bị xóa thủ công)
+    const filepath = path.join(__dirname, '../uploads', period.excel_path);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: `File ${period.excel_path} không còn tồn tại trên server` });
+    }
+    res.json({ success: true, data: { filename: period.excel_path, period_id: period.id, locked_at: period.locked_at } });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // GET /dashboard/excel/:filename
 exports.downloadExcel = async (req, res) => {
   try {

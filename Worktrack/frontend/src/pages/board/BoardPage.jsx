@@ -7,6 +7,26 @@ import useAuth from '../../store/authStore';
 const C = { primary:'#3a7bd5',dark:'#1e2a3a',success:'#27ae60',warning:'#e67e22',danger:'#e74c3c',bg:'#f7f8fb',border:'#e8eaed',inner:'#f0f2f8' };
 const PRI_COLOR = { high:C.danger, medium:C.warning, low:C.success };
 
+// Số thẻ mỗi trang cho mỗi cột — chỉnh ở đây nếu muốn nhiều/ít hơn
+const PAGE_SIZE = 8;
+const totalPagesOf = (arr)=>Math.max(1, Math.ceil((arr?.length||0)/PAGE_SIZE));
+const pageSliceOf  = (arr,page)=>(arr||[]).slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+
+// Ngưỡng để coi task là "mới" hoặc "sắp hết hạn" — chỉnh ở đây nếu muốn đổi
+const NEW_THRESHOLD_MS = 24*60*60*1000;      // task tạo trong vòng 24h → "Mới"
+const NEAR_DEADLINE_MS = 24*60*60*1000;      // còn ≤24h tới deadline → "Sắp hết hạn"
+
+const isTaskNew = (task) => {
+  if (!task.created_at) return false;
+  return (Date.now() - new Date(task.created_at).getTime()) < NEW_THRESHOLD_MS;
+};
+const isNearDeadline = (task) => {
+  if (!task.deadline || task.status==='done') return false;
+  const diff = new Date(task.deadline) - new Date();
+  return diff > 0 && diff <= NEAR_DEADLINE_MS;
+};
+const isOverdue = (task) => task.deadline && new Date(task.deadline) < new Date() && task.status!=='done';
+
 const Chip = ({color=C.primary,name='?',size=22})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   return <div style={{background:color,width:size,height:size,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:700,flexShrink:0}}>{ini}</div>;
@@ -18,8 +38,45 @@ const MetaRow = ({icon,label,value,vc='#444'})=>(
   </div>
 );
 
+const Badge = ({text,bg,color})=>(
+  <span style={{fontSize:9,fontWeight:800,color,background:bg,padding:'2px 7px',borderRadius:8,whiteSpace:'nowrap'}}>{text}</span>
+);
+
 const Spin  = ()=><div style={{textAlign:'center',padding:32,color:'#aaa',fontSize:13}}>⏳</div>;
 const Empty = ({text})=><div style={{textAlign:'center',padding:24,color:'#bbb',fontSize:12}}>{text}</div>;
+
+// Thanh phân trang dùng chung cho cả 3 cột — chỉ hiện khi có hơn 1 trang.
+// Giới hạn tối đa 5 số trang hiện cùng lúc (quanh trang hiện tại) + nút đầu/cuối,
+// tránh tràn ngang khi danh sách quá dài (vd 20+ trang).
+function Pagination({page,totalPages,onChange}){
+  if (totalPages<=1) return null;
+  const btn=(active,disabled)=>({
+    minWidth:24,height:24,padding:'0 6px',borderRadius:6,
+    border:`1.5px solid ${active?C.primary:C.border}`,
+    background:active?C.primary:'#fff',color:active?'#fff':disabled?'#ccc':'#888',
+    fontSize:11,fontWeight:700,cursor:disabled?'default':'pointer',
+    display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,
+  });
+  let start=Math.max(1,page-2), end=Math.min(totalPages,start+4);
+  start=Math.max(1,end-4);
+  const nums=[]; for(let p=start;p<=end;p++) nums.push(p);
+
+  return (
+    <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:4,padding:'8px 10px',borderTop:`1px solid ${C.inner}`,background:'#fff',flexShrink:0,flexWrap:'wrap'}}>
+      <button disabled={page===1} onClick={()=>onChange(page-1)} style={btn(false,page===1)}>‹</button>
+      {start>1&&<>
+        <button onClick={()=>onChange(1)} style={btn(false,false)}>1</button>
+        {start>2&&<span style={{color:'#ccc',fontSize:11}}>…</span>}
+      </>}
+      {nums.map(p=><button key={p} onClick={()=>onChange(p)} style={btn(p===page,false)}>{p}</button>)}
+      {end<totalPages&&<>
+        {end<totalPages-1&&<span style={{color:'#ccc',fontSize:11}}>…</span>}
+        <button onClick={()=>onChange(totalPages)} style={btn(false,false)}>{totalPages}</button>
+      </>}
+      <button disabled={page===totalPages} onClick={()=>onChange(page+1)} style={btn(false,page===totalPages)}>›</button>
+    </div>
+  );
+}
 
 // Đếm ngược deadline
 function Countdown({deadline,status}) {
@@ -82,16 +139,25 @@ function RequestCard({task,onNav}){
   const priKey = task.priority==='high'?'high':task.priority==='low'?'low':'medium';
   const priColor = PRI_COLOR[priKey];
   const assignee=task.assignees?.[0];
-  const overdue=task.deadline&&new Date(task.deadline)<new Date()&&task.status!=='done';
+  const overdue=isOverdue(task);
+  const near=isNearDeadline(task);
+  const fresh=isTaskNew(task);
   const fmt=d=>d?new Date(d).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
   return (
     <div onClick={onNav} onMouseEnter={e=>e.currentTarget.style.boxShadow='0 4px 16px rgba(58,123,213,0.13)'} onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}
-      style={{background:'#fff',borderRadius:10,border:`1.5px solid ${C.border}`,overflow:'hidden',cursor:'pointer'}}>
+      style={{background:'#fff',borderRadius:10,border:`1.5px solid ${near||overdue?C.danger:C.border}`,overflow:'hidden',cursor:'pointer'}}>
       <div style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:8,borderBottom:`1px solid ${C.inner}`}}>
         <span>{task.priority==='high'?'🔴':task.priority==='medium'?'🟡':'🟢'}</span>
         <div style={{fontSize:13,fontWeight:700,color:C.dark,flex:1}}>{task.title}</div>
         <span style={{fontSize:10,fontWeight:700,color:priColor}}>{t(priKey)}</span>
       </div>
+      {(fresh||near||overdue)&&(
+        <div style={{padding:'6px 14px 0',display:'flex',gap:5,flexWrap:'wrap'}}>
+          {overdue&&<Badge text={`⚠ ${t('board_tag_overdue','Trễ hạn')}`} bg="#fde8e8" color={C.danger}/>}
+          {!overdue&&near&&<Badge text={`⏳ ${t('board_tag_near_deadline','Sắp hết hạn')}`} bg="#fff4e8" color={C.warning}/>}
+          {fresh&&<Badge text={`🆕 ${t('board_tag_new','Mới')}`} bg="#eaf3ff" color={C.primary}/>}
+        </div>
+      )}
       <div style={{padding:'10px 14px',display:'flex',flexDirection:'column',gap:5}}>
         <MetaRow icon="👤" label={t('label_assigned_by')} value={task.creator_name}/>
         <MetaRow icon="👷" label={t('label_assignee')} value={assignee?assignee.full_name:t('board_not_assigned')} vc={assignee?'#444':'#aaa'}/>
@@ -136,8 +202,34 @@ export default function BoardPage(){
   const [completed,setCompleted]=useState([]);
   const [loading,setLoading]=useState(true);
 
+  // Trang hiện tại của mỗi cột — reset về 1 khi dữ liệu cột đó đổi (fetch lại/lọc lại)
+  const [dailyPage,setDailyPage]=useState(1);
+  const [reqPage,setReqPage]=useState(1);
+  const [donePage,setDonePage]=useState(1);
+  useEffect(()=>{ setDailyPage(p=>Math.min(p,totalPagesOf(dailyGroups))); },[dailyGroups]);
+  useEffect(()=>{ setReqPage(p=>Math.min(p,totalPagesOf(requests))); },[requests]);
+  useEffect(()=>{ setDonePage(p=>Math.min(p,totalPagesOf(completed))); },[completed]);
+
   // Fetch mỗi lần mount
   useEffect(()=>{ if(user) fetchAll(); },[user]);
+
+  // Ưu tiên hiển thị task trễ hạn/sắp hết hạn, rồi tới task mới tạo, lên đầu danh sách —
+  // để chúng rơi vào trang 1 thay vì bị chìm khi có nhiều task.
+  const sortByUrgency=(list)=>{
+    const scoreOf=(tsk)=>{
+      if(isOverdue(tsk)) return 0;
+      if(isNearDeadline(tsk)) return 1;
+      if(isTaskNew(tsk)) return 2;
+      return 3;
+    };
+    return [...list].sort((a,b)=>{
+      const sa=scoreOf(a), sb=scoreOf(b);
+      if(sa!==sb) return sa-sb;
+      const da=a.deadline?new Date(a.deadline).getTime():Infinity;
+      const db=b.deadline?new Date(b.deadline).getTime():Infinity;
+      return da-db;
+    });
+  };
 
   const fetchAll=useCallback(async()=>{
     setLoading(true);
@@ -153,8 +245,10 @@ export default function BoardPage(){
 
       const allReq=[...(r1.data.data||[]),...(r2.data.data||[]),...(r3.data.data||[])]
         .filter((t,i,a)=>a.findIndex(x=>x.id===t.id)===i);
-      setRequests(allReq);
-      setCompleted((cRes.data.data||[]).slice(0,12));
+      setRequests(sortByUrgency(allReq));
+      // Lấy nhiều hơn 12 để phân trang có ý nghĩa; nút "Xem tất cả" vẫn dẫn sang
+      // trang Hoàn thành đầy đủ nếu còn nhiều hơn số đã tải về đây.
+      setCompleted((cRes.data.data||[]).slice(0,60));
 
       const allGroups=gRes.data.data||[];
       const userGroupIds=user?.groups?.map(g=>g.id)||[];
@@ -238,10 +332,11 @@ export default function BoardPage(){
             extra={isLeader&&<button onClick={()=>navigate('/daily')} style={{padding:'4px 10px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>＋</button>}/>
           <div style={{flex:1,overflowY:'auto',padding:10,background:C.bg,display:'flex',flexDirection:'column',gap:8}}>
             {loading?<Spin/>:<>
-              {dailyGroups.map(g=><DailyCard key={g.id} group={g} onClick={()=>navigate('/daily')}/>)}
+              {pageSliceOf(dailyGroups,dailyPage).map(g=><DailyCard key={g.id} group={g} onClick={()=>navigate('/daily')}/>)}
               {!dailyGroups.length&&<Empty text={t('board_empty_daily')}/>}
             </>}
           </div>
+          {!loading&&<Pagination page={dailyPage} totalPages={totalPagesOf(dailyGroups)} onChange={setDailyPage}/>}
         </div>
 
         {/* Col 2: Yêu cầu */}
@@ -250,10 +345,11 @@ export default function BoardPage(){
             extra={isLeader&&<button onClick={()=>navigate('/requests?create=1')} style={{padding:'4px 10px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>＋ {t('create')}</button>}/>
           <div style={{flex:1,overflowY:'auto',padding:10,background:C.bg,display:'flex',flexDirection:'column',gap:8}}>
             {loading?<Spin/>:<>
-              {requests.map(t=><RequestCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
+              {pageSliceOf(requests,reqPage).map(t=><RequestCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
               {!requests.length&&<Empty text={t('board_empty_requests')}/>}
             </>}
           </div>
+          {!loading&&<Pagination page={reqPage} totalPages={totalPagesOf(requests)} onChange={setReqPage}/>}
         </div>
 
         {/* Col 3: Hoàn thành */}
@@ -261,11 +357,12 @@ export default function BoardPage(){
           <ColHdr icon="✅" title={t('board_col_completed')} count={completed.length} countBg="#e8f8ee" countColor={C.success}/>
           <div style={{flex:1,overflowY:'auto',padding:10,background:C.bg,display:'flex',flexDirection:'column',gap:8}}>
             {loading?<Spin/>:<>
-              {completed.map(t=><CompletedCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
+              {pageSliceOf(completed,donePage).map(t=><CompletedCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
               {!completed.length&&<Empty text={t('board_empty_completed')}/>}
-              {completed.length>=12&&<div onClick={()=>navigate('/completed')} style={{textAlign:'center',padding:10,fontSize:12,color:'#aaa',cursor:'pointer'}}>{t('board_view_all')} →</div>}
+              {completed.length>=60&&<div onClick={()=>navigate('/completed')} style={{textAlign:'center',padding:10,fontSize:12,color:'#aaa',cursor:'pointer'}}>{t('board_view_all')} →</div>}
             </>}
           </div>
+          {!loading&&<Pagination page={donePage} totalPages={totalPagesOf(completed)} onChange={setDonePage}/>}
         </div>
       </div>
     </div>

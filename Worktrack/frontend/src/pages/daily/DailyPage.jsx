@@ -29,6 +29,15 @@ function getWeekNum(d) {
   const w1=new Date(date.getFullYear(),0,4);
   return 1+Math.round(((date.getTime()-w1.getTime())/86400000-3+(w1.getDay()+6)%7)/7);
 }
+// Định dạng YYYY-MM-DD theo giờ ĐỊA PHƯƠNG (không dùng toISOString vì nó quy
+// đổi sang UTC và ở múi giờ VN (+7) sẽ bị lùi lại 1 ngày quanh nửa đêm).
+function ymd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
+}
+function isWeekend(d) { const dow = d.getDay(); return dow===0||dow===6; }
 
 function Chip({ color=C.primary, name='?', size=32, active=false }) {
   const ini=name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
@@ -61,6 +70,7 @@ export default function DailyPage() {
   const [viewMode,        setViewMode]       = useState('week'); // 'week' | 'month'
   const [logs,            setLogs]           = useState({});
   const [pending,         setPending]        = useState({});
+  const [scoreWarn,       setScoreWarn]      = useState({}); // {key: true} — điểm vừa nhập vượt quá điểm tối đa
   const [saving,          setSaving]         = useState(false);
   const [showAddTask,     setShowAddTask]     = useState(false);
   const [editTask,        setEditTask]       = useState(null);
@@ -69,7 +79,8 @@ export default function DailyPage() {
   const [showCalendar,    setShowCalendar]   = useState(false);
   const [calMonth,        setCalMonth]       = useState(()=>{ const d=new Date(); return {y:d.getFullYear(),m:d.getMonth()}; });
 
-  // viewDays: 7 ngày (week) hoặc toàn tháng (month)
+  // viewDays: 7 ngày (week) hoặc toàn tháng (month) — VẪN HIỂN THỊ T7/CN,
+  // nhưng các ngày này sẽ bị khoá không cho chấm điểm (xem isWeekend bên dưới).
   const viewDays = viewMode === 'month'
     ? (() => {
         const d = new Date(weekStart);
@@ -109,8 +120,8 @@ export default function DailyPage() {
     if (!selectedGroup||!user) return;
     try {
       // 2 calls song song: page-data (tasks+members) + week logs
-      const viewStartStr = viewDays[0].toISOString().slice(0,10);
-      const viewEndStr   = viewDays[viewDays.length-1].toISOString().slice(0,10);
+      const viewStartStr = ymd(viewDays[0]);
+      const viewEndStr   = ymd(viewDays[viewDays.length-1]);
 
       const [pageRes, weekLogsRes] = await Promise.all([
         api.get(`/daily/page-data?group_id=${selectedGroup.id}`),
@@ -145,7 +156,7 @@ export default function DailyPage() {
       const newLogs = {};
       const weekLogs = weekLogsRes.data.data?.logs||[];
       weekLogs.forEach(log => {
-        const dateStr = new Date(log.log_date).toISOString().slice(0,10);
+        const dateStr = ymd(new Date(log.log_date));
         newLogs[`${log.daily_task_id}_${log.user_id}_${dateStr}`] = {
           is_done: log.is_done,
           score:   log.score,
@@ -168,11 +179,19 @@ export default function DailyPage() {
     setPending(p=>({...p,[key]:cur.is_done?{is_done:0,score:0}:{is_done:1,score:cur.score||0}}));
   };
 
-  const setScore = (taskId, userId, dateStr, score) => {
+  const setScore = (taskId, userId, dateStr, score, maxScore) => {
     if (!isLeader) return;
     const key = `${taskId}_${userId}_${dateStr}`;
     const cur = getLog(taskId,userId,dateStr);
-    setPending(p=>({...p,[key]:{...cur,score:parseFloat(score)||0}}));
+    let val = parseFloat(score);
+    if (isNaN(val)) val = 0;
+    if (val < 0) val = 0;
+    if (maxScore!=null && val > +maxScore) {
+      val = +maxScore;
+      setScoreWarn(w=>({...w,[key]:true}));
+      setTimeout(()=>setScoreWarn(w=>{ if(!w[key]) return w; const n={...w}; delete n[key]; return n; }), 1600);
+    }
+    setPending(p=>({...p,[key]:{...cur,score:val}}));
   };
 
   const saveLogs = async () => {
@@ -228,7 +247,7 @@ export default function DailyPage() {
         const d = new Date(weekStart);
         return `${t('daily_month')} ${d.getMonth()+1}/${d.getFullYear()} — ${fmtDate(viewDays[0])} ${t('daily_to')} ${fmtDate(viewDays[viewDays.length-1])}`;
       })()
-    : `${t('daily_week')} ${getWeekNum(weekStart)} — ${fmtDate(weekDays[0])} ${t('daily_to')} ${fmtDate(weekDays[6])}/${weekDays[6].getFullYear()}`;
+    : `${t('daily_week')} ${getWeekNum(weekStart)} — ${fmtDate(weekDays[0])} ${t('daily_to')} ${fmtDate(weekDays[weekDays.length-1])}/${weekDays[weekDays.length-1].getFullYear()}`;
   const hasPending = Object.keys(pending).length > 0;
 
   const taskShowsOnDay = (task,day) => {
@@ -243,17 +262,19 @@ export default function DailyPage() {
     let total=0;
     tasks.forEach(t=>{
       weekDays.forEach(day=>{
+        if (isWeekend(day)) return;
         if (!taskShowsOnDay(t,day)) return;
-        total+=+(getLog(t.id,memberId,day.toISOString().slice(0,10)).score)||0;
+        total+=+(getLog(t.id,memberId,ymd(day)).score)||0;
       });
     });
     return total.toFixed(1);
   };
 
-  // Tổng điểm 1 member 1 ngày
+  // Tổng điểm 1 member 1 ngày (T7/CN không chấm điểm nên luôn = 0)
   const memberDayTotal = (memberId,day) => {
+    if (isWeekend(day)) return 0;
     let total=0;
-    const dateStr=day.toISOString().slice(0,10);
+    const dateStr=ymd(day);
     tasks.forEach(t=>{
       if (!taskShowsOnDay(t,day)) return;
       total+=+(getLog(t.id,memberId,dateStr).score)||0;
@@ -261,13 +282,16 @@ export default function DailyPage() {
     return total;
   };
 
-  // Tổng max 1 ngày
-  const dayMax = (day) => tasks.filter(t=>taskShowsOnDay(t,day)).reduce((s,t)=>s+(+t.max_score||0),0);
+  // Tổng max 1 ngày (T7/CN không tính vì không được chấm điểm)
+  const dayMax = (day) => isWeekend(day) ? 0 : tasks.filter(t=>taskShowsOnDay(t,day)).reduce((s,t)=>s+(+t.max_score||0),0);
 
   // Member score summary
   const pendingCount = activeMember
     ? Object.keys(pending).filter(k=>k.includes(`_${activeMember.id}_`)).length
     : 0;
+
+  // Số cột tổng cộng trong bảng (1 cột tên công việc + N ngày + 1 cột tổng)
+  const colCount = viewDays.length + 2;
 
   if (!user) return <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center'}}><div>⏳</div></div>;
 
@@ -456,8 +480,8 @@ export default function DailyPage() {
                   {days.map((day,i)=>{
                     if (!day) return <div key={`e${i}`}/>;
                     const ws      = getWeekStart(day);
-                    const wsStr   = ws.toISOString().slice(0,10);
-                    const curWStr = weekStart.toISOString().slice(0,10);
+                    const wsStr   = ymd(ws);
+                    const curWStr = ymd(weekStart);
                     const isSelected = wsStr===curWStr;
                     const isTod   = isToday(day);
                     const dow     = day.getDay();
@@ -622,28 +646,31 @@ export default function DailyPage() {
                     {viewDays.map((day,i)=>{
                       const today  = isToday(day);
                       const future = isFuture(day);
+                      const dayOff = isWeekend(day);
                       const dTotal = memberDayTotal(activeMember.id,day);
                       const dMax   = dayMax(day);
                       const dow    = day.getDay()===0?6:day.getDay()-1; // 0=Mon
-                      const isWeekend = day.getDay()===0||day.getDay()===6;
                       return (
                         <th key={i} className={viewMode==='month'?'dp-daycol-month':'dp-daycol-week'} style={{
                           background: today?'rgba(46,204,113,0.15)':'#1e2a3a',
                           border:'1px solid #2d3f52',
                           minWidth: viewMode==='month'?40:80,
-                          opacity: isWeekend&&!today?0.7:1,
+                          opacity: dayOff&&!today?0.55:1,
                         }}>
                           <div style={{padding:viewMode==='month'?'4px 2px':'8px 6px',display:'flex',flexDirection:'column',alignItems:'center',gap:1}}>
                             {viewMode==='week'
                               ? <div style={{fontSize:11,fontWeight:700,color:today?'#2ecc71':'#c8d8ee'}}>{DAYS_VI[dow]}{today?' ●':''}</div>
-                              : <div style={{fontSize:9,fontWeight:700,color:today?'#2ecc71':isWeekend?'#e67e22':'#c8d8ee'}}>{DAYS_VI[dow]}</div>
+                              : <div style={{fontSize:9,fontWeight:700,color:today?'#2ecc71':'#c8d8ee'}}>{DAYS_VI[dow]}</div>
                             }
                             <div style={{fontSize:viewMode==='month'?9:10,color:today?'#2ecc71':'#7a9bbf'}}>{fmtDate(day)}</div>
-                            {!future&&dTotal>0&&viewMode==='week'&&(
-                              <div style={{fontSize:10,fontWeight:700,color:dTotal>=dMax?'#2ecc71':C.warning,marginTop:1}}>
-                                {dTotal.toFixed(0)}/{dMax}đ
-                              </div>
-                            )}
+                            {dayOff
+                              ? <div style={{fontSize:9,color:'#7a9bbf',marginTop:1}}>Nghỉ</div>
+                              : (!future&&dTotal>0&&viewMode==='week'&&(
+                                  <div style={{fontSize:10,fontWeight:700,color:dTotal>=dMax?'#2ecc71':C.warning,marginTop:1}}>
+                                    {dTotal.toFixed(0)}/{dMax}đ
+                                  </div>
+                                ))
+                            }
                           </div>
                         </th>
                       );
@@ -665,11 +692,12 @@ export default function DailyPage() {
                                     : task.frequency==='weekly' ?'📆 Tuần 1 lần'
                                     :`🗓 Tháng · ngày ${task.frequency_day}`;
 
-                    // Tổng task này của member này trong tuần
+                    // Tổng task này của member này trong tuần (bỏ qua T7/CN vì không chấm điểm)
                     let rowTotal=0,rowMax=0;
                     weekDays.forEach(day=>{
                       if (!taskShowsOnDay(task,day)) return;
-                      const l=getLog(task.id,activeMember.id,day.toISOString().slice(0,10));
+                      if (isWeekend(day)) return;
+                      const l=getLog(task.id,activeMember.id,ymd(day));
                       rowTotal+=+l.score||0;
                       if (!isFuture(day)) rowMax+=+task.max_score||0;
                     });
@@ -696,53 +724,62 @@ export default function DailyPage() {
                         </td>
 
                         {weekDays.map((day,i)=>{
-                          const dateStr = day.toISOString().slice(0,10);
+                          const dateStr = ymd(day);
                           const shows   = taskShowsOnDay(task,day);
                           const future  = isFuture(day);
                           const today   = isToday(day);
+                          const dayOff  = isWeekend(day);
+                          const locked  = future || dayOff; // T7/CN không cho chấm điểm
 
                           if (!shows) return <td key={i} style={{background:'#f9fafb',borderColor:'#f0f2f5'}}/>;
 
                           const log    = getLog(task.id,activeMember.id,dateStr);
-                          const isDone = log.is_done;
+                          const isDone = !locked && log.is_done;
                           const score  = log.score;
-                          const changed= pending[`${task.id}_${activeMember.id}_${dateStr}`]!==undefined;
+                          const changed= !locked && pending[`${task.id}_${activeMember.id}_${dateStr}`]!==undefined;
+                          const warn   = !!scoreWarn[`${task.id}_${activeMember.id}_${dateStr}`];
 
                           return (
                             <td key={i} style={{
-                              background:changed?'#fffbec':today?'rgba(46,204,113,0.04)':undefined,
+                              background:changed?'#fffbec':dayOff?'#f7f8fa':today?'rgba(46,204,113,0.04)':undefined,
                               borderColor:changed?'#f5d8a0':'#e8edf5',
                               textAlign:'center',
                               outline:changed?`1px solid #f5d8a0`:'none',
+                              opacity: dayOff?0.6:1,
                             }}>
                               <div style={{padding:'8px 6px',display:'flex',flexDirection:'column',alignItems:'center',gap:5}}>
                                 {/* Tick */}
-                                <div className="dp-tick" onClick={()=>!future&&toggleTick(task.id,activeMember.id,dateStr)} style={{
+                                <div className="dp-tick" onClick={()=>!locked&&toggleTick(task.id,activeMember.id,dateStr)} style={{
                                   width:32,height:32,borderRadius:8,fontSize:16,
                                   display:'flex',alignItems:'center',justifyContent:'center',
                                   transition:'all .15s',userSelect:'none',
-                                  cursor:future?'default':isLeader?'pointer':'default',
-                                  border:future?'2px solid #e8eaed':isDone?`2px solid ${C.success}`:'2px solid #d0d8e8',
-                                  background:future?'#f5f6f8':isDone?C.success:'#fff',
+                                  cursor:locked?'default':isLeader?'pointer':'default',
+                                  border:locked?'2px solid #e8eaed':isDone?`2px solid ${C.success}`:'2px solid #d0d8e8',
+                                  background:locked?'#f5f6f8':isDone?C.success:'#fff',
                                   color:isDone?'#fff':'transparent',
                                   boxShadow:isDone?`0 2px 8px ${C.success}44`:'none',
                                 }}>
-                                  {!future&&isDone?'✓':''}
+                                  {isDone?'✓':''}
                                 </div>
                                 {/* Score */}
                                 <input className="dp-score-input" type="number" inputMode="decimal" min="0" max={task.max_score} step="0.5"
-                                  value={future?'':(score||0)}
-                                  disabled={future||!isLeader}
-                                  onChange={e=>setScore(task.id,activeMember.id,dateStr,e.target.value)}
+                                  value={locked?'':(score||0)}
+                                  disabled={locked||!isLeader}
+                                  onChange={e=>setScore(task.id,activeMember.id,dateStr,e.target.value,task.max_score)}
                                   style={{
                                     width:44,textAlign:'center',borderRadius:6,padding:'3px 4px',
                                     fontSize:12,fontWeight:700,outline:'none',
-                                    border:future||!isLeader?'none':'1.5px solid #e0e4f0',
-                                    color:future?'#ccc':isDone?C.primary:score>0?C.primary:'#ccc',
-                                    background:future||!isLeader?'transparent':'#f7f9ff',
+                                    border:warn?`1.5px solid ${C.danger}`:(locked||!isLeader?'none':'1.5px solid #e0e4f0'),
+                                    color:locked?'#ccc':isDone?C.primary:score>0?C.primary:'#ccc',
+                                    background:warn?'#fdecea':(locked||!isLeader?'transparent':'#f7f9ff'),
                                   }}
-                                  placeholder={future?'–':'0'}
+                                  placeholder={dayOff?'nghỉ':future?'–':'0'}
                                 />
+                                {warn&&(
+                                  <div style={{fontSize:9,color:C.danger,fontWeight:700,whiteSpace:'nowrap'}}>
+                                    Tối đa {task.max_score}đ
+                                  </div>
+                                )}
                               </div>
                             </td>
                           );
@@ -759,7 +796,7 @@ export default function DailyPage() {
 
                   {isLeader&&(
                     <tr onClick={()=>setShowAddTask(true)} style={{cursor:'pointer'}}>
-                      <td colSpan={9} style={{border:'1.5px dashed #c8d8f0'}}
+                      <td colSpan={colCount} style={{border:'1.5px dashed #c8d8f0'}}
                         onMouseEnter={e=>e.currentTarget.style.background='#f0f4ff'}
                         onMouseLeave={e=>e.currentTarget.style.background=''}>
                         <div style={{padding:'10px 14px',color:C.primary,fontSize:13,fontWeight:600}}>➕ Thêm công việc mới</div>
@@ -767,7 +804,7 @@ export default function DailyPage() {
                     </tr>
                   )}
                   {tasks.length===0&&(
-                    <tr><td colSpan={9} style={{textAlign:'center',padding:32,color:'#bbb',fontSize:13}}>
+                    <tr><td colSpan={colCount} style={{textAlign:'center',padding:32,color:'#bbb',fontSize:13}}>
                       {isLeader?'Chưa có công việc. Nhấn "➕ Thêm công việc".':'Chưa có công việc.'}
                     </td></tr>
                   )}
@@ -781,13 +818,15 @@ export default function DailyPage() {
                     {weekDays.map((day,i)=>{
                       const future = isFuture(day);
                       const today  = isToday(day);
+                      const dayOff = isWeekend(day);
+                      const locked = future || dayOff;
                       const total  = memberDayTotal(activeMember.id,day);
                       const max    = dayMax(day);
-                      const color  = future?'#555':total>=max&&max>0?'#2ecc71':total>0?C.warning:'#555';
+                      const color  = locked?'#555':total>=max&&max>0?'#2ecc71':total>0?C.warning:'#555';
                       return (
-                        <td key={i} style={{background:today?'rgba(46,204,113,0.08)':'#1e2a3a',borderColor:'#2d3f52',textAlign:'center',padding:'10px 6px'}}>
-                          <div style={{fontSize:16,fontWeight:900,color}}>{future?'–':total.toFixed(0)}</div>
-                          {!future&&max>0&&<div style={{fontSize:9,color:'#7a9bbf'}}>/{max}đ</div>}
+                        <td key={i} style={{background:today?'rgba(46,204,113,0.08)':'#1e2a3a',borderColor:'#2d3f52',textAlign:'center',padding:'10px 6px',opacity:dayOff?0.55:1}}>
+                          <div style={{fontSize:16,fontWeight:900,color}}>{locked?'–':total.toFixed(0)}</div>
+                          {!locked&&max>0&&<div style={{fontSize:9,color:'#7a9bbf'}}>/{max}đ</div>}
                         </td>
                       );
                     })}

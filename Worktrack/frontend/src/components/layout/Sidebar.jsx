@@ -1,4 +1,4 @@
-import { NavLink, useNavigate, Outlet } from 'react-router-dom';
+import { NavLink, useNavigate, Outlet, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
@@ -12,8 +12,10 @@ const NAV = [
   { to: '/requests',  icon: '📨',  tkey: 'requests' },
   { to: '/completed', icon: '✅',  tkey: 'nav_completed' },
   { divider: true },
-  { to: '/dashboard', icon: '📊',  tkey: 'dash_title', roles: ['admin','manager','leader'] },
-  { to: '/users',     icon: '👥',  tkey: 'nav_users',  roles: ['admin'] },
+  // Leader KHÔNG được xem Dashboard — chỉ admin/manager
+  { to: '/dashboard', icon: '📊',  tkey: 'dash_title', roles: ['admin','manager'] },
+  // Leader vào đây để tạo tài khoản user
+  { to: '/users',     icon: '👥',  tkey: 'nav_users',  roles: ['admin','manager','leader'] },
   { to: '/settings',  icon: '⚙️', tkey: 'settings' },
 ];
 
@@ -88,7 +90,6 @@ export function MainLayout() {
   const { user } = useAuthStore();
   const { connect, disconnect } = useNotificationStore();
 
-  // Kết nối socket 1 lần khi có user đăng nhập, ngắt khi rời layout (logout/unmount)
   useEffect(() => {
     if (!user?.id) return;
     connect(user.id);
@@ -106,6 +107,10 @@ export function MainLayout() {
   );
 }
 
+// Route guard dùng trong file khai báo <Routes> (App.jsx hoặc tương tự), ví dụ:
+//   <Route element={<ProtectedRoute roles={['admin','manager']} />}>
+//     <Route path="/dashboard" element={<DashboardPage/>} />
+//   </Route>
 export function ProtectedRoute({ roles = [] }) {
   const { t } = useTranslation();
   const { authenticated, loading, user } = useAuthStore();
@@ -120,6 +125,9 @@ export function ProtectedRoute({ roles = [] }) {
   );
 
   if (!authenticated) { window.location.href = '/login'; return null; }
-  if (roles.length && !roles.includes(user?.role)) { window.location.href = '/board'; return null; }
+  // Sai quyền → khóa hẳn, đưa về 404 thay vì redirect về /board
+  if (roles.length && !roles.includes(user?.role)) {
+    return <Navigate to="/404" replace />;
+  }
   return <Outlet />;
 }

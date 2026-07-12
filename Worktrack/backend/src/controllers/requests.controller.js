@@ -9,9 +9,43 @@ async function getRecipients(taskId, createdBy) {
   return ids;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Auto-archive: CV ở trạng thái "done" quá ARCHIVE_AFTER_DAYS ngày kể
+// từ completed_at sẽ tự động chuyển status sang 'archived'. Chạy ngay
+// khi module được load (server start) rồi lặp lại định kỳ trong tiến
+// trình — không cần cron ngoài hay người dùng phải mở app để kích hoạt.
+// ══════════════════════════════════════════════════════════════════
+const ARCHIVE_AFTER_DAYS = 6;
+const ARCHIVE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 tiếng/lần
+
+async function archiveOldCompletedTasks() {
+  try {
+    const [r] = await db.query(
+      `UPDATE request_tasks
+          SET status='archived'
+        WHERE status='done'
+          AND completed_at IS NOT NULL
+          AND completed_at < (NOW() - INTERVAL ? DAY)`,
+      [ARCHIVE_AFTER_DAYS]
+    );
+    if (r.affectedRows) {
+      console.log(`[auto-archive] Đã lưu trữ ${r.affectedRows} CV hoàn thành quá ${ARCHIVE_AFTER_DAYS} ngày`);
+    }
+  } catch (e) {
+    console.error('[auto-archive] lỗi:', e.message);
+  }
+}
+
+archiveOldCompletedTasks(); // chạy ngay lúc load, không cần chờ tick đầu tiên
+setInterval(archiveOldCompletedTasks, ARCHIVE_CHECK_INTERVAL_MS);
+
+// Export để có thể gọi thủ công (vd. từ 1 route admin "chốt lưu trữ ngay")
+// hoặc gọi trong test, mà không phải chờ setInterval.
+exports._archiveOldCompletedTasks = archiveOldCompletedTasks;
+
 exports.list = async (req, res) => {
   try {
-    const { status, group_id, assigned_to, created_by, search } = req.query;
+    const { status, group_id, assigned_to, created_by, search, include_archived } = req.query;
     let sql = `
       SELECT rt.*, u.full_name as creator_name, u.avatar_color as creator_color,
              g.name as group_name,
@@ -25,6 +59,10 @@ exports.list = async (req, res) => {
     `;
     const p = [];
     if (status)      { sql += ' AND rt.status=?'; p.push(status); }
+    // Không lọc status cụ thể → mặc định ẨN CV đã lưu trữ (đỡ rối các màn hình
+    // "lấy hết"), trừ khi caller chủ động xin include_archived=1 (vd. trang
+    // Dashboard cần thống kê đầy đủ lịch sử của 1 nhân viên).
+    else if (!include_archived) { sql += " AND rt.status<>'archived'"; }
     if (group_id)    { sql += ' AND rt.group_id=?'; p.push(group_id); }
     if (created_by)  { sql += ' AND rt.created_by=?'; p.push(created_by); }
     if (search)      { sql += ' AND rt.title LIKE ?'; p.push(`%${search}%`); }

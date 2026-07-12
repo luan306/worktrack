@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
+import useAuthStore from '../../store/authStore';
 
 const C = {
   primary:'#3a7bd5', dark:'#1e2a3a', success:'#27ae60',
@@ -75,6 +76,7 @@ const genUsername = (fullName) => {
 export default function UsersPage(){
   const { t, i18n } = useTranslation();
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
+  const { user: currentUser } = useAuthStore(); // user đang đăng nhập — dùng để giới hạn quyền trên UI
   const [tab,      setTab]      = useState('users');
   const [users,    setUsers]    = useState([]);
   const [groups,   setGroups]   = useState([]);
@@ -643,10 +645,10 @@ export default function UsersPage(){
       )}
 
       {/* ══ Modal: Thêm user ══ */}
-      <AddUserModal show={showAddUser} groups={groups} onClose={()=>setShowAddUser(false)} onSave={createUser}/>
+      <AddUserModal show={showAddUser} groups={groups} currentUserRole={currentUser?.role} onClose={()=>setShowAddUser(false)} onSave={createUser}/>
 
       {/* ══ Modal: Sửa user ══ */}
-      <EditUserModal show={!!editUser} user={editUser} groups={groups} onClose={()=>setEditUser(null)} onSave={f=>updateUser(editUser.id,f)}/>
+      <EditUserModal show={!!editUser} user={editUser} groups={groups} currentUserRole={currentUser?.role} onClose={()=>setEditUser(null)} onSave={f=>updateUser(editUser.id,f)}/>
 
       {/* ══ Modal: Tạo nhóm ══ */}
       <AddGroupModal show={showAddGroup} users={users} onClose={()=>setShowAddGroup(false)} onSave={createGroup}/>
@@ -663,11 +665,17 @@ export default function UsersPage(){
 }
 
 // ── Modal: Thêm user ──
-function AddUserModal({show,groups,onClose,onSave}){
+// currentUserRole: role của người đang thao tác — nếu là 'leader' thì ẩn hẳn dropdown role
+// và luôn khóa cứng role='user' khi gửi lên server (double-check, backend cũng đã chặn).
+function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
+  const isLeader = currentUserRole === 'leader';
   const [f,setF]=useState({username:'',email:'',full_name:'',role:'user',password:'',avatar_color:'#3a7bd5',group_id:''});
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
-  const submit=()=>{ if(!f.username||!f.full_name||!f.password) return alert(t('users_fill_all')); onSave(f); };
+  const submit=()=>{
+    if(!f.username||!f.full_name||!f.password) return alert(t('users_fill_all'));
+    onSave(isLeader ? {...f, role:'user'} : f);
+  };
   return (
     <Modal show={show} title={`➕ ${t('users_add_new_user')}`} onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -678,12 +686,15 @@ function AddUserModal({show,groups,onClose,onSave}){
         <div><label style={FL}>Email *</label><input type="email" style={FI} value={f.email} onChange={e=>s('email',e.target.value)} placeholder="email@company.com"/></div>
         <div><label style={FL}>{t('password')} *</label><input type="password" style={FI} value={f.password} onChange={e=>s('password',e.target.value)}/></div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-          <div style={{flex:'1 1 140px'}}>
-            <label style={FL}>{t('users_th_role_col')}</label>
-            <select style={FI} value={f.role} onChange={e=>s('role',e.target.value)}>
-              {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
+          {/* Leader không thấy dropdown role — luôn tạo với quyền 'user' */}
+          {!isLeader && (
+            <div style={{flex:'1 1 140px'}}>
+              <label style={FL}>{t('users_th_role_col')}</label>
+              <select style={FI} value={f.role} onChange={e=>s('role',e.target.value)}>
+                {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{flex:'1 1 140px'}}>
             <label style={FL}>{t('group')}</label>
             <select style={FI} value={f.group_id} onChange={e=>s('group_id',e.target.value)}>
@@ -706,8 +717,11 @@ function AddUserModal({show,groups,onClose,onSave}){
 }
 
 // ── Modal: Sửa user ──
-function EditUserModal({show,user,groups=[],onClose,onSave}){
+// currentUserRole: nếu là 'leader', cũng ẩn dropdown role như AddUserModal (phòng khi
+// sau này leader được cấp quyền vào danh sách user để sửa thông tin).
+function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
+  const isLeader = currentUserRole === 'leader';
   const [f,setF]=useState({});
   useEffect(()=>{
     if(user) setF({
@@ -719,18 +733,23 @@ function EditUserModal({show,user,groups=[],onClose,onSave}){
     });
   },[user]);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
+  const submit=()=>{
+    onSave(isLeader ? {...f, role:f.role} : f); // leader không có UI đổi role nên giữ nguyên role gốc
+  };
   return (
     <Modal show={show} title={`✏️ ${t('users_edit_employee')}`} onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div><label style={FL}>{t('profile_fullname')}</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
         <div><label style={FL}>Email</label><input type="email" style={FI} value={f.email||''} onChange={e=>s('email',e.target.value)}/></div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-          <div style={{flex:'1 1 140px'}}>
-            <label style={FL}>{t('users_th_role_col')}</label>
-            <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
-              {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
+          {!isLeader && (
+            <div style={{flex:'1 1 140px'}}>
+              <label style={FL}>{t('users_th_role_col')}</label>
+              <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
+                {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{flex:'1 1 140px'}}>
             <label style={FL}>{t('group')}</label>
             <select style={FI} value={f.group_id||''} onChange={e=>s('group_id',e.target.value)}>
@@ -745,7 +764,7 @@ function EditUserModal({show,user,groups=[],onClose,onSave}){
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
           <button onClick={onClose} style={{padding:'7px 16px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>{t('cancel')}</button>
-          <button onClick={()=>onSave(f)} style={{padding:'7px 16px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
+          <button onClick={submit} style={{padding:'7px 16px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
         </div>
       </div>
     </Modal>

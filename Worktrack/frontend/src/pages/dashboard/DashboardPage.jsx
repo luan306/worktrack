@@ -39,6 +39,7 @@ export default function DashboardPage() {
   const [selected,  setSelected]  = useState(null); // NV được chọn → modal
   const [showLock,  setShowLock]  = useState(false);
   const [locking,   setLocking]   = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => { api.get('/groups').then(r => setGroups(r.data.data)).catch(() => {}); }, []);
   useEffect(() => { fetchScores(); }, [view, groupId]);
@@ -54,11 +55,53 @@ export default function DashboardPage() {
     finally { setLoading(false); }
   };
 
+  // Tải file Excel qua endpoint GET /dashboard/excel/:filename (dùng res.download()
+  // ở server, không phải static '/uploads/...'). Gọi qua chính `api` (đã có sẵn
+  // auth header/cookie) và nhận về dạng blob, thay vì gắn thẳng URL vào <a> —
+  // tránh bị 401/403 nếu API cần token mà request trực tiếp qua <a href> không
+  // gửi kèm được.
+  const downloadExcelFile = async (filename) => {
+    const fileRes = await api.get(`/dashboard/excel/${filename}`, { responseType: 'blob' });
+    const blobUrl = window.URL.createObjectURL(new Blob([fileRes.data]));
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
+  };
+
+  // Nút "📤 Xuất Excel" ở topbar — chỉ tải lại báo cáo của kỳ đã CHỐT gần nhất
+  // (GET /dashboard/last-export), KHÔNG chốt/reset điểm gì cả. Khác hẳn nút
+  // "🔒 Chốt & Reset" bên cạnh.
+  const doExportExcel = async () => {
+    setExporting(true);
+    try {
+      const r = await api.get('/dashboard/last-export');
+      const { filename } = r.data.data || {};
+      if (filename) await downloadExcelFile(filename);
+    } catch (e) {
+      alert(e.response?.data?.message || e.message);
+    } finally { setExporting(false); }
+  };
+
   const doLock = async () => {
     setLocking(true);
     try {
       const r = await api.post('/dashboard/lock', { group_id: groupId || undefined });
-      alert(t('dash_lock_success', { filename: r.data.data.filename }));
+      const { filename } = r.data.data || {};
+
+      if (filename) {
+        try {
+          await downloadExcelFile(filename);
+        } catch (dlErr) {
+          console.error('[download excel]', dlErr);
+          alert(t('dash_lock_download_failed', { filename, defaultValue: `Đã chốt kỳ thành công nhưng tải file "${filename}" thất bại — vui lòng thử tải lại.` }));
+        }
+      }
+
+      alert(t('dash_lock_success', { filename }));
       setShowLock(false);
       fetchScores();
     } catch (e) { alert(e.response?.data?.message || e.message); }
@@ -171,8 +214,9 @@ export default function DashboardPage() {
         <div className="dash-title" style={{ fontSize: 15, fontWeight: 800, color: C.dark, flex: 1 }}>
           📊 {t('dash_title')}
         </div>
-        <button style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid #dde3f0', background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', gap: 5 }}>
-          📤 {t('dash_export_excel')}
+        <button onClick={doExportExcel} disabled={exporting}
+          style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid #dde3f0', background: '#fff', fontSize: 12, fontWeight: 600, cursor: exporting?'default':'pointer', color: '#555', display: 'flex', alignItems: 'center', gap: 5 }}>
+          {exporting ? '...' : `📤 ${t('dash_export_excel')}`}
         </button>
         <button onClick={() => setShowLock(true)}
           style={{ padding: '6px 14px', borderRadius: 7, border: 'none', background: C.danger, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -274,7 +318,7 @@ export default function DashboardPage() {
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: '#e8f8ee', color: '#27ae60' }}>HN {s.period_score.daily.toFixed(0)}</span>
                     <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: '#eef3ff', color: C.primary }}>YC {s.period_score.request.toFixed(0)}</span>
-                    <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: '#fff4e8', color: C.warning }}>HT 0</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, background: '#fff4e8', color: C.warning }}>🤝 {s.cv_counts.support}</span>
                   </div>
                 </div>
 
@@ -372,7 +416,7 @@ export default function DashboardPage() {
                           <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 7, background: '#eef3ff', color: C.primary }}>{s.period_score.request.toFixed(0)}</span>
                         </td>
                         <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 7, background: '#fff4e8', color: C.warning }}>0</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 7, background: '#fff4e8', color: C.warning }}>{s.cv_counts.support}</span>
                         </td>
                         <td style={{ padding: '9px 14px', fontSize: 11, whiteSpace: 'nowrap' }}>
                           <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 7, background: '#e8f8ee', color: C.success }}>{s.cv_counts.ontime}✅</span>
@@ -448,6 +492,38 @@ function DetailModal({ s, onClose }) {
   const { t } = useTranslation();
   const ini = s.user.full_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
+  // Danh sách CV thật (tên từng CV) mà người này làm Chính / Hỗ trợ —
+  // KHÔNG tải ngay khi mở modal (tránh gọi API + lọc toàn bộ CV công ty mỗi lần
+  // xem 1 người). Chỉ tải 1 lần duy nhất khi người dùng bấm mở rộng lần đầu.
+  const [myRequests,     setMyRequests]     = useState(null); // null = chưa tải
+  const [loadingReq,     setLoadingReq]     = useState(false);
+  const [showMainList,   setShowMainList]   = useState(false);
+  const [showSupportList,setShowSupportList]= useState(false);
+  // Giới hạn số dòng render mỗi lần — có "Xem thêm" thay vì đẩy hết hàng trăm
+  // dòng vào DOM cùng lúc.
+  const PAGE = 20;
+  const [mainShown,    setMainShown]    = useState(PAGE);
+  const [supportShown, setSupportShown] = useState(PAGE);
+
+  const ensureLoaded = () => {
+    if (myRequests !== null || loadingReq) return; // đã tải rồi hoặc đang tải dở
+    setLoadingReq(true);
+    api.get('/requests').then(r => {
+      const all = r.data.data || [];
+      const mine = all.filter(t2 => (t2.assignees||[]).some(a => a.user_id === s.user.id));
+      setMyRequests(mine);
+    }).catch(() => setMyRequests([])).finally(() => setLoadingReq(false));
+  };
+
+  const toggleMain = () => { ensureLoaded(); setShowMainList(p=>!p); };
+  const toggleSupport = () => { ensureLoaded(); setShowSupportList(p=>!p); };
+
+  const myRole = (t2) => (t2.assignees||[]).find(a => a.user_id === s.user.id)?.role;
+  const mainList    = (myRequests||[]).filter(t2 => myRole(t2) !== 'support');
+  const supportList = (myRequests||[]).filter(t2 => myRole(t2) === 'support');
+
+  const STATUS_ICON = { pending:'⏳', assigned:'⏳', in_progress:'🔄', scoring:'🏆', reviewing:'📋', done:'✅', cancelled:'❌' };
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)' }}
       onClick={e => e.target === e.currentTarget && onClose()}>
@@ -474,7 +550,7 @@ function DetailModal({ s, onClose }) {
             { val: s.period_score.total.toFixed(0), lbl: t('dash_stat_total_score'), highlight: true },
             { val: s.period_score.daily.toFixed(0), lbl: `📅 ${t('dash_detail_daily')}`,      color: '#27ae60' },
             { val: s.period_score.request.toFixed(0), lbl: `📨 ${t('dash_detail_request')}`,      color: '#3a7bd5' },
-            { val: '0',                              lbl: `🤝 ${t('dash_detail_support')}`,         color: '#e67e22' },
+            { val: s.cv_counts.support,               lbl: `🤝 ${t('dash_detail_support')}`,         color: '#e67e22' },
           ].map(d => (
             <div key={d.lbl} className="dash-detail-card" style={{
               flex: 1, borderRadius: 10, padding: 12, textAlign: 'center', minWidth: 0,
@@ -503,24 +579,64 @@ function DetailModal({ s, onClose }) {
           <div style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.5px', padding: '6px 0 2px' }}>
             📨 {t('dash_cv_request_section',{count:s.cv_counts.main})}
           </div>
-          <div className="dash-cv-row" style={{ padding: '9px 12px', borderRadius: 8, background: '#f7f8fb', border: '1px solid #e8eaed', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+          <div className="dash-cv-row" onClick={toggleMain}
+            style={{ padding: '9px 12px', borderRadius: 8, background: '#f7f8fb', border: '1px solid #e8eaed', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, cursor:'pointer' }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3a7bd5', flexShrink: 0 }} />
             <div style={{ flex: 1, color: '#1e2a3a', fontWeight: 500, minWidth: 120 }}>
               {t('dash_cv_request_detail',{ontime:s.cv_counts.ontime, late:s.cv_counts.late})}
             </div>
             <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, background: '#eef3ff', color: '#3a7bd5', whiteSpace: 'nowrap' }}>{t('dash_badge_main')}</span>
             <div style={{ fontSize: 14, fontWeight: 800, color: '#1e2a3a', minWidth: 36, textAlign: 'right' }}>{s.period_score.request.toFixed(0)}đ</div>
+            <span style={{ fontSize: 11, color: '#aaa', flexShrink:0 }}>{showMainList?'▲':'▼'}</span>
           </div>
+          {showMainList && (
+            <div style={{ display:'flex', flexDirection:'column', gap:4, padding:'2px 4px 8px' }}>
+              {loadingReq && <div style={{fontSize:11,color:'#bbb',padding:'4px 8px'}}>⏳</div>}
+              {!loadingReq && !mainList.length && <div style={{fontSize:11,color:'#bbb',padding:'4px 8px'}}>{t('req_no_tasks')}</div>}
+              {mainList.slice(0, mainShown).map(t2=>(
+                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderRadius:7,background:'#fff',border:'1px solid #eef1f6',fontSize:11}}>
+                  <span>{STATUS_ICON[t2.status]||'⏳'}</span>
+                  <span style={{flex:1,color:'#333',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t2.title}</span>
+                  {t2.score!=null&&<span style={{fontWeight:700,color:C.primary,whiteSpace:'nowrap'}}>{t2.score}đ</span>}
+                </div>
+              ))}
+              {mainList.length>mainShown&&(
+                <div onClick={()=>setMainShown(n=>n+PAGE)} style={{textAlign:'center',padding:'6px 8px',fontSize:11,color:C.primary,cursor:'pointer',fontWeight:600}}>
+                  {t('board_view_all')} (+{mainList.length-mainShown})
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.5px', padding: '6px 0 2px' }}>
             🤝 {t('dash_cv_support_section',{count:s.cv_counts.support})}
           </div>
-          <div className="dash-cv-row" style={{ padding: '9px 12px', borderRadius: 8, background: '#f7f8fb', border: '1px solid #e8eaed', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+          <div className="dash-cv-row" onClick={toggleSupport}
+            style={{ padding: '9px 12px', borderRadius: 8, background: '#f7f8fb', border: '1px solid #e8eaed', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, cursor:'pointer' }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#e67e22', flexShrink: 0 }} />
             <div style={{ flex: 1, color: '#1e2a3a', fontWeight: 500, minWidth: 120 }}>{t('dash_cv_support_total',{count:s.cv_counts.support})}</div>
             <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, background: '#fff4e8', color: '#e67e22', whiteSpace: 'nowrap' }}>{t('dash_badge_support')}</span>
             <div style={{ fontSize: 14, fontWeight: 800, color: '#1e2a3a', minWidth: 36, textAlign: 'right' }}>0đ</div>
+            <span style={{ fontSize: 11, color: '#aaa', flexShrink:0 }}>{showSupportList?'▲':'▼'}</span>
           </div>
+          {showSupportList && (
+            <div style={{ display:'flex', flexDirection:'column', gap:4, padding:'2px 4px 8px' }}>
+              {loadingReq && <div style={{fontSize:11,color:'#bbb',padding:'4px 8px'}}>⏳</div>}
+              {!loadingReq && !supportList.length && <div style={{fontSize:11,color:'#bbb',padding:'4px 8px'}}>{t('req_no_tasks')}</div>}
+              {supportList.slice(0, supportShown).map(t2=>(
+                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',borderRadius:7,background:'#fff',border:'1px solid #eef1f6',fontSize:11}}>
+                  <span>{STATUS_ICON[t2.status]||'⏳'}</span>
+                  <span style={{flex:1,color:'#333',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t2.title}</span>
+                  <span style={{fontWeight:700,color:C.warning,whiteSpace:'nowrap'}}>🤝 {t('dash_badge_support')}</span>
+                </div>
+              ))}
+              {supportList.length>supportShown&&(
+                <div onClick={()=>setSupportShown(n=>n+PAGE)} style={{textAlign:'center',padding:'6px 8px',fontSize:11,color:C.warning,cursor:'pointer',fontWeight:600}}>
+                  {t('board_view_all')} (+{supportList.length-supportShown})
+                </div>
+              )}
+            </div>
+          )}
 
         </div>
       </div>

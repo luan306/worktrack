@@ -47,7 +47,7 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={<Loader />}>
           <Routes>
-            {/* GuestRoute chặn user đã đăng nhập vào lại /login — tự động đưa về trang chính */}
+            {/* GuestRoute chặn user đã đăng nhập vào lại /login */}
             <Route element={<GuestRoute />}>
               <Route path="/login" element={<LoginPage />} />
             </Route>
@@ -57,17 +57,26 @@ export default function App() {
                 {/* Redirect theo role */}
                 <Route index element={<HomeRedirect />} />
 
+                {/* Các trang không giới hạn role — ai đăng nhập cũng vào được */}
                 <Route path="board"     element={<BoardPage />} />
                 <Route path="daily"     element={<DailyPage />} />
                 <Route path="requests"  element={<RequestsPage />} />
                 <Route path="completed" element={<CompletedPage />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="users"     element={<UsersPage />} />
                 <Route path="profile"   element={<ProfilePage />} />
+
+                {/* Dashboard — CHỈ admin/manager, leader gõ URL cũng bị chặn về 404 */}
+                <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
+                  <Route path="dashboard" element={<DashboardPage />} />
+                </Route>
+
+                {/* Users — admin/manager/leader */}
+                <Route element={<ProtectedRoute roles={['admin', 'manager', 'leader']} />}>
+                  <Route path="users" element={<UsersPage />} />
+                </Route>
               </Route>
             </Route>
 
-            {/* Route không khớp cái nào ở trên → trang 404, thay vì âm thầm redirect về home */}
+            {/* Route không khớp cái nào ở trên → trang 404 */}
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>

@@ -40,6 +40,21 @@ const Chip = ({color=C.primary,name='?',size=28})=>{
   return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:color,color:'#fff',fontSize:size>24?12:9,fontWeight:700}}>{ini}</div>;
 };
 
+// Badge nhỏ hiển thị vai trò Chính/Hỗ trợ trên chip người thực hiện.
+// clickable=true khi cho phép bấm để đổi vai trò tại chỗ.
+const RoleBadge = ({role, clickable, onClick}) => {
+  const isSupport = role==='support';
+  return (
+    <span onClick={clickable?onClick:undefined}
+      title={clickable ? 'Bấm để đổi vai trò' : undefined}
+      style={{fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:6,marginLeft:2,
+        background:isSupport?'#fff4e8':'#eef3ff',color:isSupport?C.warning:C.primary,
+        cursor:clickable?'pointer':'default',whiteSpace:'nowrap',flexShrink:0}}>
+      {isSupport?'🤝 Hỗ trợ':'⭐ Chính'}
+    </span>
+  );
+};
+
 const LOCALE_MAP = { vi:'vi-VN', en:'en-US', ja:'ja-JP' };
 const makeFmtDt = locale => d => {
   if (!d) return '—';
@@ -133,11 +148,36 @@ export default function RequestsPage() {
     setTasks(data.data||[]);
   };
 
-  // User thường chỉ thấy các request liên quan đến mình (do mình tạo hoặc được giao)
-  // Leader/manager/admin vẫn thấy toàn bộ
-  const visibleTasks = isLeader
+  // Phạm vi hiển thị request:
+  // - Admin/Manager: thấy toàn bộ.
+  // - Leader (không phải admin/manager): thấy request do CHÍNH MÌNH hoặc
+  //   THÀNH VIÊN CÙNG NHÓM (mình quản lý) tạo/được giao — không dựa vào
+  //   trường "Nhóm" gắn trên request lúc tạo (field đó không phải lúc nào
+  //   cũng được chọn), mà dựa vào nhóm thực tế của TỪNG NGƯỜI trong `users`.
+  // - User thường: chỉ thấy request do mình tạo hoặc được giao.
+  const isAdminOrManager = can('admin','manager');
+  const isTeamLeaderOnly = !isAdminOrManager && can('leader');
+  const myGroupIds = new Set((user?.groups||[]).map(g=>g.id));
+
+  // Tập user_id của "đội mình" — gồm chính leader + mọi user có chung ít
+  // nhất 1 nhóm với leader. Giả định mỗi phần tử trong `users` cũng có
+  // trường `groups` (mảng {id,...}) giống cấu trúc của `user.groups`.
+  const teamMemberIds = new Set([user?.id]);
+  if (isTeamLeaderOnly) {
+    users.forEach(u=>{
+      const uGroupIds = (u.groups||[]).map(g=>g.id);
+      if (uGroupIds.some(id=>myGroupIds.has(id))) teamMemberIds.add(u.id);
+    });
+  }
+
+  const visibleTasks = isAdminOrManager
     ? tasks
-    : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id));
+    : isTeamLeaderOnly
+      ? tasks.filter(t2 =>
+          teamMemberIds.has(t2.created_by) ||
+          (t2.assignees||[]).some(a=>teamMemberIds.has(a.user_id))
+        )
+      : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id));
 
   const filtered = visibleTasks
     .filter(t=>{
@@ -146,11 +186,9 @@ export default function RequestsPage() {
       return true;
     })
     .sort((a,b)=>{
-      // done/cancelled xuống dưới
       const doneA = ['done','cancelled'].includes(a.status);
       const doneB = ['done','cancelled'].includes(b.status);
       if (doneA !== doneB) return doneA ? 1 : -1;
-      // có deadline lên trên, sort theo deadline gần nhất
       if (a.deadline && b.deadline) return new Date(a.deadline) - new Date(b.deadline);
       if (a.deadline) return -1;
       if (b.deadline) return 1;
@@ -165,39 +203,26 @@ export default function RequestsPage() {
       <style>{`
         .req-root { box-sizing: border-box; }
         .req-root *, .req-root *::before, .req-root *::after { box-sizing: border-box; }
-
-        /* ── Cảm giác chạm mượt & phản hồi khi nhấn ── */
         .req-root button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
         .req-root button:active { transform: scale(0.96); }
         .req-root .req-list-item { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .req-root .req-list-item:active { background: #e5edff !important; }
-
-        /* ── Focus rõ ràng cho bàn phím (a11y) ── */
         .req-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
-
-        /* ── Chặn Safari iOS tự zoom khi focus input/select/textarea ── */
         .req-root input:focus, .req-root select:focus, .req-root textarea:focus { font-size: 16px !important; }
-
-        /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .req-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .req-root ::-webkit-scrollbar-track { background: transparent; }
         .req-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
         .req-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
-
         @media (prefers-reduced-motion: reduce) {
           .req-root, .req-root * { animation: none !important; transition: none !important; }
         }
-
         @media (max-width: 900px) {
-          /* Ẩn danh sách khi đã chọn 1 CV — cho detail chiếm toàn màn hình */
           .req-root .req-list-selected { display: none !important; }
           .req-root .req-list-panel { width: 100% !important; }
-
           .req-root .req-detail-body { flex-direction: column !important; overflow-y: auto !important; overflow-x: hidden !important; }
           .req-root .req-form-panel { border-right: none !important; border-bottom: 1.5px solid ${C.border} !important; overflow: visible !important; }
           .req-root .req-form-scroll { flex: none !important; overflow: visible !important; }
           .req-root .req-chat-panel { width: 100% !important; flex-shrink: 0 !important; height: 420px !important; }
-
           .req-root .req-detail-topbar { flex-wrap: wrap !important; padding: 10px 14px !important; }
           .req-root .req-detail-crumb { flex-basis: 100% !important; }
           .req-root .req-steps-bar { padding: 8px 14px !important; }
@@ -234,6 +259,13 @@ export default function RequestsPage() {
             const pr=PRIORITY[t2.priority]||PRIORITY.medium;
             const isActive=selected?.id===t2.id;
             const overdue=t2.deadline&&new Date(t2.deadline)<new Date()&&t2.status!=='done';
+            // Thẻ đỏ: hết hạn rồi HOẶC còn dưới 1 tiếng — cùng ngưỡng màu đỏ
+            // đang dùng trong Countdown, chỉ là đưa lên hàng tiêu đề cho dễ thấy.
+            const timeLeft = t2.deadline ? new Date(t2.deadline)-new Date() : null;
+            const isUrgent = t2.deadline && !['done','cancelled'].includes(t2.status) && timeLeft<3600000;
+            // "Mới" = CV vừa được tạo trong 24h gần đây — tách riêng khỏi badge đếm
+            // ngược deadline (Countdown) để không bị nhầm 2 ý nghĩa khác nhau.
+            const isNew = t2.created_at && (Date.now()-new Date(t2.created_at).getTime()) < 24*60*60*1000;
             return (
               <div key={t2.id} className="req-list-item" onClick={()=>setSelected(t2)}
                 style={{padding:'12px 14px',borderBottom:`1px solid #f0f2f8`,cursor:'pointer',background:isActive?'#eef3ff':'transparent',borderLeft:`3px solid ${isActive?C.primary:'transparent'}`}}
@@ -241,6 +273,8 @@ export default function RequestsPage() {
                 onMouseLeave={e=>{if(!isActive)e.currentTarget.style.background='transparent';}}>
                 <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}>
                   <span style={{fontSize:11,fontWeight:700,padding:'2px 7px',borderRadius:8,background:pr.bg,color:pr.color}}>{pr.icon}</span>
+                  {isNew&&<span style={{fontSize:9,fontWeight:800,padding:'2px 6px',borderRadius:6,background:'#8e44ad',color:'#fff',whiteSpace:'nowrap'}}>🆕 {t('req_new_badge')}</span>}
+                  {isUrgent&&<span style={{fontSize:9,fontWeight:800,padding:'2px 6px',borderRadius:6,background:C.danger,color:'#fff',whiteSpace:'nowrap'}}>⚠️ {t('req_urgent_badge')}</span>}
                   <div style={{flex:1,fontSize:13,fontWeight:700,color:C.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t2.title}</div>
                   <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:8,background:st.bg,color:st.color,whiteSpace:'nowrap'}}>{st.icon} {t(st.key)}</span>
                 </div>
@@ -284,8 +318,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [saving,  setSaving]  = useState(false);
   const [comment, setComment] = useState('');
   const [showAddUser, setShowAddUser] = useState(false);
+  const [pendingRole, setPendingRole] = useState('main');
   const [scoreInput,  setScoreInput]  = useState('');
-  const [attachFile, setAttachFile]   = useState(null); // tệp đang chuẩn bị đính kèm vào tin nhắn
+  const [attachFile, setAttachFile]   = useState(null);
   const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
   const chatFileRef = useRef();
@@ -349,14 +384,11 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     return '📎';
   };
 
-  // Backend chạy ở origin khác frontend (vd localhost:3001 vs localhost:5173),
-  // nên link file phải trỏ đầy đủ về backend, không thể để đường dẫn tương đối
-  // như "/uploads/xxx.png" — nếu không trình duyệt sẽ tự ghép vào domain frontend → 404.
   const CHAT_BASE = (import.meta.env.VITE_API_URL||'http://localhost:3001/api').replace('/api','');
   const resolveFileUrl = (url)=> url && url.startsWith('/') ? CHAT_BASE + url : url;
 
-  const addAssignee = async uid=>{
-    try{await api.post(`/requests/${taskId}/assign`,{user_id:uid,role:'main'});loadTask();setShowAddUser(false);}
+  const addAssignee = async (uid, role='main')=>{
+    try{await api.post(`/requests/${taskId}/assign`,{user_id:uid,role});loadTask();setShowAddUser(false);}
     catch(e){alert(e.message);}
   };
 
@@ -365,13 +397,23 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     catch(e){alert(e.message);}
   };
 
+  // Đổi vai trò Chính ↔ Hỗ trợ cho 1 người đã được thêm — backend addAssignee dùng
+  // INSERT IGNORE (không update được role của dòng đã tồn tại), nên cách gọn nhất
+  // là gỡ ra rồi thêm lại với role mới, tận dụng 2 endpoint sẵn có.
+  const toggleAssigneeRole = async (a)=>{
+    const newRole = a.role==='support' ? 'main' : 'support';
+    try{
+      await api.delete(`/requests/${taskId}/assign/${a.user_id}`);
+      await api.post(`/requests/${taskId}/assign`,{user_id:a.user_id,role:newRole});
+      loadTask();
+    }catch(e){alert(e.message);}
+  };
+
   const claimTask = async()=>{
     try{await api.post(`/requests/${taskId}/claim`);await loadTask();onSaved?.(task);}
     catch(e){alert(e.response?.data?.message||e.message);}
   };
 
-  // Assignee nộp bài xong → chuyển sang "scoring" (chờ leader duyệt), KHÔNG nhảy thẳng
-  // "done" nữa. Backend tự set completed_at khi nhận status='scoring'.
   const markDone = async()=>{
     await save({status:'scoring'});
   };
@@ -387,7 +429,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
   const st=STATUS[task.status]||STATUS.pending;
   const pr=PRIORITY[task.priority]||PRIORITY.medium;
-  const curIdx=STEPS.findIndex(s=>s.key===task.status);
   const isAdmin    = ['admin','manager'].includes(user?.role);
   const isCreator  = task.created_by === user?.id;
   const isAssignee = (task.assignees||[]).some(a=>a.user_id===user?.id);
@@ -407,24 +448,20 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           <span style={{color:C.dark,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{task.title}</span>
         </div>
         <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color,whiteSpace:'nowrap'}}>{st.icon} {t(st.key)}</span>
-        {/* User thường: Nhận CV đang chờ (chưa ai nhận) */}
         {task.status==='pending'&&!isLeader&&(
           <button onClick={claimTask} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🙋 {t('req_claim_task')}</button>
         )}
-        {/* Assignee: Bắt đầu làm */}
         {task.status==='assigned'&&isAssignee&&!isAdmin&&(
           <button onClick={()=>save({status:'in_progress'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🔄 {t('req_start_work')}</button>
         )}
-        {/* Assignee/leader: Submit hoàn thành → chờ manager duyệt */}
         {(task.status==='in_progress'||(task.status==='assigned'&&isAssignee))&&!isAdmin&&(
           <button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_mark_done')}</button>
         )}
-        {/* Leader: Duyệt hoàn thành + chấm điểm cuối cùng — thực hiện trong khung "🏆 Duyệt CV" bên dưới, không có nút tắt ở đây nữa */}
         <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'#aaa':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
         <button onClick={onClose} style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:16,color:'#aaa',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
       </div>
 
-      {/* Status bar — user thấy đơn giản, leader/manager thấy đầy đủ */}
+      {/* Status bar */}
       <div className="req-steps-bar" style={{padding:'9px 18px',background:C.bg,borderBottom:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:4,flexShrink:0,flexWrap:'wrap'}}>
         {(isAdmin||isCreator||isLeader ? STEPS : [
           {key:'in_progress', tkey:'in_progress'},
@@ -451,11 +488,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
       {/* Body */}
       <div className="req-detail-body" style={{flex:1,display:'flex',overflow:'hidden'}}>
 
-        {/* LEFT: Form */}
         <div className="req-form-panel" style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',borderRight:`1.5px solid ${C.border}`}}>
           <div className="req-form-scroll" style={{flex:1,overflowY:'auto',padding:16}}>
 
-            {/* Thông tin chung */}
             <Section icon="📋" title={t('req_job_info')}
               extra={<span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:pr.bg,color:pr.color}}>{pr.icon} {t(pr.key)}</span>}>
               <div style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -489,8 +524,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </select>
                   </div>
                   <div style={{flex:'1 1 160px'}}><label style={FL}>{t('status')}</label>
-                    {/* Không cho chọn trạng thái tự do nữa — chuyển trạng thái chỉ qua các nút hành động
-                        (Bắt đầu làm / Chấm điểm xong / Trả / Hoàn thành...) để tránh nhảy cóc bước. */}
                     <div style={{...FI,display:'flex',alignItems:'center',background:'#f7f8fb'}}>
                       <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color}}>{st.icon} {t(st.key)}</span>
                     </div>
@@ -499,7 +532,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               </div>
             </Section>
 
-            {/* Thời gian */}
             <Section icon="⏱" title={t('req_time_section')}>
               <div style={{display:'grid',gridTemplateColumns:'repeat(2, minmax(0,1fr))',gap:12,marginBottom:12}}>
                 <div style={{background:C.bg,borderRadius:8,padding:'9px 12px',border:`1px solid ${C.border}`}}>
@@ -552,7 +584,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               </div>
             </Section>
 
-            {/* Người thực hiện */}
             <Section icon="👥" title={t('req_assignees_section')} extra={<span style={{fontSize:11,color:'#aaa'}}>{t('req_max_assignees')}</span>}>
               <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
                 {(task.assignees||[]).map(a=>(
@@ -561,18 +592,22 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                       {(a.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
                     </div>
                     {a.full_name}
+                    <RoleBadge role={a.role} clickable={canManageAssignees} onClick={()=>toggleAssigneeRole(a)}/>
                     {canManageAssignees&&<span onClick={()=>removeAssignee(a.user_id)} style={{cursor:'pointer',color:'#aaa',fontSize:15,lineHeight:1}} onMouseEnter={e=>e.target.style.color=C.danger} onMouseLeave={e=>e.target.style.color='#aaa'}>×</span>}
                   </div>
                 ))}
-                {/* Leader chưa gán ai cho task này (pending, chưa có assignee) →
-                    cho user thường tự bấm nhận việc ngay tại đây, không chỉ ở nút trên topbar */}
                 {task.status==='pending' && (task.assignees||[]).length===0 && !isLeader && !isAdmin && (
                   <div onClick={claimTask} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:`1.5px dashed ${C.primary}`,color:C.primary,fontSize:12,fontWeight:600,cursor:'pointer'}}>
                     🙋 {t('req_claim_task')}
                   </div>
                 )}
                 {canManageAssignees&&(task.assignees||[]).length<12&&(
-                  <div onClick={()=>setShowAddUser(p=>!p)} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:'1.5px dashed #c0cce0',color:'#7a9bbf',fontSize:12,cursor:'pointer'}}
+                  <div onClick={()=>{
+                      // Người đầu tiên được thêm → mặc định "Chính"; từ người thứ 2 trở đi → mặc định "Hỗ trợ".
+                      // Vẫn cho đổi tay ở thanh chọn bên dưới nếu cần khác đi.
+                      setPendingRole((task.assignees||[]).length===0 ? 'main' : 'support');
+                      setShowAddUser(p=>!p);
+                    }} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:'1.5px dashed #c0cce0',color:'#7a9bbf',fontSize:12,cursor:'pointer'}}
                     onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.color=C.primary;}}
                     onMouseLeave={e=>{e.currentTarget.style.borderColor='#c0cce0';e.currentTarget.style.color='#7a9bbf';}}>
                     ＋ {t('req_add_person')}
@@ -580,27 +615,38 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 )}
               </div>
               {showAddUser&&(
-                <div style={{marginTop:8,background:'#fff',border:`1.5px solid ${C.border}`,borderRadius:8,maxHeight:160,overflowY:'auto'}}>
-                  {users.filter(u=>!existingIds.has(u.id)).map(u=>(
-                    <div key={u.id} onClick={()=>addAssignee(u.id)}
-                      style={{display:'flex',alignItems:'center',gap:8,padding:'7px 12px',cursor:'pointer',fontSize:12}}
-                      onMouseEnter={e=>e.currentTarget.style.background='#eef3ff'}
-                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-                      <Chip color={u.avatar_color||C.primary} name={u.full_name} size={22}/>
-                      <span style={{flex:1,color:C.dark,fontWeight:500}}>{u.full_name}</span>
-                      <span style={{color:'#aaa',fontSize:11}}>{u.role}</span>
-                    </div>
-                  ))}
+                <div style={{marginTop:8,background:'#fff',border:`1.5px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+                  <div style={{display:'flex',gap:6,padding:'8px 10px',borderBottom:`1px solid ${C.border}`,background:C.bg}}>
+                    <span style={{fontSize:11,color:'#888',fontWeight:600,alignSelf:'center'}}>{t('req_role_label')}:</span>
+                    <button onClick={()=>setPendingRole('main')}
+                      style={{padding:'3px 10px',borderRadius:12,border:`1.5px solid ${pendingRole==='main'?C.primary:C.border}`,background:pendingRole==='main'?C.primary:'#fff',color:pendingRole==='main'?'#fff':'#888',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                      ⭐ {t('req_role_main')}
+                    </button>
+                    <button onClick={()=>setPendingRole('support')}
+                      style={{padding:'3px 10px',borderRadius:12,border:`1.5px solid ${pendingRole==='support'?C.warning:C.border}`,background:pendingRole==='support'?C.warning:'#fff',color:pendingRole==='support'?'#fff':'#888',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                      🤝 {t('req_role_support')}
+                    </button>
+                  </div>
+                  <div style={{maxHeight:160,overflowY:'auto'}}>
+                    {users.filter(u=>!existingIds.has(u.id)).map(u=>(
+                      <div key={u.id} onClick={()=>addAssignee(u.id,pendingRole)}
+                        style={{display:'flex',alignItems:'center',gap:8,padding:'7px 12px',cursor:'pointer',fontSize:12}}
+                        onMouseEnter={e=>e.currentTarget.style.background='#eef3ff'}
+                        onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                        <Chip color={u.avatar_color||C.primary} name={u.full_name} size={22}/>
+                        <span style={{flex:1,color:C.dark,fontWeight:500}}>{u.full_name}</span>
+                        <span style={{color:'#aaa',fontSize:11}}>{u.role}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </Section>
 
-            {/* File đính kèm */}
             <Section icon="📎" title={t('req_files_section')}>
               <FileSection taskId={task.id} files={task.files||[]} user={user} onReload={loadTask}/>
             </Section>
 
-            {/* Leader duyệt CV — thay cho chấm điểm số cũ */}
             {isLeader&&(
               <Section icon="🏆" title={t('req_leader_scoring')}>
                 {task.status==='scoring'&&(
@@ -628,7 +674,16 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                   </div>
                 )}
                 {task.status==='done'&&(
-                  <div style={{fontSize:12,color:C.success,fontWeight:600}}>✅ {t('req_status_done')}</div>
+                  <div>
+                    <div style={{fontSize:12,color:C.success,fontWeight:600,marginBottom:8}}>✅ {t('req_status_done')}</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                      {(task.assignees||[]).map(a=>(
+                        <span key={a.user_id} style={{display:'flex',alignItems:'center',gap:4,fontSize:11,color:'#555',background:C.bg,padding:'3px 8px',borderRadius:10}}>
+                          {a.full_name}<RoleBadge role={a.role} clickable={false}/>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 )}
                 {!['scoring','reviewing','done'].includes(task.status)&&(
                   <div style={{fontSize:12,color:'#bbb'}}>{t('req_waiting_completion')}</div>
@@ -638,7 +693,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
           </div>
 
-          {/* Footer */}
           <div style={{padding:'10px 16px',borderTop:`1.5px solid ${C.border}`,display:'flex',gap:8,alignItems:'center',background:'#fff',flexShrink:0}}>
             <div style={{flex:1,fontSize:12,color:'#aaa'}}>{t('req_created_by',{time:fmtDt(task.created_at),name:task.creator_name})}</div>
             {isLeader&&<button onClick={deleteTask} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #fde8e8',background:'#fde8e8',color:C.danger,fontSize:12,fontWeight:600,cursor:'pointer'}}>🗑 {t('delete')}</button>}
@@ -647,7 +701,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           </div>
         </div>
 
-        {/* RIGHT: Chat */}
         <div className="req-chat-panel" style={{width:300,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'#fafbfc'}}>
           <div style={{padding:'11px',textAlign:'center',fontSize:12,fontWeight:600,color:C.primary,borderBottom:`2.5px solid ${C.primary}`,flexShrink:0}}>💬 {t('req_messages_tab')}</div>
 
@@ -716,6 +769,10 @@ function CreatePanel({groups,users,onClose,onSaved}){
   const [saving,setSaving]=useState(false);
   const s=(k,v)=>setForm(p=>({...p,[k]:v}));
 
+  const toggleFormAssigneeRole = (uid)=>{
+    s('assignees', form.assignees.map(a=>a.user_id===uid?{...a,role:a.role==='support'?'main':'support'}:a));
+  };
+
   const submit=async()=>{
     if(!form.title.trim()) return alert(t('req_title_required_alert'));
     setSaving(true);
@@ -760,7 +817,7 @@ function CreatePanel({groups,users,onClose,onSaved}){
           </div>
         </Section>
         <Section icon="👥" title={t('req_assign_to')}>
-          <select style={FI} onChange={e=>{ if(!e.target.value) return; const uid=+e.target.value; if(form.assignees.find(a=>a.user_id===uid)) return; const u=users.find(x=>x.id===uid); s('assignees',[...form.assignees,{user_id:uid,role:'main',full_name:u?.full_name,avatar_color:u?.avatar_color}]); e.target.value=''; }}>
+          <select style={FI} onChange={e=>{ if(!e.target.value) return; const uid=+e.target.value; if(form.assignees.find(a=>a.user_id===uid)) return; const u=users.find(x=>x.id===uid); const role = form.assignees.length===0 ? 'main' : 'support'; s('assignees',[...form.assignees,{user_id:uid,role,full_name:u?.full_name,avatar_color:u?.avatar_color}]); e.target.value=''; }}>
             <option value="">{t('req_choose_person')}</option>
             {users.filter(u=>!form.assignees.find(a=>a.user_id===u.id)).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)}
           </select>
@@ -768,6 +825,7 @@ function CreatePanel({groups,users,onClose,onSaved}){
             {form.assignees.map(a=>(
               <span key={a.user_id} style={{display:'flex',alignItems:'center',gap:5,background:'#eef3ff',border:'1px solid #c8d8f0',color:C.primary,fontSize:12,padding:'4px 10px',borderRadius:20,fontWeight:600}}>
                 {a.full_name}
+                <RoleBadge role={a.role} clickable onClick={()=>toggleFormAssigneeRole(a.user_id)}/>
                 <span onClick={()=>s('assignees',form.assignees.filter(x=>x.user_id!==a.user_id))} style={{cursor:'pointer',color:'#aaa',fontSize:14}}>×</span>
               </span>
             ))}

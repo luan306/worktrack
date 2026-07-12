@@ -37,6 +37,11 @@ exports.create = async (req, res) => {
     const { username, email, full_name, role='user', password, avatar_color='#3a7bd5', group_id } = req.body;
     if (!username || !email || !full_name || !password)
       return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    // Leader chỉ được tạo tài khoản role 'user' — không được tự gán admin/manager/leader
+    if (req.user.role === 'leader' && role !== 'user')
+      return res.status(403).json({ success: false, message: 'Leader chỉ được tạo tài khoản nhân viên (user)' });
+
     const hash = await bcrypt.hash(password, 10);
     const [r] = await db.query(
       'INSERT INTO users (username,email,password,full_name,role,avatar_color) VALUES (?,?,?,?,?,?)',
@@ -124,7 +129,6 @@ exports.importUsers = async (req, res) => {
 
         if (r.insertId && u.group_name && u.group_name.trim()) {
           try {
-            // Tìm nhóm theo tên (không phân biệt hoa thường)
             const [gs] = await db.query(
               'SELECT id FROM `groups` WHERE LOWER(name)=LOWER(?) AND is_active=1 LIMIT 1',
               [u.group_name.trim()]
@@ -133,7 +137,6 @@ exports.importUsers = async (req, res) => {
             if (gs.length) {
               gid = gs[0].id;
             } else {
-              // Tạo nhóm mới
               const [nr] = await db.query(
                 'INSERT INTO `groups` (name, icon, is_active) VALUES (?,?,1)',
                 [u.group_name.trim(), '🏭']
