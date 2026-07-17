@@ -55,18 +55,38 @@ exports.create = async (req, res) => {
   }
 };
 
+// PUT /users/:id — cho phép 2 trường hợp:
+//   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active.
+//   2) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
+//      CHỈ với các trường an toàn (full_name, email, avatar_color) — tuyệt đối
+//      không cho tự đổi role/is_active dù là tự sửa mình, để tránh tự nâng
+//      quyền hoặc tự kích hoạt lại tài khoản đã bị khóa.
+// Mọi trường hợp khác (user thường sửa người khác) → 403.
 exports.update = async (req, res) => {
   try {
+    const { id } = req.params;
     const { full_name, email, role, avatar_color, is_active } = req.body;
-    if (role && !['admin','manager'].includes(req.user.role))
-      return res.status(403).json({ success: false, message: 'No permission to change role' });
+
+    const isSelf       = req.user.id === +id;
+    const isPrivileged = ['admin','manager'].includes(req.user.role);
+
+    if (!isSelf && !isPrivileged) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa người dùng khác' });
+    }
+
+    // role/is_active là các trường nhạy cảm — kể cả tự sửa hồ sơ của chính
+    // mình cũng không được đụng vào nếu không phải admin/manager.
+    if ((role !== undefined || is_active !== undefined) && !isPrivileged) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò hoặc trạng thái hoạt động' });
+    }
+
     await db.query(
       `UPDATE users SET
         full_name=COALESCE(?,full_name), email=COALESCE(?,email),
         role=COALESCE(?,role), avatar_color=COALESCE(?,avatar_color),
         is_active=COALESCE(?,is_active)
        WHERE id=?`,
-      [full_name, email, role, avatar_color, is_active, req.params.id]
+      [full_name, email, role, avatar_color, is_active, id]
     );
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }

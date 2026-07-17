@@ -20,7 +20,7 @@ router.post('/auth/change-password', auth(), aC.changePassword);
 router.get   ('/users',                    auth(),                              uC.list);
 router.post  ('/users',                    auth(['admin','manager','leader']), uC.create);
 router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
-router.put   ('/users/:id',                auth(['admin','manager']),          uC.update);
+router.put   ('/users/:id',                auth(),                              uC.update);
 router.delete('/users/:id',                auth(['admin']),                    uC.remove);
 router.post  ('/users/:id/reset-password', auth(['admin']),                    uC.resetPassword);
 

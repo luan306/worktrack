@@ -14,7 +14,7 @@ const NAV = [
   { divider: true },
   { to: '/', icon: '📊',  key: 'nav_dashboard', roles: ['admin','manager'] },
   { to: '/users',     icon: '👥',  key: 'nav_users',  roles: ['admin','manager','leader'] },
-  { to: '/settings',  icon: '⚙️', key: 'nav_settings' },
+  { to: '/profile',  icon: '⚙️', key: 'nav_settings' },
 ];
 
 // Các mục hiển thị ở thanh điều hướng dưới cùng trên mobile (không gian hẹp nên chỉ chọn lọc)
@@ -23,7 +23,7 @@ const MOBILE_NAV = [
   { to: '/daily',     icon: '📋',  key: 'nav_daily_short' },
   { to: '/requests',  icon: '📨',  key: 'nav_requests_short' },
   { to: '/completed', icon: '✅',  key: 'nav_completed_short' },
-  { to: '/settings',  icon: '⚙️', key: 'nav_settings_short' },
+  { to: '/profile',  icon: '⚙️', key: 'nav_settings_short' },
 ];
 
 const SIDEBAR_STORAGE_KEY = 'wt_sidebar_collapsed';
@@ -88,20 +88,29 @@ export default function Sidebar({ collapsed, onToggle }) {
         )}
       </div>
 
-      {/* User */}
+      {/* User — bấm vào để đổi mật khẩu / chỉnh hồ sơ (trang Cài đặt) */}
       <div className={`flex items-center gap-2 border-b border-[#2d3f52] transition-all duration-300 ${collapsed ? 'justify-center px-2 py-3' : 'px-[14px] py-2.5'}`}>
-        <div
-          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-          style={{ background: user?.avatar_color || '#3a7bd5' }}
-        >
-          {initials}
+        <div className="group relative min-w-0 flex-1">
+          <NavLink
+            to="/profile"
+            title={t('nav_settings')}
+            className="group/profile flex min-w-0 items-center gap-2 rounded-md transition-colors hover:bg-[#2d3f52]/60"
+          >
+            <div
+              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+              style={{ background: user?.avatar_color || '#3a7bd5' }}
+            >
+              {initials}
+            </div>
+            {!collapsed && (
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-semibold text-white group-hover/profile:underline">{user?.full_name}</div>
+                <div className="text-[10px] capitalize text-[#7a9bbf]">{user?.role}</div>
+              </div>
+            )}
+          </NavLink>
+          {collapsed && <CollapsedTooltip>{t('nav_settings')}</CollapsedTooltip>}
         </div>
-        {!collapsed && (
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-xs font-semibold text-white">{user?.full_name}</div>
-            <div className="text-[10px] capitalize text-[#7a9bbf]">{user?.role}</div>
-          </div>
-        )}
         <NotificationBell />
       </div>
 

@@ -1,0 +1,69 @@
+# docker-compose.yml
+# Đặt file này ở thư mục gốc project (cùng cấp với 2 thư mục backend/ và frontend/)
+version: "3.8"
+
+services:
+    mysql:
+        image: mysql:8.0
+        restart: unless-stopped
+        environment:
+            # App thật của bạn dùng DB_USER=root trực tiếp (không có user MySQL
+            # riêng) — nên ở đây chỉ cần set MYSQL_ROOT_PASSWORD, không cần
+            # MYSQL_USER/MYSQL_PASSWORD nữa.
+            MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+            MYSQL_DATABASE: ${DB_NAME}
+        volumes:
+            - mysql_data:/var/lib/mysql
+            # Đặt file schema.sql vào ./db-init/ — MySQL image tự chạy MỌI file .sql
+            # trong thư mục này (chỉ 1 LẦN DUY NHẤT lúc volume mysql_data còn rỗng,
+            # tức lần đầu tạo container). Muốn chạy lại thì phải xóa volume trước.
+            - ./db-init:/docker-entrypoint-initdb.d
+        ports:
+            - "3306:3306" # bỏ dòng này nếu không cần truy cập MySQL từ máy host
+        healthcheck:
+            test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    backend:
+        build:
+            context: ./backend
+        restart: unless-stopped
+        depends_on:
+            mysql:
+                condition: service_healthy
+        environment:
+            NODE_ENV: production
+            PORT: 3001
+            DB_HOST: mysql # tên SERVICE, không phải "localhost"
+            DB_PORT: 3306
+            DB_USER: root
+            DB_PASSWORD: ${DB_PASSWORD}
+            DB_NAME: ${DB_NAME}
+            JWT_SECRET: ${JWT_SECRET}
+            JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+            JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN}
+            FRONTEND_URL: ${FRONTEND_URL}
+        volumes:
+            # Bind mount thư mục uploads ra ngoài host — sống sót qua mọi lần
+            # rebuild/xóa container, và dễ backup riêng (ảnh, file đính kèm, Excel
+            # export của tính năng Chốt & Reset).
+            - ./backend/uploads:/app/uploads
+        expose:
+            - "3001" # chỉ expose nội bộ trong network Docker, không ra ngoài trực tiếp
+
+    frontend:
+        build:
+            context: ./frontend
+            args:
+                VITE_API_URL: /api
+        restart: unless-stopped
+        depends_on:
+            - backend
+        ports:
+            - "80:80"
+            # - '443:443'   # nếu cấu hình SSL ngay trong Nginx của container này
+
+volumes:
+    mysql_data:
