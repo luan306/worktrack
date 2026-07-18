@@ -21,12 +21,12 @@ router.get   ('/users',                    auth(),                              
 router.post  ('/users',                    auth(['admin','manager','leader']), uC.create);
 router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
 router.put   ('/users/:id',                auth(),                              uC.update);
-router.delete('/users/:id',                auth(['admin']),                    uC.remove);
+router.delete('/users/:id',                auth(['admin','manager','leader']), uC.remove);
 router.post  ('/users/:id/reset-password', auth(['admin']),                    uC.resetPassword);
 
 // ── Groups ── Leader KHÔNG có quyền gì ở đây — chỉ được tạo tài khoản user (ở trên)
 router.get   ('/groups',                     auth(),                              gC.list);
-router.post  ('/groups',                     auth(['admin','manager']),          gC.create);
+router.post  ('/groups',                     auth(['admin','manager','leader']), gC.create);
 router.put   ('/groups/:id',                 auth(['admin','manager']),          gC.update);
 router.delete('/groups/:id',                 auth(['admin']),                    gC.remove);
 router.post  ('/groups/:id/members',         auth(['admin','manager','leader']), gC.addMember);

@@ -187,6 +187,17 @@ exports.remove = async (req, res) => {
   try {
     const { id } = req.params;
     if (+id === req.user.id) return res.status(400).json({ success: false, message: 'Không thể xóa chính mình!' });
+
+    // Leader có quyền xóa user, NHƯNG không được xóa tài khoản admin/manager —
+    // chỉ admin/manager mới xóa được lẫn nhau hoặc xóa admin/manager khác.
+    if (req.user.role === 'leader') {
+      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
+      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      if (['admin','manager'].includes(target.role)) {
+        return res.status(403).json({ success: false, message: 'Leader không có quyền xóa tài khoản admin/manager' });
+      }
+    }
+
     const conn = await db.getConnection();
     await conn.beginTransaction();
     try {
