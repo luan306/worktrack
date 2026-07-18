@@ -292,6 +292,7 @@ const en = {
   users_group_name_placeholder:'e.g. Assembly line 1',
   users_icon_placeholder:'e.g. 🏭',
   users_group_leader:'Group leader',
+  users_leader_badge:'Leader',
   users_choose_leader:'Choose leader',
   users_group_leader_hint:'The leader can score daily tasks for this group.',
   users_create_group_btn:'Create group',
@@ -349,6 +350,9 @@ const en = {
   profile_save_failed:'Failed to save profile, please try again',
   profile_saved:'Saved',
   profile_save_info:'Profile information updated successfully',
+  role_user:'User',
+  role_admin:'Administrator',
+  role_leader:'Leader',
 
 };
 
@@ -642,6 +646,7 @@ const ja = {
   users_group_name_placeholder:'例：組立ライン1',
   users_icon_placeholder:'例：🏭',
   users_group_leader:'グループリーダー',
+  users_leader_badge:'リーダー',
   users_choose_leader:'リーダーを選択',
   users_group_leader_hint:'リーダーはこのグループの日次タスクを採点できます。',
   users_create_group_btn:'グループを作成',
@@ -699,6 +704,9 @@ const ja = {
   profile_save_failed:'保存に失敗しました、もう一度お試しください',
   profile_saved:'保存完了',
   profile_save_info:'プロフィール情報が正常に更新されました',
+  role_user:'ユーザー',
+  role_admin:'管理者',
+  role_leader:'リーダー',
 };
 
 const vi = {
@@ -991,6 +999,7 @@ const vi = {
   users_group_name_placeholder:'Vd: Chuyền lắp ráp 1',
   users_icon_placeholder:'Vd: 🏭',
   users_group_leader:'Trưởng nhóm',
+  users_leader_badge:'Trưởng nhóm',
   users_choose_leader:'Chọn leader',
   users_group_leader_hint:'Leader có thể chấm điểm CV hằng ngày cho nhóm này.',
   users_create_group_btn:'Tạo nhóm',

@@ -447,7 +447,7 @@ export default function UsersPage(){
                     <div style={{width:20,height:20,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:700}}>
                       {g.leader_name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
                     </div>
-                    {t('req_leader_label')}: {g.leader_name}
+                    {t('req_leader_label',{name:g.leader_name})}
                   </div>
                 )}
                 <button onClick={()=>setShowAddMember(g)}
@@ -472,7 +472,7 @@ export default function UsersPage(){
                     <div key={m.id} style={{display:'flex',alignItems:'center',gap:7,padding:'6px 12px',borderRadius:20,background:C.bg,border:`1.5px solid ${C.border}`,fontSize:12,color:'#333',fontWeight:500}}>
                       <Chip color={m.avatar_color||C.primary} name={m.full_name} size={22}/>
                       {m.full_name}
-                      {g.leader_id===m.id&&<span style={{fontSize:10,background:'#e8f8ee',color:C.success,fontWeight:700,padding:'1px 6px',borderRadius:8}}>{t('req_leader_label')}</span>}
+                      {g.leader_id===m.id&&<span style={{fontSize:10,background:'#e8f8ee',color:C.success,fontWeight:700,padding:'1px 6px',borderRadius:8}}>{t('users_leader_badge')}</span>}
                       <span onClick={()=>removeMember(g.id,m.id)}
                         style={{cursor:'pointer',color:'#bbb',fontSize:14,marginLeft:2,lineHeight:1}}
                         onMouseEnter={e=>e.target.style.color=C.danger}
@@ -815,7 +815,7 @@ function EditGroupModal({show,group,users,onClose,onSave}){
         <div><label style={FL}>{t('users_group_name')}</label><input style={FI} value={f.name||''} onChange={e=>s('name',e.target.value)}/></div>
         <div><label style={FL}>Icon</label><input style={FI} value={f.icon||''} onChange={e=>s('icon',e.target.value)}/></div>
         <div>
-          <label style={FL}>{t('req_leader_label')}</label>
+          <label style={FL}>{t('users_group_leader')}</label>
           <select style={FI} value={f.leader_id||''} onChange={e=>s('leader_id',e.target.value)}>
             <option value="">-- {t('users_choose_leader')} --</option>
             {members.map(m=><option key={m.id} value={m.id}>{m.full_name}</option>)}

@@ -29,8 +29,8 @@ router.get   ('/groups',                     auth(),                            
 router.post  ('/groups',                     auth(['admin','manager']),          gC.create);
 router.put   ('/groups/:id',                 auth(['admin','manager']),          gC.update);
 router.delete('/groups/:id',                 auth(['admin']),                    gC.remove);
-router.post  ('/groups/:id/members',         auth(['admin','manager']),          gC.addMember);
-router.delete('/groups/:id/members/:userId', auth(['admin','manager']),          gC.removeMember);
+router.post  ('/groups/:id/members',         auth(['admin','manager','leader']), gC.addMember);
+router.delete('/groups/:id/members/:userId', auth(['admin','manager','leader']), gC.removeMember);
 
 // ── Daily Tasks — static routes TRƯỚC dynamic ──
 router.get('/daily/board',                    auth(),                          dC.getBoardData);
