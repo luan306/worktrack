@@ -47,7 +47,6 @@ function Modal({show,title,onClose,children,width=460}){
 const TABS = [
   {key:'users',       icon:'👤', tkey:'users_tab_users'},
   {key:'groups',      icon:'🏭', tkey:'users_tab_groups'},
-  {key:'permissions', icon:'🔐', tkey:'users_tab_permissions'},
   {key:'import',      icon:'📥', tkey:'users_tab_import'},
 ];
 
@@ -165,12 +164,12 @@ export default function UsersPage(){
 
   const addMember = async(groupId,userId)=>{
     try { await api.post(`/groups/${groupId}/members`,{user_id:userId}); fetchGroups(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(e.response?.data?.message||e.message); }
   };
 
   const removeMember = async(groupId,userId)=>{
     try { await api.delete(`/groups/${groupId}/members/${userId}`); fetchGroups(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(e.response?.data?.message||e.message); }
   };
 
   // ── Import ──
@@ -574,9 +573,9 @@ export default function UsersPage(){
             <button onClick={()=>{
                 const csv = [
                   t('users_csv_columns'),
-                  'Nguyễn Văn A,nva@company.com,user,MES',
+                  'Nguyễn Văn A,nva@smc.com,user,MES',
                   'Trần Thị B,,,',
-                  'Lê Văn C,lvc@company.com,leader,Bảo trì',
+                  'Lê Văn C,lvc@smc.com,leader,Bảo trì',
                 ].join('\n');
                 const BOM = '\uFEFF';
                 const blob = new Blob([BOM + csv], {type:'text/csv;charset=utf-8;'});
@@ -683,7 +682,7 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
           <div style={{flex:'1 1 160px'}}><label style={FL}>{t('profile_fullname')} *</label><input style={FI} value={f.full_name} onChange={e=>s('full_name',e.target.value)} placeholder="Nguyễn Văn A"/></div>
           <div style={{flex:'1 1 160px'}}><label style={FL}>Username *</label><input style={FI} value={f.username} onChange={e=>s('username',e.target.value)} placeholder="nguyenvana"/></div>
         </div>
-        <div><label style={FL}>Email *</label><input type="email" style={FI} value={f.email} onChange={e=>s('email',e.target.value)} placeholder="email@company.com"/></div>
+        <div><label style={FL}>Email *</label><input type="email" style={FI} value={f.email} onChange={e=>s('email',e.target.value)} placeholder="email@smc.com"/></div>
         <div><label style={FL}>{t('password')} *</label><input type="password" style={FI} value={f.password} onChange={e=>s('password',e.target.value)}/></div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
           {/* Leader không thấy dropdown role — luôn tạo với quyền 'user' */}
