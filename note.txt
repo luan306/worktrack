@@ -266,22 +266,10 @@ UPDATE request_task_comments SET content=message WHERE id>0;
 
 select * from users
 
-
-
 USE worktrack;
 ALTER TABLE request_tasks ADD COLUMN hours_spent DECIMAL(5,1) DEFAULT NULL;
-npm install helmet express-rate-limit
 
 ALTER TABLE request_tasks ADD COLUMN hours_spent DECIMAL(5,1) DEFAULT NULL;
-
-
-
-
-
-
-
-
-
 
 ALTER TABLE request_tasks MODIFY COLUMN created_by INT NULL;
 ALTER TABLE request_tasks MODIFY COLUMN created_by INT NULL;
@@ -337,8 +325,6 @@ SHOW COLUMNS FROM users LIKE 'id';
 SELECT * FROM notifications ORDER BY id DESC LIMIT 5;
 
 
-
-
 ALTER TABLE request_task_comments
   ADD COLUMN file_name   VARCHAR(255) NULL AFTER content,
   ADD COLUMN stored_name VARCHAR(255) NULL AFTER file_name,
@@ -355,8 +341,22 @@ ALTER TABLE request_task_comments
 
 SHOW TABLES LIKE '%comment%';
 
+SHOW PROCESSLIST;
+KILL 107; KILL 108; KILL 109; KILL 110; KILL 111; KILL 112; KILL 113; KILL 114;
+SHOW COLUMNS FROM request_tasks LIKE 'status';
 
-
+ALTER TABLE request_tasks
+  MODIFY COLUMN status ENUM('pending','assigned','in_progress','scoring','reviewing','done','cancelled','archived')
+  NOT NULL DEFAULT 'pending';
+  
+  SHOW COLUMNS FROM request_tasks LIKE 'status';
+  SELECT id, name, is_locked, excel_path, locked_at FROM score_periods WHERE is_locked=1;
+  
+  SHOW OPEN TABLES WHERE In_use > 0;
+  
+  SHOW COLUMNS FROM users LIKE 'password';
+  select * from users
+  
 ALTER TABLE request_task_comments
   ADD COLUMN file_name   VARCHAR(255) NULL AFTER content,
   ADD COLUMN stored_name VARCHAR(255) NULL AFTER file_name,
@@ -366,3 +366,21 @@ SHOW COLUMNS FROM request_tasks LIKE 'status';
 ALTER TABLE request_tasks
   MODIFY COLUMN status ENUM('pending','assigned','in_progress','scoring','reviewing','done','cancelled')
   NOT NULL DEFAULT 'pending';
+  
+  
+  
+  ALTER TABLE request_tasks ADD COLUMN started_by INT NULL;
+  
+  
+SHOW COLUMNS FROM daily_tasks LIKE 'frequency_day';
+  
+  ALTER TABLE daily_tasks MODIFY COLUMN frequency_day VARCHAR(50) NULL;
+  ALTER TABLE daily_tasks
+  MODIFY COLUMN frequency ENUM('daily','weekly','monthly','weekly_count','monthly_count')
+  NOT NULL DEFAULT 'daily';
+  
+  
+  ALTER TABLE daily_task_logs ADD COLUMN edit_reason TEXT NULL;
+  
+  
+  CREATE TABLE activity_logs ( id INT AUTO_INCREMENT PRIMARY KEY, actor_id INT NOT NULL, action_type VARCHAR(50) NOT NULL, entity_type VARCHAR(50) NOT NULL, entity_id INT NULL, description TEXT NOT NULL, metadata JSON NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_created_at (created_at), INDEX idx_action_type (action_type), INDEX idx_entity (entity_type, entity_id) );

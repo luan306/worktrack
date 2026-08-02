@@ -32,6 +32,18 @@ const STEPS = [
   { key:'done',        tkey:'req_step_done' },
 ];
 
+// Icon + màu cho từng loại hành động trong Timeline "Tiến trình" — cùng bộ
+// action_type với trang Lịch sử thay đổi (/activity-log), chỉ khác là ở đây
+// lọc riêng theo 1 CV và không giới hạn admin/manager.
+const ACTIVITY_META = {
+  request_created:          { icon:'➕', color:C.primary, bg:'#eef3ff' },
+  request_assignee_added:   { icon:'🙋', color:'#27ae60', bg:'#e8f8ee' },
+  request_assignee_removed: { icon:'↩️', color:C.warning, bg:'#fff4e8' },
+  request_scored:           { icon:'⭐', color:'#8e44ad', bg:'#f3e8ff' },
+  request_completed:        { icon:'✅', color:C.success, bg:'#e8f8ee' },
+};
+const ACTIVITY_DEFAULT_META = { icon:'📝', color:'#888', bg:'#f0f2f8' };
+
 const FI = { width:'100%', padding:'8px 12px', border:'1.5px solid #dde3f0', borderRadius:8, fontSize:13, color:C.dark, outline:'none', boxSizing:'border-box', background:'#fff' };
 const FL = { display:'block', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
 
@@ -117,6 +129,49 @@ function Section({icon,title,extra,children}){
   );
 }
 
+// ── Timeline "Tiến trình" — ai tạo → ai nhận → nếu đổi người thì ai nhận
+// tiếp theo → chấm điểm → duyệt hoàn thành. Lấy từ activity_logs qua endpoint
+// riêng /requests/:id/activity (không giới hạn admin/manager như trang audit
+// toàn hệ thống /activity-log).
+function ActivityTimeline({ taskId }) {
+  const { t, i18n } = useTranslation();
+  const fmtDt = makeFmtDt(LOCALE_MAP[i18n.language] || 'vi-VN');
+  const [items, setItems]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get(`/requests/${taskId}/activity`)
+      .then(r => setItems(r.data.data || []))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false));
+  }, [taskId]);
+
+  if (loading) return <div style={{fontSize:12,color:'#bbb',padding:'4px 0'}}>⏳</div>;
+  if (!items.length) return <div style={{fontSize:12,color:'#bbb',padding:'4px 0'}}>{t('req_activity_empty', { defaultValue: 'Chưa có hoạt động nào được ghi lại.' })}</div>;
+
+  // Hàng ngang, cuộn được nếu dài — mỗi bước là 1 icon + mô tả rút gọn (tối đa
+  // 2 dòng, hover để xem đầy đủ), nối nhau bằng mũi tên "→".
+  return (
+    <div style={{display:'flex',alignItems:'flex-start',gap:6,overflowX:'auto',padding:'4px 2px 8px'}}>
+      {items.map((item,i)=>{
+        const meta = ACTIVITY_META[item.action_type] || ACTIVITY_DEFAULT_META;
+        const isLast = i===items.length-1;
+        return (
+          <div key={item.id} style={{display:'flex',alignItems:'flex-start',gap:6,flexShrink:0}}>
+            <div title={item.description} style={{display:'flex',flexDirection:'column',alignItems:'center',width:96,flexShrink:0}}>
+              <div style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,background:meta.bg,flexShrink:0}}>{meta.icon}</div>
+              <div style={{fontSize:10,color:C.dark,textAlign:'center',marginTop:5,lineHeight:1.35,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{item.description}</div>
+              <div style={{fontSize:9,color:'#aaa',marginTop:3,whiteSpace:'nowrap'}}>{fmtDt(item.created_at)}</div>
+            </div>
+            {!isLast && <div style={{fontSize:14,color:'#ccc',flexShrink:0,marginTop:5}}>→</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RequestsPage() {
   const { t, i18n } = useTranslation();
   const { user, can } = useAuth();
@@ -148,20 +203,10 @@ export default function RequestsPage() {
     setTasks(data.data||[]);
   };
 
-  // Phạm vi hiển thị request:
-  // - Admin/Manager: thấy toàn bộ.
-  // - Leader (không phải admin/manager): thấy request do CHÍNH MÌNH hoặc
-  //   THÀNH VIÊN CÙNG NHÓM (mình quản lý) tạo/được giao — không dựa vào
-  //   trường "Nhóm" gắn trên request lúc tạo (field đó không phải lúc nào
-  //   cũng được chọn), mà dựa vào nhóm thực tế của TỪNG NGƯỜI trong `users`.
-  // - User thường: chỉ thấy request do mình tạo hoặc được giao.
   const isAdminOrManager = can('admin','manager');
   const isTeamLeaderOnly = !isAdminOrManager && can('leader');
   const myGroupIds = new Set((user?.groups||[]).map(g=>g.id));
 
-  // Tập user_id của "đội mình" — gồm chính leader + mọi user có chung ít
-  // nhất 1 nhóm với leader. Giả định mỗi phần tử trong `users` cũng có
-  // trường `groups` (mảng {id,...}) giống cấu trúc của `user.groups`.
   const teamMemberIds = new Set([user?.id]);
   if (isTeamLeaderOnly) {
     users.forEach(u=>{
@@ -259,12 +304,8 @@ export default function RequestsPage() {
             const pr=PRIORITY[t2.priority]||PRIORITY.medium;
             const isActive=selected?.id===t2.id;
             const overdue=t2.deadline&&new Date(t2.deadline)<new Date()&&t2.status!=='done';
-            // Thẻ đỏ: hết hạn rồi HOẶC còn dưới 1 tiếng — cùng ngưỡng màu đỏ
-            // đang dùng trong Countdown, chỉ là đưa lên hàng tiêu đề cho dễ thấy.
             const timeLeft = t2.deadline ? new Date(t2.deadline)-new Date() : null;
             const isUrgent = t2.deadline && !['done','cancelled'].includes(t2.status) && timeLeft<3600000;
-            // "Mới" = CV vừa được tạo trong 24h gần đây — tách riêng khỏi badge đếm
-            // ngược deadline (Countdown) để không bị nhầm 2 ý nghĩa khác nhau.
             const isNew = t2.created_at && (Date.now()-new Date(t2.created_at).getTime()) < 24*60*60*1000;
             return (
               <div key={t2.id} className="req-list-item" onClick={()=>setSelected(t2)}
@@ -324,6 +365,13 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
   const chatFileRef = useRef();
+  // Đếm mỗi lần loadTask() chạy — dùng làm key ép ActivityTimeline tự tải lại,
+  // vì taskId không đổi khi nhận việc/thêm người/chấm điểm... nên bản thân
+  // Timeline (chỉ fetch 1 lần lúc mount theo taskId) sẽ không tự biết cần
+  // refetch nếu không có tín hiệu này.
+  const [activityTick, setActivityTick] = useState(0);
+
+  const isAdmin = ['admin','manager'].includes(user?.role);
 
   useEffect(()=>{ loadTask(); },[taskId]);
 
@@ -333,6 +381,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
       const{data}=await api.get(`/requests/${taskId}`);
       setTask(data.data);
       setScoreInput(data.data.score??'');
+      setActivityTick(n=>n+1);
       setTimeout(()=>feedRef.current?.scrollTo(0,feedRef.current.scrollHeight),100);
     }catch(e){console.error(e);}
     finally{setLoading(false);}
@@ -397,9 +446,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     catch(e){alert(e.message);}
   };
 
-  // Đổi vai trò Chính ↔ Hỗ trợ cho 1 người đã được thêm — backend addAssignee dùng
-  // INSERT IGNORE (không update được role của dòng đã tồn tại), nên cách gọn nhất
-  // là gỡ ra rồi thêm lại với role mới, tận dụng 2 endpoint sẵn có.
   const toggleAssigneeRole = async (a)=>{
     const newRole = a.role==='support' ? 'main' : 'support';
     try{
@@ -410,18 +456,22 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   };
 
   const claimTask = async()=>{
-    try{await api.post(`/requests/${taskId}/claim`);await loadTask();onSaved?.(task);}
+    try{
+      await api.post(`/requests/${taskId}/claim`);
+      await loadTask();
+      onSaved?.(task);
+      alert(t('req_self_assign_success', { defaultValue: 'Bạn đã nhận và bắt đầu công việc thành công.' }));
+    }
     catch(e){alert(e.response?.data?.message||e.message);}
   };
 
+  // ⚠️ Nếu CV do chính MANAGER tạo (yêu cầu công việc), khi nộp bài đi thẳng
+  // lên Manager duyệt 1 lần duy nhất — bỏ qua bước Leader chấm điểm sơ bộ.
+  // (Chỉ áp dụng khi creator_role==='manager', không tính admin — theo đúng
+  // yêu cầu "nếu manager yêu cầu công việc".)
   const markDone = async()=>{
-    await save({status:'scoring'});
-  };
-
-  const deleteTask = async()=>{
-    if(!confirm(t('req_delete_confirm'))) return;
-    try{await api.delete(`/requests/${taskId}`);onSaved?.();onClose();}
-    catch(e){alert(e.message);}
+    const skipLeaderStep = task.creator_role === 'manager';
+    await save({status: skipLeaderStep ? 'reviewing' : 'scoring'});
   };
 
   if(loading) return <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:'#aaa'}}>⏳</div>;
@@ -429,10 +479,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
   const st=STATUS[task.status]||STATUS.pending;
   const pr=PRIORITY[task.priority]||PRIORITY.medium;
-  const isAdmin    = ['admin','manager'].includes(user?.role);
   const isCreator  = task.created_by === user?.id;
   const isAssignee = (task.assignees||[]).some(a=>a.user_id===user?.id);
-  const canManageAssignees = (isAdmin||isLeader||isAssignee) && !['done','cancelled'].includes(task.status);
+  const canManageAssignees = (isAdmin||isCreator) && !['done','cancelled'].includes(task.status);
   const overdue=task.deadline&&new Date(task.deadline)<new Date()&&task.status!=='done';
   const existingIds=new Set((task.assignees||[]).map(a=>a.user_id));
   const chatItems=task.comments||[];
@@ -448,16 +497,18 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           <span style={{color:C.dark,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{task.title}</span>
         </div>
         <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color,whiteSpace:'nowrap'}}>{st.icon} {t(st.key)}</span>
-        {task.status==='pending'&&!isLeader&&(
-          <button onClick={claimTask} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🙋 {t('req_claim_task')}</button>
-        )}
-        {task.status==='assigned'&&isAssignee&&!isAdmin&&(
-          <button onClick={()=>save({status:'in_progress'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🔄 {t('req_start_work')}</button>
-        )}
-        {(task.status==='in_progress'||(task.status==='assigned'&&isAssignee))&&!isAdmin&&(
-          <button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_mark_done')}</button>
-        )}
-        <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'#aaa':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
+        {(() => {
+          if (task.status==='pending' && !isLeader) {
+            return <button onClick={claimTask} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🙋 {t('req_claim_task')}</button>;
+          }
+          if (task.status==='assigned' && isAssignee && !isAdmin) {
+            return <button onClick={()=>save({status:'in_progress'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🔄 {t('req_start_work')}</button>;
+          }
+          if (task.status==='in_progress' && !isAdmin) {
+            return <button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_mark_done')}</button>;
+          }
+          return <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'#aaa':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>;
+        })()}
         <button onClick={onClose} style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:16,color:'#aaa',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
       </div>
 
@@ -603,8 +654,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 )}
                 {canManageAssignees&&(task.assignees||[]).length<12&&(
                   <div onClick={()=>{
-                      // Người đầu tiên được thêm → mặc định "Chính"; từ người thứ 2 trở đi → mặc định "Hỗ trợ".
-                      // Vẫn cho đổi tay ở thanh chọn bên dưới nếu cần khác đi.
                       setPendingRole((task.assignees||[]).length===0 ? 'main' : 'support');
                       setShowAddUser(p=>!p);
                     }} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:'1.5px dashed #c0cce0',color:'#7a9bbf',fontSize:12,cursor:'pointer'}}
@@ -643,6 +692,13 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               )}
             </Section>
 
+            {/* 🕒 Tiến trình — ai tạo, ai nhận, đổi người thì ai nhận tiếp theo,
+                chấm điểm, duyệt hoàn thành. Không giới hạn quyền — ai xem được
+                CV này thì xem được tiến trình của nó. */}
+            <Section icon="🕒" title={t('req_activity_section', { defaultValue: 'Tiến trình' })}>
+              <ActivityTimeline key={activityTick} taskId={task.id} />
+            </Section>
+
             <Section icon="📎" title={t('req_files_section')}>
               <FileSection taskId={task.id} files={task.files||[]} user={user} onReload={loadTask}/>
             </Section>
@@ -650,29 +706,55 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
             {isLeader&&(
               <Section icon="🏆" title={t('req_leader_scoring')}>
                 {task.status==='scoring'&&(
-                  <div style={{display:'flex',alignItems:'center',gap:10,background:'#f0f4ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
-                    <div style={{flex:'1 1 160px',fontSize:12,color:'#7a9bbf'}}>{t('req_waiting_completion')}</div>
-                    <button onClick={()=>save({status:'in_progress',completed_at:null})}
-                      style={{padding:'7px 14px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',color:'#888',fontSize:12,fontWeight:600,cursor:'pointer'}}>↩️ {t('req_send_back')}</button>
-                    <button onClick={()=>save({status:'reviewing'})}
-                      style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_scoring_done')}</button>
-                  </div>
-                )}
-                {task.status==='reviewing'&&(
-                  <div style={{display:'flex',alignItems:'center',gap:12,background:'#eef3ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
-                    <div style={{flex:'1 1 160px'}}>
-                      <div style={{fontSize:12,color:C.primary,fontWeight:600}}>{t('req_ready_for_final_approval')}</div>
-                      <div style={{fontSize:11,color:'#7a9bbf',marginTop:2}}>{t('req_rescore_hint')}</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:10,background:'#f0f4ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0'}}>
+                    <div style={{fontSize:12,color:'#7a9bbf'}}>
+                      {t('req_leader_score_prompt', { defaultValue: 'Nhập điểm chấm sơ bộ trước khi gửi lên Manager duyệt lần cuối.' })}
                     </div>
-                    <input type="number" min="0" max="10" step="0.5" value={scoreInput}
-                      onChange={e=>setScoreInput(e.target.value)}
-                      placeholder="–"
-                      style={{width:70,textAlign:'center',border:'2px solid #3a7bd5',borderRadius:10,padding:'8px',fontSize:20,fontWeight:900,color:C.primary,background:'#fff',outline:'none'}}/>
-                    <div style={{fontSize:13,color:'#aaa'}}>/ 10</div>
-                    <button onClick={()=>save({status:'done', score: scoreInput===''?undefined:+scoreInput})}
-                      style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_approve_done')}</button>
+                    <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                      <input type="number" min="0" max="10" step="0.5" value={scoreInput}
+                        onChange={e=>setScoreInput(e.target.value)}
+                        placeholder="–"
+                        style={{width:70,textAlign:'center',border:'2px solid #3a7bd5',borderRadius:10,padding:'8px',fontSize:20,fontWeight:900,color:C.primary,background:'#fff',outline:'none'}}/>
+                      <div style={{fontSize:13,color:'#aaa'}}>/ 10</div>
+                      <div style={{flex:'1 1 100px'}}/>
+                      <button onClick={()=>save({status:'in_progress',completed_at:null})}
+                        style={{padding:'7px 14px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'#fff',color:'#888',fontSize:12,fontWeight:600,cursor:'pointer'}}>↩️ {t('req_send_back')}</button>
+                      <button onClick={()=>save({status:'reviewing', score: scoreInput===''?undefined:+scoreInput})}
+                        style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_scoring_done')}</button>
+                    </div>
                   </div>
                 )}
+
+                {task.status==='reviewing'&&(
+                  isAdmin ? (
+                    <div style={{display:'flex',alignItems:'center',gap:12,background:'#eef3ff',padding:'14px 16px',borderRadius:10,border:'1.5px solid #c8d8f0',flexWrap:'wrap'}}>
+                      <div style={{flex:'1 1 160px'}}>
+                        <div style={{fontSize:12,color:C.primary,fontWeight:600}}>{t('req_ready_for_final_approval')}</div>
+                        <div style={{fontSize:11,color:'#7a9bbf',marginTop:2}}>{t('req_rescore_hint')}</div>
+                      </div>
+                      <input type="number" min="0" max="10" step="0.5" value={scoreInput}
+                        onChange={e=>setScoreInput(e.target.value)}
+                        placeholder="–"
+                        style={{width:70,textAlign:'center',border:'2px solid #3a7bd5',borderRadius:10,padding:'8px',fontSize:20,fontWeight:900,color:C.primary,background:'#fff',outline:'none'}}/>
+                      <div style={{fontSize:13,color:'#aaa'}}>/ 10</div>
+                      <button onClick={()=>save({status:'done', score: scoreInput===''?undefined:+scoreInput})}
+                        style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_approve_done')}</button>
+                    </div>
+                  ) : (
+                    <div style={{display:'flex',alignItems:'center',gap:10,background:'#fff4e8',padding:'14px 16px',borderRadius:10,border:'1.5px solid #f5d8a0'}}>
+                      <span style={{fontSize:20}}>⏳</span>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:700,color:C.warning}}>
+                          {t('req_waiting_manager_approval', { defaultValue: 'Đã chấm điểm sơ bộ — đang chờ Manager duyệt lần cuối' })}
+                        </div>
+                        <div style={{fontSize:11,color:'#a08050',marginTop:2}}>
+                          {t('req_waiting_manager_approval_hint', { defaultValue: 'CV sẽ chuyển sang "Hoàn thành" sau khi Manager chấm điểm và duyệt.' })}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                )}
+
                 {task.status==='done'&&(
                   <div>
                     <div style={{fontSize:12,color:C.success,fontWeight:600,marginBottom:8}}>✅ {t('req_status_done')}</div>
@@ -695,9 +777,11 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
           <div style={{padding:'10px 16px',borderTop:`1.5px solid ${C.border}`,display:'flex',gap:8,alignItems:'center',background:'#fff',flexShrink:0}}>
             <div style={{flex:1,fontSize:12,color:'#aaa'}}>{t('req_created_by',{time:fmtDt(task.created_at),name:task.creator_name})}</div>
-            {isLeader&&<button onClick={deleteTask} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #fde8e8',background:'#fde8e8',color:C.danger,fontSize:12,fontWeight:600,cursor:'pointer'}}>🗑 {t('delete')}</button>}
-            {(task.status==='in_progress'||task.status==='assigned')&&<button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #fff4e8',background:'#fff4e8',color:C.warning,fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_submit_done')}</button>}
-            <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 14px',borderRadius:7,border:'none',background:saving?'#aaa':C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
+            {(task.status==='in_progress'||task.status==='assigned') ? (
+              <button onClick={markDone} style={{padding:'6px 14px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_submit_done')}</button>
+            ) : (
+              <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 14px',borderRadius:7,border:'none',background:saving?'#aaa':C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
+            )}
           </div>
         </div>
 

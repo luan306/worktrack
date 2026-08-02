@@ -12,7 +12,8 @@ const NAV = [
   { to: '/requests',  icon: '📨',  key: 'nav_requests' },
   { to: '/completed', icon: '✅',  key: 'nav_completed' },
   { divider: true },
-  { to: '/', icon: '📊',  key: 'nav_dashboard', roles: ['admin','manager'] },
+  { to: '/dashboard', icon: '📊',  key: 'nav_dashboard', roles: ['admin','manager'] },
+  { to: '/activity-log', icon: '📜', key: 'nav_activity_log', roles: ['admin','manager'] },
   { to: '/users',     icon: '👥',  key: 'nav_users',  roles: ['admin','manager','leader'] },
   { to: '/profile',  icon: '⚙️', key: 'nav_settings' },
 ];

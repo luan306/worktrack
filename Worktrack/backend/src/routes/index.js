@@ -8,6 +8,7 @@ const dC  = require('../controllers/daily.controller');
 const rC  = require('../controllers/requests.controller');
 const dbC = require('../controllers/dashboard.controller');
 const nC  = require('../controllers/notifications.controller');
+const alC = require('../controllers/activityLog.controller');
 
 // ── Auth ──
 router.post('/auth/login',   aC.login);
@@ -50,6 +51,7 @@ router.delete('/daily/tasks/:id',             auth(['admin','manager','leader'])
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);
 router.get   ('/requests/:id',                auth(), rC.getOne);
+router.get   ('/requests/:id/activity',       auth(), rC.getActivity);
 router.post  ('/requests',                    auth(['admin','manager','leader']), rC.create);
 router.put   ('/requests/:id',                auth(), rC.update);
 router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
@@ -77,6 +79,11 @@ router.get ('/notifications/unread-count', auth(), nC.unreadCount);
 router.post('/notifications/read-all',     auth(), nC.markAllRead);
 router.get ('/notifications',              auth(), nC.list);
 router.post('/notifications/:id/read',     auth(), nC.markRead);
+router.use('/dashboard', require('./dashboard.routes'));
+
+// ── Activity Log — LỊCH SỬ THAY ĐỔI, chỉ admin/manager được xem ──
+router.get('/activity-logs',             auth(['admin','manager']), alC.list);
+router.get('/activity-logs/action-types',auth(['admin','manager']), alC.listActionTypes);
 
 // Debug: đếm users
 router.get('/debug/users', auth(['admin']), async (req, res) => {

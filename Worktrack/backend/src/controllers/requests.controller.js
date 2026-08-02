@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { logActivity } = require('../services/activityLogService');
 const { notify, notifyMany } = require('../services/notificationService');
 
 // Gom creator + tất cả assignees của 1 task (để gửi thông báo status/comment)
@@ -85,7 +86,7 @@ exports.list = async (req, res) => {
 exports.getOne = async (req, res) => {
   try {
     const [[task]] = await db.query(
-      `SELECT rt.*, u.full_name as creator_name, u.avatar_color as creator_color, g.name as group_name
+      `SELECT rt.*, u.full_name as creator_name, u.avatar_color as creator_color, u.role as creator_role, g.name as group_name
        FROM request_tasks rt LEFT JOIN users u ON u.id=rt.created_by
        LEFT JOIN \`groups\` g ON g.id=rt.group_id WHERE rt.id=?`, [req.params.id]
     );
@@ -102,6 +103,27 @@ exports.getOne = async (req, res) => {
     );
 
     res.json({ success: true, data: { ...task, assignees, files, comments } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// GET /requests/:id/activity — dòng thời gian (tiến trình) của RIÊNG 1 CV:
+// ai tạo → ai nhận → nếu bị đổi người thì ai nhận tiếp theo → chấm điểm →
+// duyệt hoàn thành. Dùng chung bảng activity_logs (đã ghi log sẵn ở các hàm
+// create/addAssignee/removeAssignee/update bên trên), lọc theo entity_id.
+// ⚠️ KHÔNG giới hạn admin/manager như /activity-logs (trang audit toàn hệ
+// thống) — ai xem được chi tiết CV này thì cũng xem được tiến trình của nó,
+// nên chỉ cần auth() thường.
+exports.getActivity = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT al.*, u.full_name as actor_name, u.avatar_color as actor_color
+       FROM activity_logs al
+       LEFT JOIN users u ON u.id=al.actor_id
+       WHERE al.entity_type='request' AND al.entity_id=?
+       ORDER BY al.created_at ASC`,
+      [req.params.id]
+    );
+    res.json({ success: true, data: rows });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -136,6 +158,12 @@ exports.create = async (req, res) => {
       'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
       [taskId, req.user.id, `CV được tạo bởi ${req.user.full_name || req.user.username}`, 'system']
     ).catch(()=>{}); // ignore nếu chưa có cột type
+
+    // 📝 Lịch sử thay đổi — tạo CV
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_created', entityType: 'request', entityId: taskId,
+      description: `${req.user.full_name || req.user.username} đã tạo CV "${title}"`,
+    });
 
     // 🔔 Thông báo cho những người được assign ngay lúc tạo (nếu có)
     if (assignees.length) {
@@ -193,15 +221,29 @@ exports.update = async (req, res) => {
         fields.push('started_at=?'); vals.push(now);
       }
       else if (status === 'scoring') {
-        // Assignee submit hoàn thành → chờ người tạo chấm điểm
+        // Assignee submit hoàn thành → chờ người tạo/leader chấm điểm sơ bộ
         fields.push('status=?'); vals.push('scoring');
         if (!task.completed_at) { fields.push('completed_at=?'); vals.push(now); }
       }
       else if (status === 'reviewing') {
-        // Người tạo chấm xong → gửi manager duyệt
+        // Leader chấm điểm sơ bộ xong → gửi Manager duyệt lần cuối.
+        // ⚠️ HOẶC: CV do chính Manager tạo → assignee nộp bài đi thẳng vào đây,
+        // bỏ qua bước Leader chấm sơ bộ (xem markDone() ở frontend). Trường hợp
+        // này completed_at có thể CHƯA được set qua nhánh 'scoring' ở trên,
+        // nên vẫn cần set ở đây nếu chưa có.
         fields.push('status=?'); vals.push('reviewing');
+        if (!task.completed_at) { fields.push('completed_at=?'); vals.push(now); }
       }
       else if (status === 'done') {
+        // ⚠️ Duyệt hoàn thành lần cuối CHỈ dành cho Manager/Admin — Leader chỉ
+        // được chấm điểm sơ bộ (đưa CV vào status 'reviewing'), không được tự
+        // chốt "Hoàn thành" nữa. Bắt buộc phải qua Manager/Admin duyệt lại.
+        if (!isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: 'Chỉ Manager/Admin mới được duyệt hoàn thành CV. Vui lòng chờ Manager chấm điểm lần cuối.'
+          });
+        }
         // Manager duyệt → done + tính is_late
         fields.push('status=?'); vals.push('done');
         const dl = task.deadline || deadline;
@@ -215,8 +257,9 @@ exports.update = async (req, res) => {
 
     const scoreChanged = score !== undefined && (isLeaderRole||isCreator);
 
-    // Score do leader/manager/admin (hoặc creator) chấm — thường xảy ra ở bước
-    // reviewing→done, khi leader chấm điểm chính xác lại lần cuối.
+    // Score do leader/manager/admin (hoặc creator) chấm — có thể xảy ra ở bước
+    // scoring (leader chấm sơ bộ) hoặc reviewing→done (Manager chấm điểm chính
+    // xác lại lần cuối trước khi duyệt).
     if (scoreChanged) {
       fields.push('score=?');     vals.push(score);
       fields.push('scored_by=?'); vals.push(req.user.id);
@@ -231,13 +274,34 @@ exports.update = async (req, res) => {
     const actorName = req.user.full_name || req.user.username;
 
     if (statusChanged) {
-      const recipients = await getRecipients(id, task.created_by);
+      let recipients = await getRecipients(id, task.created_by);
+
+      // Khi CV chuyển sang "reviewing" (Leader chấm sơ bộ xong, chờ Manager
+      // duyệt lần cuối), Manager/Admin thường KHÔNG nằm trong assignees hay
+      // creator nên trước đây không hề nhận được thông báo gì — bổ sung gửi
+      // riêng cho toàn bộ Admin/Manager đang active ở đúng bước này.
+      if (status === 'reviewing') {
+        const [managers] = await db.query(
+          "SELECT id FROM users WHERE role IN ('admin','manager') AND is_active=1"
+        );
+        recipients = [...new Set([...recipients, ...managers.map(m => m.id)])];
+      }
+
       notifyMany(io, recipients, {
         actorId: req.user.id,
         type: 'request_status_changed',
         entityId: id,
         payload: { title: task.title, status, actorName },
       }).catch(err => console.error('[notify status_changed]', err.message));
+
+      // 📝 Lịch sử thay đổi — duyệt hoàn thành (bước quan trọng nhất trong vòng
+      // đời CV, luôn ghi log dù các đổi status khác không cần ghi).
+      if (status === 'done') {
+        await logActivity({
+          actorId: req.user.id, actionType: 'request_completed', entityType: 'request', entityId: +id,
+          description: `${actorName} đã duyệt hoàn thành CV "${task.title}"${scoreChanged ? ` — điểm cuối: ${score}đ` : ''}`,
+        });
+      }
     }
 
     if (scoreChanged) {
@@ -248,6 +312,15 @@ exports.update = async (req, res) => {
         entityId: id,
         payload: { title: task.title, score, actorName },
       }).catch(err => console.error('[notify scored]', err.message));
+
+      // 📝 Lịch sử thay đổi — chấm điểm (chỉ ghi riêng nếu KHÔNG phải bước
+      // duyệt hoàn thành ở trên, tránh trùng 2 dòng log cho cùng 1 hành động).
+      if (status !== 'done') {
+        await logActivity({
+          actorId: req.user.id, actionType: 'request_scored', entityType: 'request', entityId: +id,
+          description: `${actorName} đã chấm điểm CV "${task.title}": ${score}đ`,
+        });
+      }
     }
 
     res.json({ success: true });
@@ -259,7 +332,7 @@ exports.addAssignee = async (req, res) => {
     const { user_id, role='main' } = req.body;
     const { id } = req.params;
 
-    const [[task]] = await db.query('SELECT title, status FROM request_tasks WHERE id=?', [id]);
+    const [[task]] = await db.query('SELECT title, status, created_by FROM request_tasks WHERE id=?', [id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
 
     // Đã hoàn thành/hủy thì không cho thêm người nữa
@@ -267,22 +340,27 @@ exports.addAssignee = async (req, res) => {
       return res.status(400).json({ success: false, message: 'CV đã hoàn thành, không thể thêm người nữa' });
     }
 
-    // Leader/manager/admin: assign được cho CV bất kỳ.
-    // User thường: chỉ được thêm người khi CHÍNH MÌNH đã là assignee của CV này
-    // (mời đồng nghiệp vào làm chung), không được assign cho CV mình không liên quan.
-    const isPrivileged = ['admin','manager','leader'].includes(req.user.role);
-    if (!isPrivileged) {
-      const [rows] = await db.query(
-        'SELECT 1 FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]
-      );
-      if (!rows.length) {
-        return res.status(403).json({ success: false, message: 'Bạn cần đang tham gia CV này mới được thêm người khác vào làm chung' });
-      }
+    // ⚠️ Chỉ NGƯỜI TẠO CV hoặc Manager/Admin mới được thay đổi người thực hiện
+    // (vd. đổi người khi người đang làm không thực hiện được). Leader (nếu
+    // không phải người tạo) và chính assignee KHÔNG còn được tự thêm người
+    // khác vào CV nữa.
+    const isAdmin   = ['admin','manager'].includes(req.user.role);
+    const isCreator = task.created_by === req.user.id;
+    if (!isAdmin && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được thay đổi người thực hiện' });
     }
 
     await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES (?,?,?)',
       [id, user_id, role]);
     await db.query("UPDATE request_tasks SET status='assigned' WHERE id=? AND status='pending'", [id]);
+
+    // 📝 Lịch sử thay đổi — thêm người thực hiện
+    const [[addedUser]] = await db.query('SELECT full_name FROM users WHERE id=?', [user_id]);
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_assignee_added', entityType: 'request', entityId: +id,
+      description: `${req.user.full_name || req.user.username} đã thêm ${addedUser?.full_name || '?'} vào CV "${task?.title || '?'}" (${role === 'support' ? 'Hỗ trợ' : 'Chính'})`,
+      metadata: { added_user_id: +user_id, role },
+    });
 
     // 🔔 Thông báo cho người được gán
     const io = req.app.get('io');
@@ -302,24 +380,30 @@ exports.removeAssignee = async (req, res) => {
   try {
     const { id, userId } = req.params;
 
-    const [[task]] = await db.query('SELECT status FROM request_tasks WHERE id=?', [id]);
+    const [[task]] = await db.query('SELECT title, status, created_by FROM request_tasks WHERE id=?', [id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
 
     if (['done', 'cancelled'].includes(task.status)) {
       return res.status(400).json({ success: false, message: 'CV đã hoàn thành, không thể chỉnh sửa người thực hiện nữa' });
     }
 
-    const isPrivileged = ['admin','manager','leader'].includes(req.user.role);
-    if (!isPrivileged) {
-      const [rows] = await db.query(
-        'SELECT 1 FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]
-      );
-      if (!rows.length) {
-        return res.status(403).json({ success: false, message: 'Bạn cần đang tham gia CV này mới được xóa người khác' });
-      }
+    // ⚠️ Cùng quy tắc với addAssignee — chỉ người tạo CV hoặc Manager/Admin.
+    const isAdmin   = ['admin','manager'].includes(req.user.role);
+    const isCreator = task.created_by === req.user.id;
+    if (!isAdmin && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được thay đổi người thực hiện' });
     }
 
+    const [[removedUser]] = await db.query('SELECT full_name FROM users WHERE id=?', [userId]);
     await db.query('DELETE FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, userId]);
+
+    // 📝 Lịch sử thay đổi — xóa người thực hiện
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_assignee_removed', entityType: 'request', entityId: +id,
+      description: `${req.user.full_name || req.user.username} đã xóa ${removedUser?.full_name || '?'} khỏi CV "${task?.title || '?'}"`,
+      metadata: { removed_user_id: +userId },
+    });
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -328,6 +412,20 @@ exports.removeAssignee = async (req, res) => {
 // khác với addAssignee (chỉ leader/manager/admin mới gán được cho NGƯỜI KHÁC).
 // Không nhận user_id từ req.body — luôn tự gán cho chính req.user.id, tránh user
 // tự gán CV cho người khác qua endpoint này.
+//
+// ⚠️ NGHIỆP VỤ "Tự nhận việc = Bắt đầu công việc" (self-assign auto-start):
+// Khi CV đang ở trạng thái pending, CHƯA có assignee nào, và người dùng tự
+// thêm chính mình → hệ thống tự động:
+//   - Thêm user vào assignees (role='main')
+//   - Chuyển thẳng status → 'in_progress' (bỏ qua bước 'assigned' trung gian)
+//   - Ghi started_at = NOW(), started_by = user hiện tại (nếu cột tồn tại)
+//   - Ghi 2 dòng activity log hệ thống
+// Hours Worked KHÔNG cần xử lý riêng ở đây — vì started_at vừa set = hiện tại
+// nên khi frontend tính (now - started_at) sẽ tự nhiên ra 00:00 ngay lúc này,
+// rồi mới bắt đầu chạy tiếp như task in_progress bình thường khác.
+// Trường hợp KHÔNG áp dụng (leader/manager tự gán người khác, thêm hỗ trợ vào
+// CV đã có người, CV không còn ở status pending...) đã được chặn ở guard bên
+// dưới, vì endpoint claim CHỈ chạy khi status==='pending' && cnt===0.
 exports.claim = async (req, res) => {
   try {
     const { id } = req.params;
@@ -338,14 +436,50 @@ exports.claim = async (req, res) => {
       'SELECT COUNT(*) AS cnt FROM request_task_assignees WHERE task_id=?', [id]
     );
 
-    // Chỉ được nhận khi CV còn "pending" và chưa có ai nhận trước
+    // Chỉ được nhận khi CV còn "pending" và chưa có ai nhận trước — đây chính
+    // là 2 điều kiện áp dụng self-assign auto-start theo nghiệp vụ yêu cầu.
     if (task.status !== 'pending' || cnt > 0) {
       return res.status(400).json({ success: false, message: 'CV này đã có người nhận hoặc không còn ở trạng thái chờ' });
     }
 
     await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES (?,?,?)',
       [id, req.user.id, 'main']);
-    await db.query("UPDATE request_tasks SET status='assigned' WHERE id=?", [id]);
+
+    // Kiểm tra cột 'started_by' có tồn tại không trước khi ghi — tránh lỗi
+    // nếu bảng chưa có cột này (giống pattern SHOW COLUMNS đang dùng ở nơi khác).
+    const [cols] = await db.query('SHOW COLUMNS FROM request_tasks');
+    const hasStartedBy = cols.some(c => c.Field === 'started_by');
+
+    // ⚠️ DÙNG NOW() CỦA MYSQL, KHÔNG tự tính giờ bằng new Date().toISOString()
+    // ở Node — toISOString() luôn trả về giờ UTC, nhưng khi frontend đọc lại
+    // chuỗi đó và tạo `new Date(started_at)`, trình duyệt lại hiểu là GIỜ ĐỊA
+    // PHƯƠNG (Việt Nam, UTC+7) chứ không phải UTC → lệch đúng 7 tiếng ngay khi
+    // vừa tự nhận việc. Dùng NOW() để MySQL tự ghi theo múi giờ server, khớp
+    // với cách các cột thời gian khác trong hệ thống (created_at, locked_at...)
+    // đang hoạt động đúng.
+    if (hasStartedBy) {
+      await db.query(
+        "UPDATE request_tasks SET status='in_progress', started_at=NOW(), started_by=? WHERE id=?",
+        [req.user.id, id]
+      );
+    } else {
+      await db.query(
+        "UPDATE request_tasks SET status='in_progress', started_at=NOW() WHERE id=?",
+        [id]
+      );
+    }
+
+    const actorName = req.user.full_name || req.user.username;
+
+    // 📝 Activity log — 2 dòng theo đúng nghiệp vụ yêu cầu
+    await db.query(
+      'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
+      [id, req.user.id, `${actorName} đã tự nhận công việc này.`, 'system']
+    ).catch(() => {});
+    await db.query(
+      'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
+      [id, req.user.id, `Công việc đã tự động bắt đầu.`, 'system']
+    ).catch(() => {});
 
     // 🔔 Báo cho người tạo CV biết đã có người nhận
     const io = req.app.get('io');
@@ -354,10 +488,10 @@ exports.claim = async (req, res) => {
       actorId: req.user.id,
       type: 'request_claimed',
       entityId: id,
-      payload: { title: task.title, actorName: req.user.full_name || req.user.username },
+      payload: { title: task.title, actorName },
     }).catch(err => console.error('[notify claimed]', err.message));
 
-    res.json({ success: true });
+    res.json({ success: true, data: { status: 'in_progress' } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -457,10 +591,18 @@ exports.score = async (req, res) => {
 
 exports.remove = async (req, res) => {
   try {
+    const [[task]] = await db.query('SELECT title FROM request_tasks WHERE id=?', [req.params.id]);
     await db.query('DELETE FROM request_task_assignees WHERE task_id=?', [req.params.id]);
     await db.query('DELETE FROM request_task_comments WHERE task_id=?', [req.params.id]);
     await db.query('DELETE FROM request_task_files WHERE task_id=?', [req.params.id]);
     await db.query('DELETE FROM request_tasks WHERE id=?', [req.params.id]);
+
+    // 📝 Lịch sử thay đổi — xóa CV (lấy title TRƯỚC khi xóa, ở trên)
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_deleted', entityType: 'request', entityId: +req.params.id,
+      description: `${req.user.full_name || req.user.username} đã xóa CV "${task?.title || '?'}"`,
+    });
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

@@ -55,6 +55,7 @@ function Chip({ color=C.primary, name='?', size=32, active=false }) {
 export default function DailyPage() {
   const { t, i18n } = useTranslation();
   const DAYS_VI = t('weekdays_mon_first', { returnObjects: true });
+  const DAYS_SHORT_VI = t('weekdays_short_mon_first', { returnObjects: true, defaultValue: ['T2','T3','T4','T5','T6','T7','CN'] });
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
   const { user, can } = useAuth();
   const navigate = useNavigate();
@@ -77,6 +78,14 @@ export default function DailyPage() {
   const [deleteTask,      setDeleteTask]     = useState(null);
   const [confirmDelGroup, setConfirmDelGroup]= useState(null);
   const [showCalendar,    setShowCalendar]   = useState(false);
+  // Lý do sửa điểm — chỉ áp dụng khi SỬA LẠI 1 log đã được chấm trước đó
+  // (is_done=1 hoặc score>0) sang giá trị khác. {key: reasonText}
+  const [editReasons,     setEditReasons]    = useState({});
+  const [showReasonModal, setShowReasonModal]= useState(false);
+  // Xem/sửa lại lý do của 1 ô ĐÃ lưu — bấm icon 📝 trên ô để mở
+  const [viewReasonTarget, setViewReasonTarget] = useState(null); // {taskId,dateStr,taskName,dateLabel}
+  const [viewReasonText,   setViewReasonText]   = useState('');
+  const [savingReason,     setSavingReason]     = useState(false);
   const [calMonth,        setCalMonth]       = useState(()=>{ const d=new Date(); return {y:d.getFullYear(),m:d.getMonth()}; });
 
   // viewDays: 7 ngày (week) hoặc toàn tháng (month) — VẪN HIỂN THỊ T7/CN,
@@ -160,6 +169,7 @@ export default function DailyPage() {
         newLogs[`${log.daily_task_id}_${log.user_id}_${dateStr}`] = {
           is_done: log.is_done,
           score:   log.score,
+          edit_reason: log.edit_reason || '',
         };
       });
       setLogs(newLogs);
@@ -194,16 +204,60 @@ export default function DailyPage() {
     setPending(p=>({...p,[key]:{...cur,score:val}}));
   };
 
-  const saveLogs = async () => {
+  // Có phải đang SỬA LẠI 1 log đã được chấm trước đó (is_done=1 hoặc score>0)
+  // sang giá trị khác không? Nếu đúng → bắt buộc phải có lý do mới cho lưu.
+  const needsReason = (key) => {
+    const orig = logs[key];
+    if (!orig) return false; // chưa từng chấm — không phải "sửa lại"
+    if (!(orig.is_done || +orig.score>0)) return false; // trước đó đang trống/0
+    const val = pending[key];
+    if (val===undefined) return false;
+    return !!val.is_done!==!!orig.is_done || +val.score!==+orig.score;
+  };
+
+  const doSaveLogs = async () => {
     const logsArr = Object.entries(pending).map(([key,val])=>{
       const [taskId,userId,...dp] = key.split('_');
-      return { daily_task_id:+taskId, user_id:+userId, log_date:dp.join('_'), ...val };
+      return { daily_task_id:+taskId, user_id:+userId, log_date:dp.join('_'), ...val, edit_reason: editReasons[key]||null };
     });
     if (!logsArr.length) return;
     setSaving(true);
-    try { await api.post('/daily/logs',{logs:logsArr}); await loadTasksAndLogs(); }
-    catch(e){ alert(e.message); }
+    try {
+      await api.post('/daily/logs',{logs:logsArr});
+      await loadTasksAndLogs();
+      setEditReasons({});
+    }
+    catch(e){ alert(e.response?.data?.message||e.message); }
     finally{ setSaving(false); }
+  };
+
+  const saveLogs = () => {
+    const reasonKeys = Object.keys(pending).filter(needsReason);
+    const missing = reasonKeys.filter(k=>!(editReasons[k]||'').trim());
+    if (missing.length) { setShowReasonModal(true); return; }
+    doSaveLogs();
+  };
+
+  // Lưu lại LÝ DO đã sửa cho 1 ô (không đổi điểm/tick — chỉ cập nhật edit_reason)
+  const saveViewedReason = async () => {
+    if (!viewReasonTarget || !activeMember) return;
+    if (!viewReasonText.trim()) { alert(t('daily_reason_placeholder','Nhập lý do sửa điểm...')); return; }
+    const key = `${viewReasonTarget.taskId}_${activeMember.id}_${viewReasonTarget.dateStr}`;
+    const existing = logs[key] || { is_done:0, score:0 };
+    setSavingReason(true);
+    try {
+      await api.post('/daily/logs',{ logs: [{
+        daily_task_id: viewReasonTarget.taskId,
+        user_id: activeMember.id,
+        log_date: viewReasonTarget.dateStr,
+        is_done: existing.is_done,
+        score: existing.score,
+        edit_reason: viewReasonText.trim(),
+      }]});
+      await loadTasksAndLogs();
+      setViewReasonTarget(null);
+    } catch(e){ alert(e.response?.data?.message||e.message); }
+    finally{ setSavingReason(false); }
   };
 
   const createTask = async (form) => {
@@ -250,10 +304,20 @@ export default function DailyPage() {
     : `${t('daily_week')} ${getWeekNum(weekStart)} — ${fmtDate(weekDays[0])} ${t('daily_to')} ${fmtDate(weekDays[weekDays.length-1])}/${weekDays[weekDays.length-1].getFullYear()}`;
   const hasPending = Object.keys(pending).length > 0;
 
+  // frequency_day giờ là chuỗi (VARCHAR) — có thể là "3" (1 ngày) hoặc
+  // "2,4,6" (nhiều ngày với weekly_count/monthly_count). Luôn parse ra mảng số.
+  const parseFreqDays = (v) => (v==null?'':String(v)).split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
+
   const taskShowsOnDay = (task,day) => {
     if (task.frequency==='daily') return true;
-    if (task.frequency==='weekly') return task.frequency_day===(day.getDay()===0?7:day.getDay());
-    if (task.frequency==='monthly') return task.frequency_day===day.getDate();
+    const dow = day.getDay()===0?7:day.getDay();
+    const dom = day.getDate();
+    if (task.frequency==='weekly')  return parseFreqDays(task.frequency_day)[0]===dow;
+    if (task.frequency==='monthly') return parseFreqDays(task.frequency_day)[0]===dom;
+    // "weekly_count" = chọn sẵn NHIỀU THỨ cụ thể trong tuần (VD T2+T4+T6).
+    // "monthly_count" = chọn sẵn NHIỀU NGÀY cụ thể trong tháng.
+    if (task.frequency==='weekly_count')  return parseFreqDays(task.frequency_day).includes(dow);
+    if (task.frequency==='monthly_count') return parseFreqDays(task.frequency_day).includes(dom);
     return false;
   };
 
@@ -605,34 +669,6 @@ export default function DailyPage() {
 
           {activeMember&&selectedGroup&&(
             <>
-              {/* Member header */}
-              <div className="dp-member-header" style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,background:'#fff',padding:'12px 16px',borderRadius:10,border:`1.5px solid ${C.border}`}}>
-                <Chip color={activeMember.avatar_color||C.primary} name={activeMember.full_name} size={42}/>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:700,color:C.dark}}>{activeMember.full_name}</div>
-                  <div style={{fontSize:11,color:'#aaa',marginTop:2}}>
-                    {t('daily_scoring_this_week')} · {hasPending?<span style={{color:C.warning,fontWeight:600}}>⚠ {t('daily_unsaved_changes',{count:Object.keys(pending).length})}</span>:<span style={{color:C.success}}>✓ {t('daily_saved')}</span>}
-                  </div>
-                </div>
-                <div style={{textAlign:'right'}}>
-                  <div style={{fontSize:22,fontWeight:900,color:C.success}}>{memberWeekTotal(activeMember.id)}đ</div>
-                  <div style={{fontSize:10,color:'#aaa'}}>{t('daily_total_this_week')}</div>
-                </div>
-                {/* Nút prev/next member */}
-                {members.length>1&&(
-                  <div style={{display:'flex',gap:4}}>
-                    <button onClick={()=>{
-                      const idx=members.findIndex(m=>m.id===activeMember.id);
-                      setActiveMember(members[(idx-1+members.length)%members.length]);
-                    }} style={{padding:'4px 8px',borderRadius:6,border:`1.5px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:12}}>◀</button>
-                    <button onClick={()=>{
-                      const idx=members.findIndex(m=>m.id===activeMember.id);
-                      setActiveMember(members[(idx+1)%members.length]);
-                    }} style={{padding:'4px 8px',borderRadius:6,border:`1.5px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:12}}>▶</button>
-                  </div>
-                )}
-              </div>
-
               {/* Matrix table */}
               <div style={{width:'100%',overflowX:'auto',borderRadius:12,WebkitOverflowScrolling:'touch'}}>
               <table style={{borderCollapse:'collapse',minWidth:'100%',background:'#fff',borderRadius:12,overflow:'hidden',border:'1.5px solid #dde8ff',boxShadow:'0 2px 12px rgba(58,123,213,.07)'}}>
@@ -640,7 +676,7 @@ export default function DailyPage() {
                   <tr>
                     <th className="dp-stickycol" style={{background:'#162030',borderRight:'2px solid #2d3f52',minWidth:260,position:'sticky',left:0,zIndex:2}}>
                       <div style={{padding:'14px 16px',fontSize:11,color:'#7a9bbf'}}>
-                        {selectedGroup.icon||'🏭'} {selectedGroup.name} · Công việc
+                        {selectedGroup.icon||'🏭'} {selectedGroup.name} · {t('daily_th_task','Công việc')}
                       </div>
                     </th>
                     {viewDays.map((day,i)=>{
@@ -664,7 +700,7 @@ export default function DailyPage() {
                             }
                             <div style={{fontSize:viewMode==='month'?9:10,color:today?'#2ecc71':'#7a9bbf'}}>{fmtDate(day)}</div>
                             {dayOff
-                              ? <div style={{fontSize:9,color:'#7a9bbf',marginTop:1}}>Nghỉ</div>
+                              ? <div style={{fontSize:9,color:'#7a9bbf',marginTop:1}}>{t('daily_day_off','Nghỉ')}</div>
                               : (!future&&dTotal>0&&viewMode==='week'&&(
                                   <div style={{fontSize:10,fontWeight:700,color:dTotal>=dMax?'#2ecc71':C.warning,marginTop:1}}>
                                     {dTotal.toFixed(0)}/{dMax}đ
@@ -678,40 +714,54 @@ export default function DailyPage() {
                     <th className="dp-sumcol" style={{background:'#162030',borderLeft:'2px solid #3a7bd5',minWidth:70}}>
                       <div style={{padding:'8px 4px',display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
                         <div style={{fontSize:11,fontWeight:700,color:'#f1c40f'}}>∑</div>
-                        <div style={{fontSize:10,color:'#f1c40f'}}>Tổng</div>
+                        <div style={{fontSize:10,color:'#f1c40f'}}>{t('daily_total_label','Tổng')}</div>
                       </div>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {tasks.map(task=>{
+                    const isMultiDay = task.frequency==='weekly_count' || task.frequency==='monthly_count';
+                    const selectedDays = isMultiDay ? parseFreqDays(task.frequency_day) : [];
                     const freqColor = task.frequency==='daily'  ?{bg:'#e8f8ee',color:'#27ae60'}
                                     : task.frequency==='weekly' ?{bg:'#e8f0ff',color:'#3a7bd5'}
-                                    :{bg:'#fff4e8',color:'#e67e22'};
-                    const freqLabel = task.frequency==='daily'  ?'📅 Hằng ngày'
-                                    : task.frequency==='weekly' ?'📆 Tuần 1 lần'
-                                    :`🗓 Tháng · ngày ${task.frequency_day}`;
+                                    : task.frequency==='monthly'?{bg:'#fff4e8',color:'#e67e22'}
+                                    :{bg:'#f3e8ff',color:'#8e44ad'}; // weekly_count / monthly_count
+                    const freqLabel = task.frequency==='daily'         ?`📅 ${t('daily_freq_daily','Hằng ngày')}`
+                                    : task.frequency==='weekly'        ?`📆 ${t('daily_freq_weekly','Tuần 1 lần')}`
+                                    : task.frequency==='monthly'       ?`🗓 ${t('daily_freq_monthly_day',{day:task.frequency_day, defaultValue:'Tháng · ngày {{day}}'})}`
+                                    : task.frequency==='weekly_count'  ?`📆 ${selectedDays.map(d=>DAYS_SHORT_VI[d-1]).join(', ')}`
+                                    :`🗓 ${t('daily_freq_monthly_count_days',{days:selectedDays.join(', '), defaultValue:'Ngày {{days}}'})}`;
 
-                    // Tổng task này của member này trong tuần (bỏ qua T7/CN vì không chấm điểm)
-                    let rowTotal=0,rowMax=0;
+                    // Tổng task này của member này trong tuần (bỏ qua T7/CN vì không chấm
+                    // điểm) — dùng chung 1 công thức cho MỌI loại tần suất, vì
+                    // taskShowsOnDay() giờ đã tự biết chính xác ngày nào cần hiện
+                    // (kể cả weekly_count/monthly_count với nhiều ngày chọn sẵn).
+                    let rowTotal=0,rowMax=0,completedCount=0;
                     weekDays.forEach(day=>{
                       if (!taskShowsOnDay(task,day)) return;
                       if (isWeekend(day)) return;
                       const l=getLog(task.id,activeMember.id,ymd(day));
                       rowTotal+=+l.score||0;
                       if (!isFuture(day)) rowMax+=+task.max_score||0;
+                      if (l.is_done) completedCount++;
                     });
                     const sumColor=rowTotal===0?'#ccc':rowTotal>=rowMax?C.success:C.warning;
 
                     return (
-                      <tr key={task.id} style={{borderLeft:task.frequency==='weekly'?`3px solid ${C.primary}`:task.frequency==='monthly'?`3px solid ${C.warning}`:undefined}}>
+                      <tr key={task.id} style={{borderLeft:task.frequency==='weekly'||task.frequency==='weekly_count'?`3px solid ${C.primary}`:task.frequency==='monthly'||task.frequency==='monthly_count'?`3px solid ${C.warning}`:undefined}}>
                         <td className="dp-stickycol" style={{background:'#f8f9fc',borderRight:'2px solid #dde3f0',position:'sticky',left:0,zIndex:1}}>
                           <div style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:8}}>
                             <div style={{flex:1}}>
                               <div style={{fontSize:13,color:'#2c3e50',fontWeight:500}}>{task.name}</div>
-                              <div style={{display:'flex',alignItems:'center',gap:5,marginTop:3}}>
+                              <div style={{display:'flex',alignItems:'center',gap:5,marginTop:3,flexWrap:'wrap'}}>
                                 <span style={{fontSize:10,color:'#bbb',background:'#f0f2f8',padding:'1px 7px',borderRadius:8}}>{task.max_score}đ</span>
                                 <span style={{fontSize:10,fontWeight:700,padding:'1px 7px',borderRadius:8,background:freqColor.bg,color:freqColor.color}}>{freqLabel}</span>
+                                {isMultiDay&&(
+                                  <span style={{fontSize:10,fontWeight:700,padding:'1px 7px',borderRadius:8,background:completedCount>=selectedDays.length?'#e8f8ee':'#fff4e8',color:completedCount>=selectedDays.length?C.success:C.warning}}>
+                                    ✓ {completedCount}/{selectedDays.length} {t('daily_times_label','lần')}
+                                  </span>
+                                )}
                               </div>
                             </div>
                             {isLeader&&(
@@ -738,6 +788,9 @@ export default function DailyPage() {
                           const score  = log.score;
                           const changed= !locked && pending[`${task.id}_${activeMember.id}_${dateStr}`]!==undefined;
                           const warn   = !!scoreWarn[`${task.id}_${activeMember.id}_${dateStr}`];
+                          // Lý do sửa điểm đã LƯU (không lấy từ pending — chỉ hiện icon
+                          // cho những gì đã thực sự ghi vào DB).
+                          const savedReason = logs[`${task.id}_${activeMember.id}_${dateStr}`]?.edit_reason;
 
                           return (
                             <td key={i} style={{
@@ -746,7 +799,17 @@ export default function DailyPage() {
                               textAlign:'center',
                               outline:changed?`1px solid #f5d8a0`:'none',
                               opacity: dayOff?0.6:1,
+                              position:'relative',
                             }}>
+                              {savedReason&&(
+                                <span onClick={(e)=>{
+                                    e.stopPropagation();
+                                    setViewReasonTarget({ taskId:task.id, dateStr, taskName:task.name, dateLabel:fmtDate(day) });
+                                    setViewReasonText(savedReason);
+                                  }}
+                                  title={`${t('daily_reason_tooltip_prefix','Lý do sửa điểm')}: ${savedReason}`}
+                                  style={{position:'absolute',top:2,right:2,fontSize:11,cursor:'pointer',opacity:0.8,padding:2}}>📝</span>
+                              )}
                               <div style={{padding:'8px 6px',display:'flex',flexDirection:'column',alignItems:'center',gap:5}}>
                                 {/* Tick */}
                                 <div className="dp-tick" onClick={()=>!locked&&toggleTick(task.id,activeMember.id,dateStr)} style={{
@@ -773,11 +836,11 @@ export default function DailyPage() {
                                     color:locked?'#ccc':isDone?C.primary:score>0?C.primary:'#ccc',
                                     background:warn?'#fdecea':(locked||!isLeader?'transparent':'#f7f9ff'),
                                   }}
-                                  placeholder={dayOff?'nghỉ':future?'–':'0'}
+                                  placeholder={dayOff?t('daily_day_off_short','nghỉ'):future?'–':'0'}
                                 />
                                 {warn&&(
                                   <div style={{fontSize:9,color:C.danger,fontWeight:700,whiteSpace:'nowrap'}}>
-                                    Tối đa {task.max_score}đ
+                                    {t('daily_max_score_warn',{max:task.max_score, defaultValue:'Tối đa {{max}}đ'})}
                                   </div>
                                 )}
                               </div>
@@ -799,43 +862,16 @@ export default function DailyPage() {
                       <td colSpan={colCount} style={{border:'1.5px dashed #c8d8f0'}}
                         onMouseEnter={e=>e.currentTarget.style.background='#f0f4ff'}
                         onMouseLeave={e=>e.currentTarget.style.background=''}>
-                        <div style={{padding:'10px 14px',color:C.primary,fontSize:13,fontWeight:600}}>➕ Thêm công việc mới</div>
+                        <div style={{padding:'10px 14px',color:C.primary,fontSize:13,fontWeight:600}}>➕ {t('daily_add_task_row','Thêm công việc mới')}</div>
                       </td>
                     </tr>
                   )}
                   {tasks.length===0&&(
                     <tr><td colSpan={colCount} style={{textAlign:'center',padding:32,color:'#bbb',fontSize:13}}>
-                      {isLeader?'Chưa có công việc. Nhấn "➕ Thêm công việc".':'Chưa có công việc.'}
+                      {isLeader?t('daily_empty_tasks_leader','Chưa có công việc. Nhấn "➕ Thêm công việc".'):t('daily_empty_tasks','Chưa có công việc.')}
                     </td></tr>
                   )}
                 </tbody>
-
-                <tfoot>
-                  <tr>
-                    <td className="dp-stickycol" style={{background:'#1e2a3a',color:'#9db8d2',padding:'10px 16px',fontSize:11,textAlign:'left',borderColor:'#2d3f52',position:'sticky',left:0}}>
-                      🏆 Tổng {activeMember.full_name.split(' ').pop()}
-                    </td>
-                    {weekDays.map((day,i)=>{
-                      const future = isFuture(day);
-                      const today  = isToday(day);
-                      const dayOff = isWeekend(day);
-                      const locked = future || dayOff;
-                      const total  = memberDayTotal(activeMember.id,day);
-                      const max    = dayMax(day);
-                      const color  = locked?'#555':total>=max&&max>0?'#2ecc71':total>0?C.warning:'#555';
-                      return (
-                        <td key={i} style={{background:today?'rgba(46,204,113,0.08)':'#1e2a3a',borderColor:'#2d3f52',textAlign:'center',padding:'10px 6px',opacity:dayOff?0.55:1}}>
-                          <div style={{fontSize:16,fontWeight:900,color}}>{locked?'–':total.toFixed(0)}</div>
-                          {!locked&&max>0&&<div style={{fontSize:9,color:'#7a9bbf'}}>/{max}đ</div>}
-                        </td>
-                      );
-                    })}
-                    <td style={{background:'#162030',borderLeft:'2px solid #3a7bd5',textAlign:'center',padding:'10px 6px'}}>
-                      <div style={{fontSize:10,color:'#7a9bbf'}}>Tuần này</div>
-                      <div style={{fontSize:18,fontWeight:900,color:'#2ecc71'}}>{memberWeekTotal(activeMember.id)}đ</div>
-                    </td>
-                  </tr>
-                </tfoot>
               </table>
               </div>
             </>
@@ -844,7 +880,10 @@ export default function DailyPage() {
           {!selectedGroup&&(
             <div style={{textAlign:'center',padding:60}}>
               <div style={{fontSize:40,marginBottom:12}}>🏭</div>
-              <div style={{fontSize:14,color:'#bbb'}}>Admin vào <strong>Quản lý User → Nhóm</strong> để tạo nhóm</div>
+              <div style={{fontSize:14,color:'#bbb'}}>
+                {t('daily_admin_create_group_hint',{ defaultValue: 'Admin vào <1>Quản lý User → Nhóm</1> để tạo nhóm' })
+                  .split(/<1>|<\/1>/).map((part,i)=> i===1 ? <strong key={i}>{part}</strong> : <span key={i}>{part}</span>)}
+              </div>
             </div>
           )}
         </div>
@@ -853,14 +892,14 @@ export default function DailyPage() {
       {/* Bottom bar */}
       <div className="dp-bottombar" style={{padding:'11px 20px',background:'#fff',borderTop:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
         <div style={{flex:1,fontSize:12,color:'#aaa'}}>
-          <span style={{color:C.success,fontWeight:600}}>📅 Hằng ngày</span> ·&nbsp;
-          <span style={{color:C.primary,fontWeight:600}}>📆 Tuần 1 lần</span> ·&nbsp;
-          <span style={{color:C.warning,fontWeight:600}}>🗓 Tháng 1 lần</span>
-          &nbsp;— Ô trống = ngày không có lịch · <span style={{color:C.warning}}>Ô vàng = chưa lưu</span>
+          <span style={{color:C.success,fontWeight:600}}>📅 {t('daily_freq_daily','Hằng ngày')}</span> ·&nbsp;
+          <span style={{color:C.primary,fontWeight:600}}>📆 {t('daily_freq_weekly','Tuần 1 lần')}</span> ·&nbsp;
+          <span style={{color:C.warning,fontWeight:600}}>🗓 {t('daily_freq_monthly','Tháng 1 lần')}</span>
+          &nbsp;— {t('daily_legend_empty','Ô trống = ngày không có lịch')} · <span style={{color:C.warning}}>{t('daily_legend_unsaved','Ô vàng = chưa lưu')}</span>
         </div>
         <button onClick={saveLogs} disabled={saving}
           style={{padding:'6px 18px',borderRadius:7,border:'none',background:hasPending?C.primary:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',boxShadow:hasPending?'0 4px 14px rgba(58,123,213,0.35)':'none'}}>
-          {saving?'...':hasPending?`💾 Lưu (${Object.keys(pending).length} thay đổi)`:'💾 Đã lưu'}
+          {saving?'...':hasPending?t('daily_save_n_changes',{count:Object.keys(pending).length, defaultValue:'💾 Lưu ({{count}} thay đổi)'}):t('daily_already_saved','💾 Đã lưu')}
         </button>
       </div>
 
@@ -872,25 +911,107 @@ export default function DailyPage() {
       )}
       {deleteTask&&(
         <ConfirmModal
-          icon="🗑️" title="Xóa công việc này?"
+          icon="🗑️" title={t('daily_delete_task_confirm_title','Xóa công việc này?')}
           desc={`«${deleteTask.name}»`}
-          warn="Toàn bộ dữ liệu điểm sẽ bị xóa!"
+          warn={t('daily_delete_task_confirm_warn','Toàn bộ dữ liệu điểm sẽ bị xóa!')}
           onCancel={()=>setDeleteTask(null)}
-          onConfirm={doDeleteTask} confirmLabel="🗑 Xóa luôn" danger/>
+          onConfirm={doDeleteTask} confirmLabel={`🗑 ${t('daily_delete_task_confirm_btn','Xóa luôn')}`} danger/>
       )}
       {confirmDelGroup&&(
         <ConfirmModal
-          icon="⚠️" title="Xóa nhóm này?"
-          desc={`Nhóm: ${confirmDelGroup.name}`}
-          warn="Tất cả công việc và điểm sẽ bị xóa vĩnh viễn!"
+          icon="⚠️" title={t('daily_delete_group_confirm_title','Xóa nhóm này?')}
+          desc={t('daily_delete_group_confirm_desc',{name:confirmDelGroup.name, defaultValue:'Nhóm: {{name}}'})}
+          warn={t('daily_delete_group_confirm_warn','Tất cả công việc và điểm sẽ bị xóa vĩnh viễn!')}
           onCancel={()=>setConfirmDelGroup(null)}
-          onConfirm={doDeleteGroup} confirmLabel="🗑 Xóa nhóm" danger/>
+          onConfirm={doDeleteGroup} confirmLabel={`🗑 ${t('daily_delete_group_confirm_btn','Xóa nhóm')}`} danger/>
+      )}
+      {showReasonModal&&(
+        <EditReasonModal
+          items={Object.keys(pending).filter(needsReason).map(key=>{
+            const [taskId,,...dp]=key.split('_');
+            const task=tasks.find(x=>x.id===+taskId);
+            const orig=logs[key]||{score:0};
+            const val=pending[key]||{score:0};
+            return { key, taskName:task?.name||'?', dateLabel:fmtDate(new Date(dp.join('_'))), oldScore:+orig.score||0, newScore:+val.score||0 };
+          })}
+          reasons={editReasons}
+          onChangeReason={(key,text)=>setEditReasons(p=>({...p,[key]:text}))}
+          onCancel={()=>setShowReasonModal(false)}
+          onConfirm={()=>{
+            const stillMissing = Object.keys(pending).filter(needsReason).some(k=>!(editReasons[k]||'').trim());
+            if (stillMissing) { alert(t('daily_reason_all_required','Vui lòng nhập lý do cho tất cả các mục!')); return; }
+            setShowReasonModal(false);
+            doSaveLogs();
+          }}/>
+      )}
+      {viewReasonTarget&&(
+        <ViewEditReasonModal
+          taskName={viewReasonTarget.taskName}
+          dateLabel={viewReasonTarget.dateLabel}
+          reason={viewReasonText}
+          saving={savingReason}
+          onChangeReason={setViewReasonText}
+          onCancel={()=>setViewReasonTarget(null)}
+          onSave={saveViewedReason}/>
       )}
     </div>
   );
 }
 
+// Modal bắt buộc nhập lý do khi sửa lại 1 điểm ĐÃ được chấm trước đó sang giá
+// trị khác — mỗi mục thay đổi có 1 ô lý do riêng, phải điền đủ mới lưu được.
+// Modal xem lại + SỬA lý do của 1 ô đã lưu — mở khi bấm icon 📝 trên ô điểm.
+function ViewEditReasonModal({ taskName, dateLabel, reason, saving, onChangeReason, onCancel, onSave }) {
+  const { t } = useTranslation();
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}>
+      <div className="dp-modal" style={{background:'#fff',borderRadius:14,padding:26,width:400,maxWidth:'92vw',boxShadow:'0 8px 40px rgba(0,0,0,.18)'}}>
+        <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:4}}>📝 {t('daily_reason_view_title','Lý do sửa điểm')}</div>
+        <div style={{fontSize:12,color:'#888',marginBottom:14}}>{taskName} · {dateLabel}</div>
+        <textarea value={reason} onChange={e=>onChangeReason(e.target.value)} autoFocus
+          placeholder={t('daily_reason_placeholder','Nhập lý do sửa điểm...')}
+          style={{width:'100%',padding:'8px 10px',border:'1.5px solid #dde3f0',borderRadius:8,fontSize:13,resize:'vertical',minHeight:80,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:18}}>
+          <button onClick={onCancel} style={{padding:'8px 18px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>{t('daily_cancel_btn2','Huỷ')}</button>
+          <button onClick={onSave} disabled={saving} style={{padding:'8px 18px',borderRadius:8,border:'none',background:saving?'#aaa':'#3a7bd5',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            {saving?'...':`💾 ${t('save','Lưu')}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditReasonModal({ items, reasons, onChangeReason, onCancel, onConfirm }) {
+  const { t } = useTranslation();
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}>
+      <div className="dp-modal" style={{background:'#fff',borderRadius:14,padding:26,width:440,maxWidth:'92vw',boxShadow:'0 8px 40px rgba(0,0,0,.18)',maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+        <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:6}}>✏️ {t('daily_reason_modal_title','Lý do sửa điểm')}</div>
+        <div style={{fontSize:12,color:'#888',marginBottom:16}}>{t('daily_reason_modal_desc','Các điểm dưới đây đã được chấm trước đó — vui lòng ghi rõ lý do khi sửa lại.')}</div>
+        <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:14,paddingRight:2}}>
+          {items.map(item=>(
+            <div key={item.key}>
+              <div style={{fontSize:12,fontWeight:700,color:'#1e2a3a'}}>{item.taskName} · {item.dateLabel}</div>
+              <div style={{fontSize:11,color:'#aaa',marginBottom:6}}>{item.oldScore}đ → <span style={{color:'#e67e22',fontWeight:700}}>{item.newScore}đ</span></div>
+              <textarea value={reasons[item.key]||''} onChange={e=>onChangeReason(item.key,e.target.value)}
+                placeholder={t('daily_reason_placeholder','Nhập lý do sửa điểm...')}
+                style={{width:'100%',padding:'8px 10px',border:'1.5px solid #dde3f0',borderRadius:8,fontSize:12,resize:'vertical',minHeight:50,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+            </div>
+          ))}
+          {!items.length&&<div style={{fontSize:12,color:'#bbb',textAlign:'center',padding:20}}>{t('daily_reason_none','Không có mục nào cần lý do.')}</div>}
+        </div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:18}}>
+          <button onClick={onCancel} style={{padding:'8px 18px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>{t('daily_cancel_btn2','Huỷ')}</button>
+          <button onClick={onConfirm} style={{padding:'8px 18px',borderRadius:8,border:'none',background:'#3a7bd5',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>✅ {t('daily_reason_confirm_btn','Xác nhận & Lưu')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConfirmModal({ icon, title, desc, warn, onCancel, onConfirm, confirmLabel, danger }) {
+  const { t } = useTranslation();
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}
       onClick={e=>e.target===e.currentTarget&&onCancel()}>
@@ -900,7 +1021,7 @@ function ConfirmModal({ icon, title, desc, warn, onCancel, onConfirm, confirmLab
         <div style={{fontSize:13,color:'#888',marginBottom:6}}>{desc}</div>
         {warn&&<div style={{fontSize:12,color:'#e74c3c',marginBottom:20}}>{warn}</div>}
         <div style={{display:'flex',gap:10,justifyContent:'center'}}>
-          <button onClick={onCancel} style={{padding:'8px 20px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>Huỷ bỏ</button>
+          <button onClick={onCancel} style={{padding:'8px 20px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>{t('daily_cancel_btn','Huỷ bỏ')}</button>
           <button onClick={onConfirm} style={{padding:'8px 20px',borderRadius:8,border:'none',background:danger?'#e74c3c':'#3a7bd5',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>{confirmLabel}</button>
         </div>
       </div>
@@ -909,31 +1030,47 @@ function ConfirmModal({ icon, title, desc, warn, onCancel, onConfirm, confirmLab
 }
 
 function TaskModal({ task, onClose, onSave }) {
+  const { t } = useTranslation();
   const [form,setForm]=useState({name:task?.name||'',max_score:task?.max_score||3,frequency:task?.frequency||'daily',frequency_day:task?.frequency_day||''});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const selectedDaysArr = (form.frequency_day||'').toString().split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
+  const toggleDay = (dayNum) => {
+    const next = selectedDaysArr.includes(dayNum)
+      ? selectedDaysArr.filter(x=>x!==dayNum)
+      : [...selectedDaysArr, dayNum];
+    set('frequency_day', next.sort((a,b)=>a-b).join(','));
+  };
   const submit=()=>{
-    if (!form.name.trim()) { alert('Nhập tên!'); return; }
-    if (!form.max_score)   { alert('Nhập điểm!'); return; }
-    if (form.frequency==='weekly'&&!form.frequency_day)  { alert('Chọn ngày trong tuần!'); return; }
-    if (form.frequency==='monthly'&&!form.frequency_day) { alert('Nhập ngày trong tháng!'); return; }
-    onSave({name:form.name,max_score:+form.max_score,frequency:form.frequency,frequency_day:form.frequency!=='daily'?+form.frequency_day:null});
+    if (!form.name.trim()) { alert(t('daily_alert_need_name','Nhập tên!')); return; }
+    if (!form.max_score)   { alert(t('daily_alert_need_score','Nhập điểm!')); return; }
+    if (form.frequency==='weekly'&&!form.frequency_day)  { alert(t('daily_alert_need_weekday','Chọn ngày trong tuần!')); return; }
+    if (form.frequency==='monthly'&&!form.frequency_day) { alert(t('daily_alert_need_monthday','Nhập ngày trong tháng!')); return; }
+    if (form.frequency==='weekly_count'&&!form.frequency_day)  { alert(t('daily_alert_need_weekly_days','Chọn ít nhất 1 thứ trong tuần!')); return; }
+    if (form.frequency==='monthly_count'&&!form.frequency_day) { alert(t('daily_alert_need_monthly_days','Chọn ít nhất 1 ngày trong tháng!')); return; }
+    // ⚠️ KHÔNG dùng +form.frequency_day nữa — với weekly_count/monthly_count,
+    // giá trị là chuỗi nhiều ngày (VD "2,4,6"), ép +Number sẽ ra NaN.
+    onSave({name:form.name,max_score:+form.max_score,frequency:form.frequency,frequency_day:form.frequency!=='daily'?form.frequency_day:null});
   };
   const FI={width:'100%',padding:'8px 12px',border:'1.5px solid #dde3f0',borderRadius:8,fontSize:13,color:'#1e2a3a',outline:'none',boxSizing:'border-box'};
   const FL={display:'block',fontSize:11,fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:'0.4px',marginBottom:6};
-  const FREQS=[{key:'daily',icon:'📅',label:'Hằng ngày',sub:'Mỗi ngày'},{key:'weekly',icon:'📆',label:'Tuần 1 lần',sub:'Chọn ngày/tuần'},{key:'monthly',icon:'🗓',label:'Tháng 1 lần',sub:'Chọn ngày/tháng'}];
-  const DAYS=['T2','T3','T4','T5','T6','T7','CN'];
+  const FREQS=[
+    {key:'daily',         icon:'📅', label:t('daily_freq_daily','Hằng ngày'),           sub:t('daily_freq_daily_sub','Mỗi ngày')},
+    {key:'weekly_count',  icon:'🔁', label:t('daily_freq_weekly_count_opt','Nhiều thứ/tuần'),  sub:t('daily_freq_weekly_count_sub','Chọn sẵn nhiều thứ')},
+    {key:'monthly_count', icon:'🔁', label:t('daily_freq_monthly_count_opt','Nhiều ngày/tháng'), sub:t('daily_freq_monthly_count_sub','Chọn sẵn nhiều ngày')},
+  ];
+  const DAYS=t('weekdays_short_mon_first',{returnObjects:true, defaultValue:['T2','T3','T4','T5','T6','T7','CN']});
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:50,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}
       onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="dp-modal" style={{background:'#fff',borderRadius:14,padding:28,width:460,maxWidth:'92vw',boxShadow:'0 8px 40px rgba(0,0,0,.18)',maxHeight:'90vh',overflowY:'auto'}}>
-        <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:20}}>{task?'✏️ Sửa công việc':'➕ Thêm công việc mới'}</div>
-        <div style={{marginBottom:16}}><label style={FL}>Tên công việc *</label><input style={FI} value={form.name} onChange={e=>set('name',e.target.value)} autoFocus placeholder="Vd: Kiểm tra máy đầu ca"/></div>
-        <div style={{marginBottom:16}}><label style={FL}>Điểm tối đa *</label><input type="number" inputMode="numeric" min="1" max="100" style={FI} value={form.max_score} onChange={e=>set('max_score',e.target.value)}/></div>
+        <div style={{fontSize:15,fontWeight:800,color:'#1e2a3a',marginBottom:20}}>{task?`✏️ ${t('daily_edit_task_title','Sửa công việc')}`:`➕ ${t('daily_add_task_title','Thêm công việc mới')}`}</div>
+        <div style={{marginBottom:16}}><label style={FL}>{t('daily_field_task_name','Tên công việc')} *</label><input style={FI} value={form.name} onChange={e=>set('name',e.target.value)} autoFocus placeholder={t('daily_field_task_name_placeholder','Vd: Kiểm tra máy đầu ca')}/></div>
+        <div style={{marginBottom:16}}><label style={FL}>{t('daily_field_max_score','Điểm tối đa')} *</label><input type="number" inputMode="numeric" min="1" max="100" style={FI} value={form.max_score} onChange={e=>set('max_score',e.target.value)}/></div>
         <div style={{marginBottom:16}}>
-          <label style={FL}>Tần suất *</label>
+          <label style={FL}>{t('daily_field_frequency','Tần suất')} *</label>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             {FREQS.map(f=>(
-              <div key={f.key} onClick={()=>set('frequency',f.key)} style={{flex:'1 1 100px',padding:10,borderRadius:9,cursor:'pointer',textAlign:'center',border:`2px solid ${form.frequency===f.key?'#3a7bd5':'#e8eaed'}`,background:form.frequency===f.key?'#eef3ff':'#fff'}}>
+              <div key={f.key} onClick={()=>{ set('frequency',f.key); set('frequency_day',''); }} style={{flex:'1 1 100px',padding:10,borderRadius:9,cursor:'pointer',textAlign:'center',border:`2px solid ${form.frequency===f.key?'#3a7bd5':'#e8eaed'}`,background:form.frequency===f.key?'#eef3ff':'#fff'}}>
                 <div style={{fontSize:20,marginBottom:4}}>{f.icon}</div>
                 <div style={{fontSize:12,fontWeight:700,color:form.frequency===f.key?'#3a7bd5':'#333'}}>{f.label}</div>
                 <div style={{fontSize:10,color:'#888',marginTop:2}}>{f.sub}</div>
@@ -941,21 +1078,38 @@ function TaskModal({ task, onClose, onSave }) {
             ))}
           </div>
         </div>
-        {form.frequency==='weekly'&&(
-          <div style={{marginBottom:16}}><label style={FL}>Ngày trong tuần *</label>
+        {form.frequency==='weekly_count'&&(
+          <div style={{marginBottom:16}}>
+            <label style={FL}>{t('daily_field_weekly_days','Chọn các thứ trong tuần')} *</label>
             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-              {DAYS.map((d,i)=>(
-                <div key={d} onClick={()=>set('frequency_day',i+1)} style={{width:38,height:38,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,cursor:'pointer',border:`2px solid ${form.frequency_day===(i+1)?'#3a7bd5':'#e8eaed'}`,background:form.frequency_day===(i+1)?'#3a7bd5':'#fff',color:form.frequency_day===(i+1)?'#fff':'#888'}}>{d}</div>
-              ))}
+              {DAYS.map((d,i)=>{
+                const dayNum=i+1;
+                const selected=selectedDaysArr.includes(dayNum);
+                return (
+                  <div key={d} onClick={()=>toggleDay(dayNum)} style={{width:38,height:38,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,cursor:'pointer',border:`2px solid ${selected?'#3a7bd5':'#e8eaed'}`,background:selected?'#3a7bd5':'#fff',color:selected?'#fff':'#888'}}>{d}</div>
+                );
+              })}
             </div>
+            <div style={{fontSize:11,color:'#aaa',marginTop:5}}>{t('daily_field_weekly_days_hint','Công việc chỉ hiện ra và tính điểm đúng vào những thứ đã chọn — bấm để chọn/bỏ chọn.')}</div>
           </div>
         )}
-        {form.frequency==='monthly'&&(
-          <div style={{marginBottom:16}}><label style={FL}>Ngày trong tháng *</label><input type="number" inputMode="numeric" min="1" max="31" style={FI} value={form.frequency_day} onChange={e=>set('frequency_day',e.target.value)} placeholder="Vd: 1, 15..."/></div>
+        {form.frequency==='monthly_count'&&(
+          <div style={{marginBottom:16}}>
+            <label style={FL}>{t('daily_field_monthly_days','Chọn các ngày trong tháng')} *</label>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap',maxHeight:150,overflowY:'auto',padding:'6px 2px'}}>
+              {Array.from({length:31},(_,i)=>i+1).map(dayNum=>{
+                const selected=selectedDaysArr.includes(dayNum);
+                return (
+                  <div key={dayNum} onClick={()=>toggleDay(dayNum)} style={{width:30,height:30,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,cursor:'pointer',border:`2px solid ${selected?'#3a7bd5':'#e8eaed'}`,background:selected?'#3a7bd5':'#fff',color:selected?'#fff':'#888'}}>{dayNum}</div>
+                );
+              })}
+            </div>
+            <div style={{fontSize:11,color:'#aaa',marginTop:5}}>{t('daily_field_monthly_days_hint','Công việc chỉ hiện ra và tính điểm đúng vào những ngày đã chọn — bấm để chọn/bỏ chọn.')}</div>
+          </div>
         )}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:22}}>
-          <button onClick={onClose} style={{padding:'8px 20px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>Huỷ</button>
-          <button onClick={submit} style={{padding:'8px 20px',borderRadius:8,border:'none',background:'#3a7bd5',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>💾 Lưu công việc</button>
+          <button onClick={onClose} style={{padding:'8px 20px',borderRadius:8,border:'1.5px solid #dde3f0',background:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',color:'#555'}}>{t('daily_cancel_btn2','Huỷ')}</button>
+          <button onClick={submit} style={{padding:'8px 20px',borderRadius:8,border:'none',background:'#3a7bd5',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>💾 {t('daily_save_task_btn','Lưu công việc')}</button>
         </div>
       </div>
     </div>

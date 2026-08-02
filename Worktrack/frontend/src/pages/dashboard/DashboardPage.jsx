@@ -39,7 +39,12 @@ export default function DashboardPage() {
   const [selected,  setSelected]  = useState(null); // NV được chọn → modal
   const [showLock,  setShowLock]  = useState(false);
   const [locking,   setLocking]   = useState(false);
-  const [exporting, setExporting] = useState(false);
+
+  // ── Modal chọn kỳ để xuất Excel ──
+  const [showExportList,   setShowExportList]   = useState(false);
+  const [exportList,        setExportList]        = useState([]);
+  const [loadingExportList, setLoadingExportList] = useState(false);
+  const [downloadingFile,   setDownloadingFile]   = useState(null); // filename đang tải
 
   useEffect(() => { api.get('/groups').then(r => setGroups(r.data.data)).catch(() => {}); }, []);
   useEffect(() => { fetchScores(); }, [view, groupId]);
@@ -72,18 +77,27 @@ export default function DashboardPage() {
     window.URL.revokeObjectURL(blobUrl);
   };
 
-  // Nút "📤 Xuất Excel" ở topbar — chỉ tải lại báo cáo của kỳ đã CHỐT gần nhất
-  // (GET /dashboard/last-export), KHÔNG chốt/reset điểm gì cả. Khác hẳn nút
-  // "🔒 Chốt & Reset" bên cạnh.
-  const doExportExcel = async () => {
-    setExporting(true);
+  // Nút "📤 Xuất Excel" ở topbar — mở modal liệt kê TẤT CẢ các kỳ đã CHỐT
+  // (GET /dashboard/exports) để người dùng chọn kỳ muốn tải lại báo cáo.
+  // KHÔNG chốt/reset điểm gì cả — khác hẳn nút "🔒 Chốt & Reset" bên cạnh.
+  const openExportList = async () => {
+    setShowExportList(true);
+    setLoadingExportList(true);
     try {
-      const r = await api.get('/dashboard/last-export');
-      const { filename } = r.data.data || {};
-      if (filename) await downloadExcelFile(filename);
+      const r = await api.get('/dashboard/exports');
+      setExportList(r.data.data || []);
     } catch (e) {
       alert(e.response?.data?.message || e.message);
-    } finally { setExporting(false); }
+    } finally { setLoadingExportList(false); }
+  };
+
+  const handleDownloadPeriod = async (filename) => {
+    setDownloadingFile(filename);
+    try {
+      await downloadExcelFile(filename);
+    } catch (e) {
+      alert(e.response?.data?.message || e.message);
+    } finally { setDownloadingFile(null); }
   };
 
   const doLock = async () => {
@@ -214,9 +228,9 @@ export default function DashboardPage() {
         <div className="dash-title" style={{ fontSize: 15, fontWeight: 800, color: C.dark, flex: 1 }}>
           📊 {t('dash_title')}
         </div>
-        <button onClick={doExportExcel} disabled={exporting}
-          style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid #dde3f0', background: '#fff', fontSize: 12, fontWeight: 600, cursor: exporting?'default':'pointer', color: '#555', display: 'flex', alignItems: 'center', gap: 5 }}>
-          {exporting ? '...' : `📤 ${t('dash_export_excel')}`}
+        <button onClick={openExportList}
+          style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid #dde3f0', background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', gap: 5 }}>
+          📤 {t('dash_export_excel')}
         </button>
         <button onClick={() => setShowLock(true)}
           style={{ padding: '6px 14px', borderRadius: 7, border: 'none', background: C.danger, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -438,6 +452,55 @@ export default function DashboardPage() {
 
       {/* ── Modal: Chi tiết NV ── */}
       {selected && <DetailModal s={selected} onClose={() => setSelected(null)} />}
+
+      {/* ── Modal: Chọn kỳ để xuất Excel ── */}
+      {showExportList && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)' }}
+          onClick={e => e.target === e.currentTarget && setShowExportList(false)}>
+          <div className="dash-modal-nopad" style={{ background: '#fff', borderRadius: 14, width: 460, maxWidth: '92vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,.2)', overflow: 'hidden' }}>
+
+            {/* Header */}
+            <div className="dash-detail-header" style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: C.dark, flex: 1 }}>📤 {t('dash_export_list_title', { defaultValue: 'Chọn kỳ để tải Excel' })}</div>
+              <button onClick={() => setShowExportList(false)}
+                style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${C.border}`, background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 16, color: '#888', flexShrink: 0 }}>
+                ×
+              </button>
+            </div>
+
+            {/* List */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {loadingExportList && (
+                <div style={{ textAlign: 'center', padding: 32, color: '#aaa' }}>⏳</div>
+              )}
+
+              {!loadingExportList && exportList.length === 0 && (
+                <div style={{ textAlign: 'center', padding: 32, color: '#aaa', fontSize: 13 }}>
+                  {t('dash_export_list_empty', { defaultValue: 'Chưa có kỳ nào được chốt để xuất Excel' })}
+                </div>
+              )}
+
+              {!loadingExportList && exportList.map(p => (
+                <div key={p.id}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 9, border: `1.5px solid ${C.border}`, background: C.bg }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.dark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.name || `Kỳ #${p.id}`}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+                      {t('dash_export_locked_at', { defaultValue: 'Chốt lúc' })}: {p.locked_at ? new Date(p.locked_at).toLocaleString(currentLocale) : '—'}
+                    </div>
+                  </div>
+                  <button onClick={() => handleDownloadPeriod(p.excel_path)} disabled={downloadingFile === p.excel_path}
+                    style={{ padding: '7px 14px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', fontSize: 12, fontWeight: 700, cursor: downloadingFile === p.excel_path ? 'default' : 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                    {downloadingFile === p.excel_path ? '...' : `⬇ ${t('dash_export_download', { defaultValue: 'Tải về' })}`}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal: Chốt & Reset ── */}
       {showLock && (

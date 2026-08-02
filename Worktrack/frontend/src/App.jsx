@@ -6,14 +6,15 @@ import useAuth from './store/authStore';
 import { ProtectedRoute, GuestRoute, MainLayout } from './components/layout/Layout';
 import LoginPage from './pages/auth/LoginPage';
 
-const BoardPage     = lazy(() => import('./pages/board/BoardPage'));
-const DailyPage     = lazy(() => import('./pages/daily/DailyPage'));
-const RequestsPage  = lazy(() => import('./pages/requests/RequestsPage'));
-const CompletedPage = lazy(() => import('./pages/completed/CompletedPage'));
-const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
-const UsersPage     = lazy(() => import('./pages/users/UsersPage'));
-const ProfilePage = lazy(() => import('./pages/profile/ProfilePage.jsx'));
-const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
+const BoardPage       = lazy(() => import('./pages/board/BoardPage'));
+const DailyPage       = lazy(() => import('./pages/daily/DailyPage'));
+const RequestsPage    = lazy(() => import('./pages/requests/RequestsPage'));
+const CompletedPage   = lazy(() => import('./pages/completed/CompletedPage'));
+const DashboardPage   = lazy(() => import('./pages/dashboard/DashboardPage'));
+const UsersPage       = lazy(() => import('./pages/users/UsersPage'));
+const ProfilePage     = lazy(() => import('./pages/profile/ProfilePage.jsx'));
+const ActivityLogPage = lazy(() => import('./pages/activity/ActivityLogPage'));
+const NotFoundPage    = lazy(() => import('./pages/NotFoundPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -67,6 +68,11 @@ export default function App() {
                 {/* Dashboard — CHỈ admin/manager, leader gõ URL cũng bị chặn về 404 */}
                 <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
                   <Route path="dashboard" element={<DashboardPage />} />
+                </Route>
+
+                {/* Lịch sử thay đổi — CHỈ admin/manager, giống Dashboard */}
+                <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
+                  <Route path="activity-log" element={<ActivityLogPage />} />
                 </Route>
 
                 {/* Users — admin/manager/leader */}

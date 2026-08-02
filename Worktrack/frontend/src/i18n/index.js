@@ -353,6 +353,8 @@ const en = {
   role_user:'User',
   role_admin:'Administrator',
   role_leader:'Leader',
+  nav_activity_log:'Activity log',
+  activity_log_title:'Activity Log',
 
 };
 
@@ -707,6 +709,8 @@ const ja = {
   role_user:'ユーザー',
   role_admin:'管理者',
   role_leader:'リーダー',
+  nav_activity_log:'アクティビティログ',
+  activity_log_title:'アクティビティログ',
 };
 
 const vi = {
@@ -1060,6 +1064,8 @@ const vi = {
   profile_save_failed:'Lưu thất bại, vui lòng thử lại',
   profile_saved:'Đã lưu',
   profile_save_info:'Thông tin hồ sơ đã được cập nhật thành công',
+  nav_activity_log:'Nhật ký hoạt động',
+  activity_log_title:'Nhật ký hoạt động',
 };
 
 i18n.use(initReactI18next).init({

@@ -26,6 +26,7 @@ const isNearDeadline = (task) => {
   return diff > 0 && diff <= NEAR_DEADLINE_MS;
 };
 const isOverdue = (task) => task.deadline && new Date(task.deadline) < new Date() && task.status!=='done';
+const isUnassigned = (task) => !(task.assignees && task.assignees.length);
 
 const Chip = ({color=C.primary,name='?',size=22})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
@@ -134,6 +135,10 @@ function DailyCard({group,onClick}){
   );
 }
 
+// Thẻ request — thiết kế lại để phân biệt nhanh bằng MÀU chứ không chỉ chữ:
+// viền trái đậm màu theo mức độ khẩn cấp (trễ hạn > sắp hết hạn > ưu tiên),
+// nền hơi ngả màu cho 2 trạng thái khẩn cấp nhất để nhận ra ngay cả khi
+// nhiều thẻ xếp sát nhau trên màn hình nhỏ.
 function RequestCard({task,onNav}){
   const { t } = useTranslation();
   const priKey = task.priority==='high'?'high':task.priority==='low'?'low':'medium';
@@ -142,22 +147,27 @@ function RequestCard({task,onNav}){
   const overdue=isOverdue(task);
   const near=isNearDeadline(task);
   const fresh=isTaskNew(task);
+  const unassigned=isUnassigned(task);
   const fmt=d=>d?new Date(d).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+
+  // Viền trái + nền: ưu tiên trễ hạn trước, rồi sắp hết hạn, còn lại theo priority
+  const accentColor = overdue ? C.danger : near ? C.warning : priColor;
+  const tint = overdue ? '#fff6f6' : near ? '#fffaf2' : '#fff';
+
   return (
     <div onClick={onNav} onMouseEnter={e=>e.currentTarget.style.boxShadow='0 4px 16px rgba(58,123,213,0.13)'} onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}
-      style={{background:'#fff',borderRadius:10,border:`1.5px solid ${near||overdue?C.danger:C.border}`,overflow:'hidden',cursor:'pointer'}}>
+      style={{background:tint,borderRadius:10,border:`1.5px solid ${C.border}`,borderLeft:`4px solid ${accentColor}`,overflow:'hidden',cursor:'pointer'}}>
       <div style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:8,borderBottom:`1px solid ${C.inner}`}}>
         <span>{task.priority==='high'?'🔴':task.priority==='medium'?'🟡':'🟢'}</span>
-        <div style={{fontSize:13,fontWeight:700,color:C.dark,flex:1}}>{task.title}</div>
-        <span style={{fontSize:10,fontWeight:700,color:priColor}}>{t(priKey)}</span>
+        <div style={{fontSize:13,fontWeight:700,color:C.dark,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{task.title}</div>
+        <span style={{fontSize:10,fontWeight:700,color:priColor,whiteSpace:'nowrap'}}>{t(priKey)}</span>
       </div>
-      {(fresh||near||overdue)&&(
-        <div style={{padding:'6px 14px 0',display:'flex',gap:5,flexWrap:'wrap'}}>
-          {overdue&&<Badge text={`⚠ ${t('board_tag_overdue','Trễ hạn')}`} bg="#fde8e8" color={C.danger}/>}
-          {!overdue&&near&&<Badge text={`⏳ ${t('board_tag_near_deadline','Sắp hết hạn')}`} bg="#fff4e8" color={C.warning}/>}
-          {fresh&&<Badge text={`🆕 ${t('board_tag_new','Mới')}`} bg="#eaf3ff" color={C.primary}/>}
-        </div>
-      )}
+      <div style={{padding:'6px 14px 0',display:'flex',gap:5,flexWrap:'wrap'}}>
+        {overdue&&<Badge text={`⚠ ${t('board_tag_overdue','Trễ hạn')}`} bg="#fde8e8" color={C.danger}/>}
+        {!overdue&&near&&<Badge text={`⏳ ${t('board_tag_near_deadline','Sắp hết hạn')}`} bg="#fff4e8" color={C.warning}/>}
+        {fresh&&<Badge text={`🆕 ${t('board_tag_new','Mới')}`} bg="#eaf3ff" color={C.primary}/>}
+        {unassigned&&<Badge text={`👷 ${t('board_tag_unassigned','Chưa nhận')}`} bg="#f3e8ff" color="#8e44ad"/>}
+      </div>
       <div style={{padding:'10px 14px',display:'flex',flexDirection:'column',gap:5}}>
         <MetaRow icon="👤" label={t('label_assigned_by')} value={task.creator_name}/>
         <MetaRow icon="👷" label={t('label_assignee')} value={assignee?assignee.full_name:t('board_not_assigned')} vc={assignee?'#444':'#aaa'}/>
@@ -198,16 +208,24 @@ export default function BoardPage(){
   const today=new Date().toLocaleDateString('en-CA');
 
   const [dailyGroups,setDailyGroups]=useState([]);
+  const [allGroups,setAllGroups]=useState([]); // toàn bộ nhóm công ty — dùng cho dropdown lọc CV theo nhóm
   const [requests,setRequests]=useState([]);
   const [completed,setCompleted]=useState([]);
   const [loading,setLoading]=useState(true);
+
+  // Bộ lọc theo tag cho cột "Yêu cầu" — bấm để chỉ xem 1 nhóm cụ thể,
+  // "Tất cả" giữ nguyên thứ tự ưu tiên (trễ hạn/sắp hết hạn/mới lên đầu).
+  const [reqFilter,setReqFilter]=useState('all');
+  // Bộ lọc theo Nhóm/Phòng ban — kết hợp AND với reqFilter ở trên.
+  // '' = không lọc theo nhóm (xem tất cả các nhóm).
+  const [reqGroupFilter,setReqGroupFilter]=useState('');
 
   // Trang hiện tại của mỗi cột — reset về 1 khi dữ liệu cột đó đổi (fetch lại/lọc lại)
   const [dailyPage,setDailyPage]=useState(1);
   const [reqPage,setReqPage]=useState(1);
   const [donePage,setDonePage]=useState(1);
   useEffect(()=>{ setDailyPage(p=>Math.min(p,totalPagesOf(dailyGroups))); },[dailyGroups]);
-  useEffect(()=>{ setReqPage(p=>Math.min(p,totalPagesOf(requests))); },[requests]);
+  useEffect(()=>{ setReqPage(1); },[reqFilter,reqGroupFilter]);
   useEffect(()=>{ setDonePage(p=>Math.min(p,totalPagesOf(completed))); },[completed]);
 
   // Fetch mỗi lần mount
@@ -250,21 +268,28 @@ export default function BoardPage(){
       // trang Hoàn thành đầy đủ nếu còn nhiều hơn số đã tải về đây.
       setCompleted((cRes.data.data||[]).slice(0,60));
 
-      const allGroups=gRes.data.data||[];
+      const allGroupsRes=gRes.data.data||[];
+      setAllGroups(allGroupsRes);
       const userGroupIds=user?.groups?.map(g=>g.id)||[];
-      const visible=can('admin','manager')?allGroups:allGroups.filter(g=>userGroupIds.includes(g.id));
+      const visible=can('admin','manager')?allGroupsRes:allGroupsRes.filter(g=>userGroupIds.includes(g.id));
       if(!visible.length){ setDailyGroups([]); return; }
 
       const boardResults=await Promise.all(
         visible.map(g=>api.get(`/daily/board?group_id=${g.id}&date=${today}`).catch(()=>({data:{data:[]}})))
       );
       const d=new Date(); const dow=d.getDay()===0?7:d.getDay(); const dom=d.getDate();
+      // frequency_day giờ là chuỗi (có thể "3" hoặc "2,4,6") — luôn parse ra mảng số.
+      const parseFreqDays=(v)=>(v==null?'':String(v)).split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
       const enriched=visible.map((g,gi)=>{
         const item=(boardResults[gi].data.data||[])[0]||{};
         const tasks=(item.tasks||[]).filter(t=>{
           if(t.frequency==='daily') return true;
-          if(t.frequency==='weekly') return t.frequency_day===dow;
-          if(t.frequency==='monthly') return t.frequency_day===dom;
+          if(t.frequency==='weekly')  return parseFreqDays(t.frequency_day)[0]===dow;
+          if(t.frequency==='monthly') return parseFreqDays(t.frequency_day)[0]===dom;
+          // "weekly_count"/"monthly_count" = chọn sẵn NHIỀU thứ/ngày cụ thể —
+          // chỉ hiện đúng ngày nằm trong danh sách đã chọn.
+          if(t.frequency==='weekly_count')  return parseFreqDays(t.frequency_day).includes(dow);
+          if(t.frequency==='monthly_count') return parseFreqDays(t.frequency_day).includes(dom);
           return false;
         });
         return {...g,tasks,members:item.members||[]};
@@ -282,6 +307,40 @@ export default function BoardPage(){
     return `📅 ${days[dt.getDay()]}, ${dt.toLocaleDateString(currentLocale)}`;
   };
 
+  // Đếm số lượng theo từng tag — luôn tính trên TOÀN BỘ `requests` (không phụ
+  // thuộc filter đang chọn), để badge số lượng trên mỗi nút lọc luôn đúng.
+  const reqCounts = {
+    all: requests.length,
+    overdue: requests.filter(isOverdue).length,
+    near: requests.filter(isNearDeadline).length,
+    new: requests.filter(isTaskNew).length,
+    unassigned: requests.filter(isUnassigned).length,
+  };
+  const REQ_FILTERS = [
+    ['all',        t('board_filter_all','Tất cả'),        null],
+    ['overdue',    t('board_tag_overdue','Trễ hạn'),        '⚠'],
+    ['near',       t('board_tag_near_deadline','Sắp hết hạn'), '⏳'],
+    ['new',        t('board_tag_new','Mới'),                '🆕'],
+    ['unassigned', t('board_tag_unassigned','Chưa nhận'),   '👷'],
+  ];
+  const filteredRequests = requests.filter(tsk=>{
+    if (reqGroupFilter && String(tsk.group_id)!==reqGroupFilter) return false;
+    if (reqFilter==='all')        return true;
+    if (reqFilter==='overdue')    return isOverdue(tsk);
+    if (reqFilter==='near')       return isNearDeadline(tsk);
+    if (reqFilter==='new')        return isTaskNew(tsk);
+    if (reqFilter==='unassigned') return isUnassigned(tsk);
+    return true;
+  });
+
+  // Danh sách nhóm để đổ vào dropdown lọc — lấy từ chính dữ liệu request đang
+  // có (không gọi thêm API), nên chỉ hiện đúng những nhóm THỰC SỰ có ít nhất
+  // 1 request, tránh dropdown dài lê thê với các nhóm rỗng.
+  // Dùng TOÀN BỘ nhóm công ty (đã fetch từ /groups) cho dropdown, thay vì suy
+  // ra từ CV hiện có — đảm bảo dropdown luôn hiện đủ nhóm dù CV có gán nhóm
+  // hay chưa.
+  const reqGroups = allGroups.map(g=>({id:String(g.id), name:g.name}));
+
   const ColHdr=({icon,title,count,countBg,countColor,extra})=>(
     <div style={{padding:'12px 16px',borderBottom:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:8,background:'#fff',flexShrink:0}}>
       <span style={{fontSize:16}}>{icon}</span>
@@ -297,6 +356,9 @@ export default function BoardPage(){
         .brd-root { box-sizing: border-box; }
         .brd-root *, .brd-root *::before, .brd-root *::after { box-sizing: border-box; }
 
+        .brd-root .brd-filter-chip { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
+        .brd-root .brd-filter-chip:active { transform: scale(0.94); }
+
         @media (max-width: 900px) {
           .brd-root .brd-topbar { flex-wrap: wrap !important; padding: 10px 14px !important; gap: 8px !important; }
           .brd-root .brd-title { flex-basis: 100% !important; }
@@ -308,6 +370,8 @@ export default function BoardPage(){
           .brd-root .brd-body { overflow-x: auto !important; overflow-y: hidden !important; scroll-snap-type: x mandatory !important; -webkit-overflow-scrolling: touch; }
           .brd-root .brd-col { flex: 0 0 92% !important; max-width: 92% !important; scroll-snap-align: start !important; border-right: none !important; margin-right: 10px !important; }
           .brd-root .brd-col:last-child { margin-right: 0 !important; }
+
+          .brd-root .brd-req-filterbar { padding: 8px 10px !important; }
         }
         @media (max-width: 480px) {
           .brd-root .brd-col { flex: 0 0 94% !important; max-width: 94% !important; }
@@ -343,13 +407,38 @@ export default function BoardPage(){
         <div className="brd-col" style={{flex:1,display:'flex',flexDirection:'column',borderRight:`1.5px solid ${C.border}`,overflow:'hidden',minWidth:0}}>
           <ColHdr icon="📨" title={t('board_col_requests')} count={requests.length} countBg="#fff4e8" countColor={C.warning}
             extra={isLeader&&<button onClick={()=>navigate('/requests?create=1')} style={{padding:'4px 10px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:11,fontWeight:600,cursor:'pointer'}}>＋ {t('create')}</button>}/>
+
+          {/* Tag filter bar — bấm để chỉ xem 1 nhóm; số trong ngoặc luôn phản
+              ánh tổng thực tế của nhóm đó bất kể đang lọc gì. Kết hợp AND với
+              dropdown lọc theo Nhóm/Phòng ban ngay bên dưới. */}
+          <div className="brd-req-filterbar" style={{padding:'8px 12px',borderBottom:`1px solid ${C.border}`,background:C.bg,display:'flex',gap:5,flexWrap:'wrap',flexShrink:0,alignItems:'center'}}>
+            {REQ_FILTERS.map(([key,label,icon])=>(
+              <button key={key} className="brd-filter-chip" onClick={()=>setReqFilter(key)}
+                style={{padding:'4px 10px',borderRadius:14,fontSize:11,fontWeight:600,cursor:'pointer',
+                  border:`1.5px solid ${reqFilter===key?C.primary:C.border}`,
+                  background:reqFilter===key?C.primary:'#fff',
+                  color:reqFilter===key?'#fff':'#888',whiteSpace:'nowrap'}}>
+                {icon&&`${icon} `}{label} {reqCounts[key]>0&&<span style={{opacity:.75}}>{reqCounts[key]}</span>}
+              </button>
+            ))}
+            {reqGroups.length>0&&(
+              <select value={reqGroupFilter} onChange={e=>setReqGroupFilter(e.target.value)}
+                style={{padding:'4px 8px',borderRadius:14,fontSize:11,fontWeight:600,color:reqGroupFilter?'#fff':'#888',
+                  border:`1.5px solid ${reqGroupFilter?C.primary:C.border}`,
+                  background:reqGroupFilter?C.primary:'#fff',outline:'none',cursor:'pointer',marginLeft:'auto'}}>
+                <option value="">🏭 {t('board_all_groups','Tất cả nhóm')}</option>
+                {reqGroups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            )}
+          </div>
+
           <div style={{flex:1,overflowY:'auto',padding:10,background:C.bg,display:'flex',flexDirection:'column',gap:8}}>
             {loading?<Spin/>:<>
-              {pageSliceOf(requests,reqPage).map(t=><RequestCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
-              {!requests.length&&<Empty text={t('board_empty_requests')}/>}
+              {pageSliceOf(filteredRequests,reqPage).map(t=><RequestCard key={t.id} task={t} onNav={()=>navigate(`/requests?id=${t.id}`)}/>)}
+              {!filteredRequests.length&&<Empty text={t('board_empty_requests')}/>}
             </>}
           </div>
-          {!loading&&<Pagination page={reqPage} totalPages={totalPagesOf(requests)} onChange={setReqPage}/>}
+          {!loading&&<Pagination page={reqPage} totalPages={totalPagesOf(filteredRequests)} onChange={setReqPage}/>}
         </div>
 
         {/* Col 3: Hoàn thành */}

@@ -140,3 +140,31 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 LAN            → http://${localIp}:${PORT}`);
   console.log(`🔌 Socket.IO đã sẵn sàng`);
 });
+
+// ── Graceful shutdown ──
+// Đóng Socket.IO và http.Server đúng cách khi nodemon restart / process bị kill.
+// Thiếu đoạn này là nguyên nhân phổ biến gây lỗi EADDRINUSE khi nodemon reload:
+// process cũ không kịp release port trước khi process mới listen lại.
+function gracefulShutdown(signal) {
+  console.log(`\n🛑 Nhận ${signal}, đang tắt server...`);
+  io.close(() => {
+    console.log('🔌 Socket.IO đã đóng');
+  });
+  server.close(() => {
+    console.log('✅ HTTP server đã đóng, thoát process');
+    process.exit(0);
+  });
+
+  // Nếu sau 5s vẫn chưa đóng xong thì force exit, tránh treo process
+  setTimeout(() => {
+    console.error('⚠️  Force exit do timeout khi đóng server');
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGUSR2', () => {
+  // nodemon gửi SIGUSR2 trước khi restart process
+  gracefulShutdown('SIGUSR2 (nodemon restart)');
+});

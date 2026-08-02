@@ -1,5 +1,6 @@
 const db    = require('../config/db');
 const cache = require('../config/cache');
+const { logActivity } = require('../services/activityLogService');
 
 // ── Task Groups ──
 
@@ -146,10 +147,18 @@ exports.getLogs = async (req, res) => {
       const d = new Date(date);
       const dow = d.getDay() === 0 ? 7 : d.getDay();
       const dom = d.getDate();
+      // frequency_day giờ là VARCHAR (có thể chứa "3" hoặc "2,4,6") — luôn so
+      // sánh dạng số, không dùng === trực tiếp với chuỗi từ DB.
+      const parseDays = (v) => (v==null?'':String(v)).split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
       let shouldShow = false;
       if (task.frequency === 'daily') shouldShow = true;
-      else if (task.frequency === 'weekly' && task.frequency_day === dow) shouldShow = true;
-      else if (task.frequency === 'monthly' && task.frequency_day === dom) shouldShow = true;
+      else if (task.frequency === 'weekly'  && parseDays(task.frequency_day)[0] === dow) shouldShow = true;
+      else if (task.frequency === 'monthly' && parseDays(task.frequency_day)[0] === dom) shouldShow = true;
+      // ⚠️ "weekly_count" = chọn SẴN NHIỀU THỨ cụ thể trong tuần (VD "2,4,6" =
+      // T2+T4+T6); "monthly_count" = chọn SẴN NHIỀU NGÀY cụ thể trong tháng.
+      // Chỉ hiện ra đúng những ngày đã chọn, không phải mọi ngày.
+      else if (task.frequency === 'weekly_count'  && parseDays(task.frequency_day).includes(dow)) shouldShow = true;
+      else if (task.frequency === 'monthly_count' && parseDays(task.frequency_day).includes(dom)) shouldShow = true;
       if (!shouldShow) return null;
       return {
         id: task.id, name: task.name, max_score: task.max_score,
@@ -171,18 +180,75 @@ exports.saveLogs = async (req, res) => {
     if (!Array.isArray(logs)) return res.status(400).json({ success: false, message: 'logs array required' });
     const conn = await db.getConnection();
     await conn.beginTransaction();
+    const activityEntries = []; // ghi log SAU khi commit thành công, tránh giữ transaction lâu
     try {
       for (const log of logs) {
-        await conn.query(
-          `INSERT INTO daily_task_logs (daily_task_id,user_id,log_date,is_done,score,scored_by,scored_at)
-           VALUES (?,?,?,?,?,?,NOW())
-           ON DUPLICATE KEY UPDATE is_done=VALUES(is_done),score=VALUES(score),scored_by=VALUES(scored_by),scored_at=NOW()`,
-          [log.daily_task_id, log.user_id, log.log_date, log.is_done, log.score, req.user.id]
+        // ⚠️ Nếu log này ĐÃ được chấm trước đó (is_done=1 hoặc score>0) và giá
+        // trị mới khác giá trị cũ → bắt buộc phải có edit_reason mới cho lưu.
+        // Đây là lớp bảo vệ phía server — frontend đã chặn từ trước bằng modal,
+        // nhưng vẫn kiểm tra lại ở đây để không ai lách qua API trực tiếp được.
+        const [[existing]] = await conn.query(
+          'SELECT is_done, score FROM daily_task_logs WHERE daily_task_id=? AND user_id=? AND log_date=?',
+          [log.daily_task_id, log.user_id, log.log_date]
         );
+        const wasScored = existing && (existing.is_done || +existing.score > 0);
+        const changed = existing && (
+          !!existing.is_done !== !!log.is_done || +existing.score !== +log.score
+        );
+        if (wasScored && changed && !(log.edit_reason && log.edit_reason.trim())) {
+          await conn.rollback();
+          return res.status(400).json({
+            success: false,
+            message: `Cần ghi lý do khi sửa điểm đã chấm trước đó (task_id=${log.daily_task_id}, ngày ${log.log_date})`
+          });
+        }
+
+        await conn.query(
+          `INSERT INTO daily_task_logs (daily_task_id,user_id,log_date,is_done,score,scored_by,scored_at,edit_reason)
+           VALUES (?,?,?,?,?,?,NOW(),?)
+           ON DUPLICATE KEY UPDATE is_done=VALUES(is_done),score=VALUES(score),scored_by=VALUES(scored_by),scored_at=NOW(),edit_reason=VALUES(edit_reason)`,
+          [log.daily_task_id, log.user_id, log.log_date, log.is_done, log.score, req.user.id, log.edit_reason || null]
+        );
+
+        // 📝 Lịch sử thay đổi — chỉ ghi khi thực sự có điểm/tick (bỏ qua việc
+        // tick-rồi-bỏ-tick về 0 không phải sửa gì đáng kể), phân biệt CHẤM MỚI
+        // và SỬA LẠI (có lý do) để hiển thị đúng loại hành động ở trang lịch sử.
+        if (wasScored && changed) {
+          activityEntries.push({
+            type: 'daily_score_edited', log,
+            oldScore: existing.score, oldDone: existing.is_done,
+          });
+        } else if (!wasScored && (log.is_done || +log.score > 0)) {
+          activityEntries.push({ type: 'daily_scored', log });
+        }
       }
       await conn.commit();
       // Clear log caches
       cache.clear('logs:'); cache.clear('board:');
+
+      // Ghi log lịch sử sau khi transaction đã commit chắc chắn thành công
+      if (activityEntries.length) {
+        const actorName = req.user.full_name || req.user.username;
+        for (const entry of activityEntries) {
+          const [[taskRow]] = await db.query('SELECT name FROM daily_tasks WHERE id=?', [entry.log.daily_task_id]);
+          const [[userRow]] = await db.query('SELECT full_name FROM users WHERE id=?', [entry.log.user_id]);
+          const taskName = taskRow?.name || `#${entry.log.daily_task_id}`;
+          const targetName = userRow?.full_name || '?';
+          if (entry.type === 'daily_scored') {
+            await logActivity({
+              actorId: req.user.id, actionType: 'daily_scored', entityType: 'daily_task', entityId: entry.log.daily_task_id,
+              description: `${actorName} đã chấm "${taskName}" cho ${targetName}: ${entry.log.score}đ (ngày ${entry.log.log_date})`,
+            });
+          } else {
+            await logActivity({
+              actorId: req.user.id, actionType: 'daily_score_edited', entityType: 'daily_task', entityId: entry.log.daily_task_id,
+              description: `${actorName} đã SỬA điểm "${taskName}" cho ${targetName}: ${entry.oldScore}đ → ${entry.log.score}đ (ngày ${entry.log.log_date}). Lý do: ${entry.log.edit_reason}`,
+              metadata: { old_score: entry.oldScore, new_score: entry.log.score, reason: entry.log.edit_reason },
+            });
+          }
+        }
+      }
+
       res.json({ success: true, message: `Saved ${logs.length} logs` });
     } catch (e) { await conn.rollback(); throw e; }
     finally { conn.release(); }
@@ -206,7 +272,7 @@ exports.getWeekLogs = async (req, res) => {
     let rows = cache.get(cKey);
     if (!rows) {
       let sql = `
-        SELECT dtl.daily_task_id, dtl.user_id, dtl.log_date, dtl.is_done, dtl.score
+        SELECT dtl.daily_task_id, dtl.user_id, dtl.log_date, dtl.is_done, dtl.score, dtl.edit_reason
         FROM daily_task_logs dtl
         JOIN daily_tasks dt ON dt.id=dtl.daily_task_id
         JOIN daily_task_groups dtg ON dtg.id=dt.task_group_id
