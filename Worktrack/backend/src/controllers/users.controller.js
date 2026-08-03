@@ -13,8 +13,14 @@ exports.list = async (req, res) => {
                FROM users u
                LEFT JOIN group_members gm ON gm.user_id=u.id
                LEFT JOIN \`groups\` g ON g.id=gm.group_id AND g.is_active=1
-               WHERE u.is_active=1`;
+               WHERE 1=1`;
     const p = [];
+    // ⚠️ Trước đây lọc cứng "WHERE u.is_active=1" — hễ khóa 1 người là họ biến
+    // mất khỏi danh sách vĩnh viễn, không có cách nào xem lại hay mở khóa
+    // (giống hệt như xóa dù dữ liệu vẫn còn). Giờ mặc định hiện CẢ người đã
+    // khóa (khớp với cột trạng thái 🔒/🔓 vốn đã có sẵn ở giao diện) — chỉ lọc
+    // theo is_active nếu người dùng chủ động chọn qua bộ lọc.
+    if (is_active !== undefined && is_active !== '') { sql += ' AND u.is_active=?'; p.push(is_active); }
     if (role)     { sql += ' AND u.role=?'; p.push(role); }
     if (search)   { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
     if (group_id) { sql += ' AND gm.group_id=?'; p.push(group_id); }
@@ -55,9 +61,13 @@ exports.create = async (req, res) => {
   }
 };
 
-// PUT /users/:id — cho phép 2 trường hợp:
+// PUT /users/:id — cho phép các trường hợp sau:
 //   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active.
-//   2) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
+//   2) Leader: KHÔNG được đổi role của ai (kể cả chính mình), nhưng ĐƯỢC
+//      khóa/mở khóa (is_active) tài khoản USER THƯỜNG — không được đụng vào
+//      admin/manager, không tự khóa chính mình. Leader cũng KHÔNG được sửa
+//      full_name/email/avatar_color của người khác (chỉ có quyền khóa/mở khóa).
+//   3) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
 //      CHỈ với các trường an toàn (full_name, email, avatar_color) — tuyệt đối
 //      không cho tự đổi role/is_active dù là tự sửa mình, để tránh tự nâng
 //      quyền hoặc tự kích hoạt lại tài khoản đã bị khóa.
@@ -69,15 +79,41 @@ exports.update = async (req, res) => {
 
     const isSelf       = req.user.id === +id;
     const isPrivileged = ['admin','manager'].includes(req.user.role);
+    const isLeader      = req.user.role === 'leader';
 
-    if (!isSelf && !isPrivileged) {
+    if (!isSelf && !isPrivileged && !isLeader) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa người dùng khác' });
     }
 
-    // role/is_active là các trường nhạy cảm — kể cả tự sửa hồ sơ của chính
-    // mình cũng không được đụng vào nếu không phải admin/manager.
-    if ((role !== undefined || is_active !== undefined) && !isPrivileged) {
-      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò hoặc trạng thái hoạt động' });
+    // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi, kể cả Leader
+    // hay chính chủ tự sửa mình cũng không được.
+    if (role !== undefined && !isPrivileged) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
+    }
+
+    // is_active (khóa/mở khóa): admin/manager luôn được; Leader CHỈ được nếu
+    // target là user thường (không phải admin/manager) và không phải chính mình.
+    if (is_active !== undefined && !isPrivileged) {
+      if (!isLeader) {
+        return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi trạng thái hoạt động' });
+      }
+      if (isSelf) {
+        return res.status(400).json({ success: false, message: 'Không thể tự khóa/mở khóa chính mình' });
+      }
+      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
+      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      if (['admin','manager'].includes(target.role)) {
+        return res.status(403).json({ success: false, message: 'Leader không có quyền khóa/mở khóa tài khoản admin/manager' });
+      }
+    }
+
+    // Leader chỉ được cấp quyền "khóa/mở khóa" ở trên — nếu Leader đồng thời
+    // gửi kèm full_name/email/avatar_color cho NGƯỜI KHÁC (không phải tự sửa
+    // mình), chặn lại để tránh vượt quá phạm vi quyền được cấp.
+    if (isLeader && !isSelf && !isPrivileged) {
+      if (full_name !== undefined || email !== undefined || avatar_color !== undefined) {
+        return res.status(403).json({ success: false, message: 'Leader chỉ được đổi trạng thái khóa/mở khóa, không được sửa thông tin khác của người dùng' });
+      }
     }
 
     await db.query(

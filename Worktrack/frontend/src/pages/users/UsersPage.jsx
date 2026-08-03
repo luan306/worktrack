@@ -72,6 +72,12 @@ const genUsername = (fullName) => {
   return (firstName + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g, '');
 };
 
+// Trích thông báo lỗi THẬT SỰ từ backend (VD: "Leader không có quyền xóa tài
+// khoản admin/manager") thay vì để lọt qua thông báo chung chung của axios
+// (VD: "Request failed with status code 403"). Dùng chung cho MỌI hành động
+// trong trang này để đảm bảo lúc nào cũng báo đúng lý do khi bị từ chối quyền.
+const errMsg = (e) => e.response?.data?.message || e.message;
+
 export default function UsersPage(){
   const { t, i18n } = useTranslation();
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
@@ -119,57 +125,57 @@ export default function UsersPage(){
   // ── User CRUD ──
   const createUser = async(form)=>{
     try { await api.post('/users',form); setShowAddUser(false); fetchUsers(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const updateUser = async(id,form)=>{
     try { await api.put(`/users/${id}`,form); setEditUser(null); fetchUsers(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const toggleActive = async(u)=>{
     try { await api.put(`/users/${u.id}`,{is_active:u.is_active?0:1}); fetchUsers(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const resetPwd = async(id)=>{
     const pw = prompt(t('users_prompt_new_password'));
     if(!pw) return;
     try { await api.post(`/users/${id}/reset-password`,{password:pw}); alert(`✅ ${t('users_password_changed')}`); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const deleteUser = async(u)=>{
     if(!confirm(t('users_confirm_delete_user',{name:u.full_name}))) return;
     try { await api.delete(`/users/${u.id}`); fetchUsers(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   // ── Group CRUD ──
   const createGroup = async(form)=>{
     try { await api.post('/groups',form); setShowAddGroup(false); fetchGroups(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const updateGroup = async(id,form)=>{
     try { await api.put(`/groups/${id}`,form); setEditGroup(null); fetchGroups(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const deleteGroup = async(id)=>{
     if(!confirm(t('users_confirm_delete_group'))) return;
     try { await api.delete(`/groups/${id}`); fetchGroups(); }
-    catch(e){ alert(e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const addMember = async(groupId,userId)=>{
     try { await api.post(`/groups/${groupId}/members`,{user_id:userId}); fetchGroups(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   const removeMember = async(groupId,userId)=>{
     try { await api.delete(`/groups/${groupId}/members/${userId}`); fetchGroups(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ alert(errMsg(e)); }
   };
 
   // ── Import ──
@@ -247,7 +253,7 @@ export default function UsersPage(){
       alert(msg);
       setImportPreview(null); setImportFile(null);
       fetchUsers(); fetchGroups();
-    } catch(e){ alert(e.message); }
+    } catch(e){ alert(errMsg(e)); }
     finally{ setImporting(false); }
   };
 
