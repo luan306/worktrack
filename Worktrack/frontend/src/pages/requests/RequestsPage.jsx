@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import api from '../../api/client';
+import api, { clearApiCache } from '../../api/client';
 import useAuth from '../../store/authStore';
+import { getSocket } from '../../lib/socket';
 
 const C = {
   primary:'#3a7bd5', dark:'#1e2a3a', success:'#27ae60',
@@ -200,8 +201,20 @@ export default function RequestsPage() {
 
   const reload = async () => {
     const {data} = await api.get('/requests');
+    // console.log('[DEBUG reload] tasks fetched:', data.data?.length, '| ids:', data.data?.map(t=>t.id));
     setTasks(data.data||[]);
   };
+
+  // 📡 Realtime — tự cập nhật danh sách khi có CV mới/đổi trạng thái/gán
+  // người... ở bất kỳ đâu, không cần F5. Dùng chung 1 socket đã kết nối sẵn
+  // (từ notificationStore) — chỉ gắn thêm listener, không tạo kết nối mới.
+  useEffect(()=>{
+    if (!user?.id) return;
+    const socket = getSocket(user.id);
+    const onUpdate = (payload) => { console.log('[DEBUG realtime] received', payload); clearApiCache(); reload(); };
+    socket.on('requests:updated', onUpdate);
+    return () => socket.off('requests:updated', onUpdate);
+  }, [user?.id]);
 
   const isAdminOrManager = can('admin','manager');
   const isTeamLeaderOnly = !isAdminOrManager && can('leader');
@@ -215,14 +228,21 @@ export default function RequestsPage() {
     });
   }
 
+  // CV "đang mở, chưa ai nhận" (status='pending', chưa có assignee) phải hiện
+  // cho MỌI người liên quan để họ còn bấm "Nhận việc" được — trước đây bộ lọc
+  // chỉ cho xem CV do chính mình tạo/được gán, nên CV chưa gán ai bị "vô hình"
+  // với tất cả user thường, kể cả F5 cũng không thấy.
+  const isUnclaimedOpen = (t2) => t2.status === 'pending' && !(t2.assignees||[]).length;
+
   const visibleTasks = isAdminOrManager
     ? tasks
     : isTeamLeaderOnly
       ? tasks.filter(t2 =>
           teamMemberIds.has(t2.created_by) ||
-          (t2.assignees||[]).some(a=>teamMemberIds.has(a.user_id))
+          (t2.assignees||[]).some(a=>teamMemberIds.has(a.user_id)) ||
+          isUnclaimedOpen(t2)
         )
-      : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id));
+      : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id) || isUnclaimedOpen(t2));
 
   const filtered = visibleTasks
     .filter(t=>{
@@ -374,6 +394,22 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const isAdmin = ['admin','manager'].includes(user?.role);
 
   useEffect(()=>{ loadTask(); },[taskId]);
+
+  // 📡 Realtime — nếu CV đang mở bị người khác đổi (gán/xóa người, chấm điểm,
+  // đổi trạng thái...), tự tải lại chi tiết + Timeline ngay, không cần đóng mở
+  // lại. Nếu CV bị XÓA, tự đóng panel thay vì cố tải 1 CV không còn tồn tại.
+  useEffect(()=>{
+    if (!user?.id) return;
+    const socket = getSocket(user.id);
+    const onUpdate = (payload) => {
+      if (payload?.taskId !== taskId) return;
+      clearApiCache();
+      if (payload.action === 'deleted') { onClose(); return; }
+      loadTask();
+    };
+    socket.on('requests:updated', onUpdate);
+    return () => socket.off('requests:updated', onUpdate);
+  }, [taskId, user?.id]);
 
   const loadTask = async()=>{
     setLoading(true);
@@ -694,10 +730,11 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
             {/* 🕒 Tiến trình — ai tạo, ai nhận, đổi người thì ai nhận tiếp theo,
                 chấm điểm, duyệt hoàn thành. Không giới hạn quyền — ai xem được
-                CV này thì xem được tiến trình của nó. */}
-            <Section icon="🕒" title={t('req_activity_section', { defaultValue: 'Tiến trình' })}>
+                CV này thì xem được tiến trình của nó. Bỏ tiêu đề Section theo
+                yêu cầu — chỉ còn khối nội dung, không có thanh header. */}
+            <div style={{background:'#fff',borderRadius:10,border:`1.5px solid ${C.border}`,padding:'12px 14px',marginBottom:14}}>
               <ActivityTimeline key={activityTick} taskId={task.id} />
-            </Section>
+            </div>
 
             <Section icon="📎" title={t('req_files_section')}>
               <FileSection taskId={task.id} files={task.files||[]} user={user} onReload={loadTask}/>

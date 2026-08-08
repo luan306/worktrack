@@ -1,4 +1,5 @@
-const db = require('../config/db');
+const db    = require('../config/db');
+const cache = require('../config/cache');
 
 // GET /activity-logs — quyền admin/manager được chặn ở route (auth(['admin','manager']))
 // Query: page, limit, action_type, entity_type, actor_id, from, to (YYYY-MM-DD)
@@ -34,9 +35,21 @@ exports.list = async (req, res) => {
 
 // GET /activity-logs/action-types — danh sách các loại hành động đang có trong
 // DB, để đổ vào dropdown lọc bên frontend mà không cần hardcode.
+// ⚠️ TỐI ƯU: danh sách này gần như KHÔNG ĐỔI (chỉ tăng khi thêm tính năng mới
+// vào code, không phải khi có thêm dữ liệu) — trước đây mỗi lần mở trang Lịch
+// sử là 1 lần SELECT DISTINCT quét TOÀN BỘ bảng activity_logs, càng nhiều bản
+// ghi thì càng chậm dù kết quả gần như luôn giống lần trước. Cache 5 phút để
+// không phải quét lại liên tục — dữ liệu vẫn tự cập nhật đúng, chỉ trễ tối đa
+// 5 phút nếu vừa có action_type mới tinh xuất hiện lần đầu.
 exports.listActionTypes = async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT DISTINCT action_type FROM activity_logs ORDER BY action_type');
-    res.json({ success: true, data: rows.map(r => r.action_type) });
+    const cKey = 'activitylog:action-types';
+    let types = cache.get(cKey);
+    if (!types) {
+      const [rows] = await db.query('SELECT DISTINCT action_type FROM activity_logs ORDER BY action_type');
+      types = rows.map(r => r.action_type);
+      cache.set(cKey, types, 5 * 60 * 1000); // 5 phút
+    }
+    res.json({ success: true, data: types });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

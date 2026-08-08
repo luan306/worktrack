@@ -20,7 +20,7 @@ export default function ProfilePage() {
   const ini = user?.full_name?.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase() || 'U';
 
   const [tab,       setTab]       = useState('info');
-  const [info,      setInfo]      = useState({ full_name:user?.full_name||'', email:user?.email||'', avatar_color:user?.avatar_color||'#3a7bd5' });
+  const [info,      setInfo]      = useState({ full_name:user?.full_name||'', email:user?.email||'', username:user?.username||'', avatar_color:user?.avatar_color||'#3a7bd5' });
   const [savingInfo,setSavingInfo]= useState(false);
   const [infoMsg,   setInfoMsg]   = useState('');
   const [pwd,       setPwd]       = useState({ old_password:'', new_password:'', confirm:'' });
@@ -30,7 +30,7 @@ export default function ProfilePage() {
   const saveInfo = async () => {
     setSavingInfo(true); setInfoMsg('');
     try {
-      await api.put(`/users/${user.id}`, { full_name:info.full_name, email:info.email, avatar_color:info.avatar_color });
+      await api.put(`/users/${user.id}`, { full_name:info.full_name, email:info.email, username:info.username, avatar_color:info.avatar_color });
       await fetchMe();
       setInfoMsg('success');
     } catch(e) { setInfoMsg('error:' + (e.response?.data?.message||e.message)); }
@@ -173,9 +173,8 @@ export default function ProfilePage() {
               <div><label style={FL}>{t('profile_fullname')} *</label><input style={FI} value={info.full_name} onChange={e=>setInfo(p=>({...p,full_name:e.target.value}))} placeholder="Nguyễn Văn A"/></div>
               <div><label style={FL}>Email</label><input type="email" style={FI} value={info.email} onChange={e=>setInfo(p=>({...p,email:e.target.value}))} placeholder="email@company.com"/></div>
               <div>
-                <label style={FL}>Username</label>
-                <input style={{...FI,background:'#f5f6f8',color:'#aaa'}} value={user.username} disabled/>
-                <div style={{ fontSize:11, color:'#bbb', marginTop:4 }}>{t('profile_username_immutable')}</div>
+                <label style={FL}>MSNV *</label>
+                <input style={FI} value={info.username} onChange={e=>setInfo(p=>({...p,username:e.target.value}))} placeholder="VD: NV001"/>
               </div>
               <Msg msg={infoMsg}/>
               <div style={{ display:'flex', justifyContent:'flex-end' }}>

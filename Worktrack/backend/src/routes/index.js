@@ -23,7 +23,7 @@ router.post  ('/users',                    auth(['admin','manager','leader']), u
 router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
 router.put   ('/users/:id',                auth(),                              uC.update);
 router.delete('/users/:id',                auth(['admin','manager','leader']), uC.remove);
-router.post  ('/users/:id/reset-password', auth(['admin']),                    uC.resetPassword);
+router.post  ('/users/:id/reset-password', auth(['admin','manager','leader']),  uC.resetPassword);
 
 // ── Groups ── Leader KHÔNG có quyền gì ở đây — chỉ được tạo tài khoản user (ở trên)
 router.get   ('/groups',                     auth(),                              gC.list);

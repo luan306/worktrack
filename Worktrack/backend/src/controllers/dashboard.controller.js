@@ -1,11 +1,14 @@
-// src/controllers/dashboard.controller.js
-
 const db      = require('../config/db');
 const ExcelJS = require('exceljs');
 const path    = require('path');
 const fs      = require('fs');
 
 // GET /dashboard/scores
+// ⚠️ TỐI ƯU HIỆU NĂNG: bản cũ chạy ~10 câu SQL RIÊNG CHO MỖI NHÂN VIÊN (kiểu
+// N+1 query) — với 50 người là ~500 query/lần tải Dashboard, chậm rõ rệt khi
+// công ty đông người. Bản này gộp lại thành ~7 câu SQL CỐ ĐỊNH dùng GROUP BY,
+// lấy dữ liệu cho TẤT CẢ nhân viên cùng lúc rồi map vào từng người ở tầng JS —
+// tốc độ không còn phụ thuộc vào số lượng nhân viên.
 exports.getScores = async (req, res) => {
   try {
     const { group_id, view = 'week', date } = req.query;
@@ -41,119 +44,127 @@ exports.getScores = async (req, res) => {
     if (group_id) { memberSql += ' AND gm.group_id = ?'; mp.push(group_id); }
     const [members] = await db.query(memberSql, mp);
 
-    // Tính điểm từng member
-    const scores = await Promise.all(members.map(async (u) => {
+    if (!members.length) {
+      return res.json({ success: true, data: { period, start, end, view, scores: [] } });
+    }
+    const memberIds = members.map(m => m.id);
+    const periodStart = '2000-01-01'; // reset về 0 khi chốt kỳ
 
-      // ── Điểm trong range (day/week/month) ──
-      let dailySql = `SELECT COALESCE(SUM(dtl.score), 0) as total
-                      FROM daily_task_logs dtl
-                      JOIN daily_tasks dt      ON dt.id  = dtl.daily_task_id
-                      JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
-                      WHERE dtl.user_id = ? AND dtl.log_date BETWEEN ? AND ?`;
-      const dp = [u.id, start, end];
-      if (group_id) { dailySql += ' AND dtg.group_id = ?'; dp.push(group_id); }
-      const [[dScore]] = await db.query(dailySql, dp);
-
-      let reqSql = `SELECT COALESCE(SUM(rt.score), 0) as total
-                    FROM request_tasks rt
-                    JOIN request_task_assignees rta ON rta.task_id = rt.id
-                    WHERE rta.user_id = ? AND rta.role = 'main'
-                      AND rt.status = 'done'
-                      AND rt.completed_at BETWEEN ? AND ?`;
-      const rp = [u.id, `${start} 00:00:00`, `${end} 23:59:59`];
-      if (group_id) { reqSql += ' AND rt.group_id = ?'; rp.push(group_id); }
-      const [[rScore]] = await db.query(reqSql, rp);
-
-      let supSql = reqSql.replace("rta.role = 'main'", "rta.role = 'support'");
-      const [[sScore]] = await db.query(supSql, rp);
-
-      // ── Điểm cộng dồn cả kỳ ──
-      // Dùng '2000-01-01' để lấy toàn bộ — reset về 0 khi chốt kỳ
-      const periodStart = '2000-01-01';
-
-      let ptDailySql = `SELECT COALESCE(SUM(dtl.score), 0) as total
+    // ── 1) Điểm HN trong RANGE (day/week/month), gộp theo user_id ──
+    let dailyRangeSql = `SELECT dtl.user_id, COALESCE(SUM(dtl.score),0) as total
                         FROM daily_task_logs dtl
-                        JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
-                        JOIN daily_task_groups dtg  ON dtg.id = dt.task_group_id
-                        WHERE dtl.user_id = ? AND dtl.log_date >= ?`;
-      const ptdp = [u.id, periodStart];
-      if (group_id) { ptDailySql += ' AND dtg.group_id = ?'; ptdp.push(group_id); }
-      const [[ptD]] = await db.query(ptDailySql, ptdp);
+                        JOIN daily_tasks dt      ON dt.id  = dtl.daily_task_id
+                        JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
+                        WHERE dtl.user_id IN (?) AND dtl.log_date BETWEEN ? AND ?`;
+    const drp = [memberIds, start, end];
+    if (group_id) { dailyRangeSql += ' AND dtg.group_id = ?'; drp.push(group_id); }
+    dailyRangeSql += ' GROUP BY dtl.user_id';
+    const [dailyRangeRows] = await db.query(dailyRangeSql, drp);
 
-      let ptReqSql = `SELECT COALESCE(SUM(rt.score), 0) as total
+    // ── 2) Điểm YC trong RANGE — gộp cả main+support 1 query, tách theo role ──
+    let reqRangeSql = `SELECT rta.user_id, rta.role, COALESCE(SUM(rt.score), 0) as total
                       FROM request_tasks rt
                       JOIN request_task_assignees rta ON rta.task_id = rt.id
-                      WHERE rta.user_id = ? AND rt.status = 'done'
-                        AND rt.completed_at >= ?`;
-      const ptrp = [u.id, `${periodStart} 00:00:00`];
-      if (group_id) { ptReqSql += ' AND rt.group_id = ?'; ptrp.push(group_id); }
-      const [[ptR]] = await db.query(ptReqSql, ptrp);
+                      WHERE rta.user_id IN (?) AND rt.status = 'done'
+                        AND rt.completed_at BETWEEN ? AND ?`;
+    const rrp = [memberIds, `${start} 00:00:00`, `${end} 23:59:59`];
+    if (group_id) { reqRangeSql += ' AND rt.group_id = ?'; rrp.push(group_id); }
+    reqRangeSql += ' GROUP BY rta.user_id, rta.role';
+    const [reqRangeRows] = await db.query(reqRangeSql, rrp);
 
-      // ── CV counts ──
-      const [[cvDaily]] = await db.query(
-        `SELECT COUNT(*) as c FROM daily_task_logs
-         WHERE user_id = ? AND is_done = 1 AND log_date >= ?`,
-        [u.id, periodStart]
-      );
+    // ── 3) Điểm HN cộng dồn cả kỳ ──
+    let dailyPeriodSql = `SELECT dtl.user_id, COALESCE(SUM(dtl.score),0) as total
+                          FROM daily_task_logs dtl
+                          JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
+                          JOIN daily_task_groups dtg  ON dtg.id = dt.task_group_id
+                          WHERE dtl.user_id IN (?) AND dtl.log_date >= ?`;
+    const dpp = [memberIds, periodStart];
+    if (group_id) { dailyPeriodSql += ' AND dtg.group_id = ?'; dpp.push(group_id); }
+    dailyPeriodSql += ' GROUP BY dtl.user_id';
+    const [dailyPeriodRows] = await db.query(dailyPeriodSql, dpp);
 
-      const [[cvMain]] = await db.query(
-        `SELECT COUNT(*) as c
-         FROM request_task_assignees rta
-         JOIN request_tasks rt ON rt.id = rta.task_id
-         WHERE rta.user_id = ? AND rta.role = 'main'
-           AND rt.status = 'done' AND rt.completed_at >= ?`,
-        [u.id, `${periodStart} 00:00:00`]
-      );
+    // ── 4) Điểm YC cộng dồn cả kỳ — KHÔNG lọc role (khớp đúng logic bản gốc) ──
+    let reqPeriodSql = `SELECT rta.user_id, COALESCE(SUM(rt.score), 0) as total
+                        FROM request_tasks rt
+                        JOIN request_task_assignees rta ON rta.task_id = rt.id
+                        WHERE rta.user_id IN (?) AND rt.status = 'done'
+                          AND rt.completed_at >= ?`;
+    const rpp = [memberIds, `${periodStart} 00:00:00`];
+    if (group_id) { reqPeriodSql += ' AND rt.group_id = ?'; rpp.push(group_id); }
+    reqPeriodSql += ' GROUP BY rta.user_id';
+    const [reqPeriodRows] = await db.query(reqPeriodSql, rpp);
 
-      const [[cvSupport]] = await db.query(
-        `SELECT COUNT(*) as c
-         FROM request_task_assignees rta
-         JOIN request_tasks rt ON rt.id = rta.task_id
-         WHERE rta.user_id = ? AND rta.role = 'support'
-           AND rt.status = 'done' AND rt.completed_at >= ?`,
-        [u.id, `${periodStart} 00:00:00`]
-      );
+    // ── 5) CV hằng ngày đã làm (is_done=1) kể từ đầu kỳ ──
+    const [cvDailyRows] = await db.query(
+      `SELECT user_id, COUNT(*) as c FROM daily_task_logs
+       WHERE user_id IN (?) AND is_done = 1 AND log_date >= ?
+       GROUP BY user_id`,
+      [memberIds, periodStart]
+    );
 
-      const [[cvOntime]] = await db.query(
-        `SELECT COUNT(*) as c
-         FROM request_tasks rt
-         JOIN request_task_assignees rta ON rta.task_id = rt.id
-         WHERE rta.user_id = ? AND rt.status = 'done'
-           AND rt.is_late = 0 AND rt.completed_at >= ?`,
-        [u.id, `${periodStart} 00:00:00`]
-      );
+    // ── 6) CV chính/hỗ trợ/đúng hạn/trễ hạn — gộp 1 query dùng SUM(CASE...) ──
+    const [cvReqRows] = await db.query(
+      `SELECT rta.user_id,
+              SUM(CASE WHEN rta.role='main' THEN 1 ELSE 0 END) as cvMain,
+              SUM(CASE WHEN rta.role='support' THEN 1 ELSE 0 END) as cvSupport,
+              SUM(CASE WHEN rt.is_late=0 THEN 1 ELSE 0 END) as cvOntime,
+              SUM(CASE WHEN rt.is_late=1 THEN 1 ELSE 0 END) as cvLate
+       FROM request_task_assignees rta
+       JOIN request_tasks rt ON rt.id = rta.task_id
+       WHERE rta.user_id IN (?) AND rt.status = 'done' AND rt.completed_at >= ?
+       GROUP BY rta.user_id`,
+      [memberIds, `${periodStart} 00:00:00`]
+    );
 
-      const [[cvLate]] = await db.query(
-        `SELECT COUNT(*) as c
-         FROM request_tasks rt
-         JOIN request_task_assignees rta ON rta.task_id = rt.id
-         WHERE rta.user_id = ? AND rt.status = 'done'
-           AND rt.is_late = 1 AND rt.completed_at >= ?`,
-        [u.id, `${periodStart} 00:00:00`]
-      );
+    // ── Gộp tất cả kết quả vào Map để lookup O(1) theo user_id ──
+    const toMap = (rows) => { const m = {}; rows.forEach(r => { m[r.user_id] = r; }); return m; };
+    const dailyRangeMap  = toMap(dailyRangeRows);
+    const dailyPeriodMap = toMap(dailyPeriodRows);
+    const reqPeriodMap   = toMap(reqPeriodRows);
+    const cvDailyMap     = toMap(cvDailyRows);
+    const cvReqMap       = toMap(cvReqRows);
+
+    // request-range cần gộp riêng vì có 2 dòng/user (main + support)
+    const reqRangeMap = {}; // { user_id: { main, support } }
+    reqRangeRows.forEach(r => {
+      if (!reqRangeMap[r.user_id]) reqRangeMap[r.user_id] = { main: 0, support: 0 };
+      reqRangeMap[r.user_id][r.role] = +r.total;
+    });
+
+    const scores = members.map(u => {
+      const dScore = +(dailyRangeMap[u.id]?.total || 0);
+      const rRange = reqRangeMap[u.id] || { main: 0, support: 0 };
+      const rScore = rRange.main;
+      const sScore = rRange.support;
+
+      const ptD = +(dailyPeriodMap[u.id]?.total || 0);
+      const ptR = +(reqPeriodMap[u.id]?.total || 0);
+
+      const cvD = cvDailyMap[u.id]?.c || 0;
+      const cvR = cvReqMap[u.id] || { cvMain: 0, cvSupport: 0, cvOntime: 0, cvLate: 0 };
 
       return {
         user: u,
         range_score: {
-          daily:   +dScore.total,
-          request: +rScore.total,
-          support: +sScore.total,
-          total:   +(+dScore.total + +rScore.total + +sScore.total).toFixed(1),
+          daily:   dScore,
+          request: rScore,
+          support: sScore,
+          total:   +(dScore + rScore + sScore).toFixed(1),
         },
         period_score: {
-          daily:   +ptD.total,
-          request: +ptR.total,
-          total:   +(+ptD.total + +ptR.total).toFixed(1),
+          daily:   ptD,
+          request: ptR,
+          total:   +(ptD + ptR).toFixed(1),
         },
         cv_counts: {
-          daily:   cvDaily.c,
-          main:    cvMain.c,
-          support: cvSupport.c,
-          ontime:  cvOntime.c,
-          late:    cvLate.c,
+          daily:   cvD,
+          main:    +cvR.cvMain,
+          support: +cvR.cvSupport,
+          ontime:  +cvR.cvOntime,
+          late:    +cvR.cvLate,
         },
       };
-    }));
+    });
 
     scores.sort((a, b) => b.period_score.total - a.period_score.total);
 
@@ -164,17 +175,10 @@ exports.getScores = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
-// performLockAndReset — logic CHỐT KỲ + XUẤT EXCEL + RESET dùng chung
-// cho cả 2 nơi gọi:
-//   1) POST /dashboard/lock  (người dùng bấm nút "Chốt & Reset")
-//   2) cron job tự động vào 24h ngày 31/3 và 30/9 (xem src/cron/scoreAutoLock.cron.js)
-// Tách riêng ra khỏi exports.lockPeriod để không phải giả lập req/res
-// giả khi gọi từ cron.
-//
-// lockedByUserId: id của người bấm nút, hoặc null nếu là cron tự động
-// (cột score_periods.locked_by cần cho phép NULL để việc này hoạt động).
-// ═══════════════════════════════════════════════════════════════
+// POST /dashboard/lock — chốt kỳ, xuất Excel, reset
+// (chưa tối ưu N+1 ở đây — hàm này chỉ chạy 2 lần/năm theo lịch tự động nên
+// độ ưu tiên thấp hơn nhiều so với getScores() chạy mỗi lần tải Dashboard;
+// có thể tối ưu thêm sau nếu cần)
 async function performLockAndReset(group_id, lockedByUserId) {
   const [[period]] = await db.query(
     'SELECT * FROM score_periods WHERE is_locked=0 ORDER BY id DESC LIMIT 1'
@@ -322,8 +326,7 @@ exports.lockPeriod = async (req, res) => {
   }
 };
 
-// GET /dashboard/last-export — trả về file Excel của kỳ đã CHỐT gần nhất,
-// không đụng gì tới việc chốt/reset điểm (khác hẳn POST /dashboard/lock).
+// GET /dashboard/last-export — trả về file Excel của kỳ đã CHỐT gần nhất
 exports.getLastExport = async (req, res) => {
   try {
     const [[period]] = await db.query(
@@ -344,8 +347,7 @@ exports.getLastExport = async (req, res) => {
   }
 };
 
-// GET /dashboard/exports — danh sách TẤT CẢ các kỳ đã chốt (mới nhất trước),
-// dùng cho modal chọn kỳ để tải Excel ở nút "Xuất Excel".
+// GET /dashboard/exports — danh sách TẤT CẢ các kỳ đã chốt
 exports.getExportList = async (req, res) => {
   try {
     const [periods] = await db.query(
@@ -354,7 +356,6 @@ exports.getExportList = async (req, res) => {
         WHERE is_locked=1 AND excel_path IS NOT NULL
         ORDER BY locked_at DESC`
     );
-    // Chỉ trả về những file thực sự còn tồn tại trên server
     const uploadsDir = path.join(__dirname, '../uploads');
     const list = periods.filter(p => fs.existsSync(path.join(uploadsDir, p.excel_path)));
     res.json({ success: true, data: list });
@@ -388,5 +389,4 @@ exports.debug = async (req, res) => {
   }
 };
 
-// Export riêng để cron job gọi trực tiếp (không qua HTTP req/res)
 exports.performLockAndReset = performLockAndReset;

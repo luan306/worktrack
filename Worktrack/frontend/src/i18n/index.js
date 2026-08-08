@@ -26,7 +26,7 @@ const en = {
   req_countdown_dhm:'{{d}}d {{h}}h {{m}}m',
   req_search_title:'Search title',
   req_filter_all:'All', req_filter_pending:'Pending', req_filter_assigned:'Assigned',
-  req_filter_in_progress:'In progress', req_filter_scoring:'Scoring', req_filter_done:'Done',
+  req_filter_in_progress:'In progress', req_filter_scoring:'Completed', req_filter_done:'Done',
   req_no_tasks:'No requests',
   req_new_badge:'New',
   req_urgent_badge:'Urgent',
@@ -344,7 +344,7 @@ const en = {
   profile_min_length:'Password must be at least 6 characters',
   profile_min_chars:'Password must be at least 6 characters',
   profile_reenter_password:'Re-enter password',
-  profile_username_label :'Username',
+  profile_username_label :'Msnv',
   profile_role_label :'Role',
   profile_save_success:'Profile saved successfully',
   profile_save_failed:'Failed to save profile, please try again',
@@ -355,6 +355,8 @@ const en = {
   role_leader:'Leader',
   nav_activity_log:'Activity log',
   activity_log_title:'Activity Log',
+  profile_title:'Profile',
+  profile_account:'Account',
 
 };
 
@@ -711,6 +713,7 @@ const ja = {
   role_leader:'リーダー',
   nav_activity_log:'アクティビティログ',
   activity_log_title:'アクティビティログ',
+  profile_title:'プロフィール',
 };
 
 const vi = {
@@ -1066,6 +1069,7 @@ const vi = {
   profile_save_info:'Thông tin hồ sơ đã được cập nhật thành công',
   nav_activity_log:'Nhật ký hoạt động',
   activity_log_title:'Nhật ký hoạt động',
+  profile_title:'Hồ sơ',
 };
 
 i18n.use(initReactI18next).init({

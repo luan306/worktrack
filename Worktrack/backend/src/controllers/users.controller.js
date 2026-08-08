@@ -63,10 +63,10 @@ exports.create = async (req, res) => {
 
 // PUT /users/:id — cho phép các trường hợp sau:
 //   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active.
-//   2) Leader: KHÔNG được đổi role của ai (kể cả chính mình), nhưng ĐƯỢC
-//      khóa/mở khóa (is_active) tài khoản USER THƯỜNG — không được đụng vào
-//      admin/manager, không tự khóa chính mình. Leader cũng KHÔNG được sửa
-//      full_name/email/avatar_color của người khác (chỉ có quyền khóa/mở khóa).
+//   2) Leader: KHÔNG được đổi role của ai (kể cả chính mình), nhưng ĐƯỢC sửa
+//      thông tin (full_name/email/avatar_color) VÀ khóa/mở khóa (is_active)
+//      của bất kỳ ai TRỪ admin/manager — không được đụng vào admin/manager
+//      dưới bất kỳ hình thức nào, không tự khóa chính mình.
 //   3) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
 //      CHỈ với các trường an toàn (full_name, email, avatar_color) — tuyệt đối
 //      không cho tự đổi role/is_active dù là tự sửa mình, để tránh tự nâng
@@ -75,7 +75,7 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, email, role, avatar_color, is_active } = req.body;
+    const { full_name, email, username, role, avatar_color, is_active } = req.body;
 
     const isSelf       = req.user.id === +id;
     const isPrivileged = ['admin','manager'].includes(req.user.role);
@@ -91,8 +91,20 @@ exports.update = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
     }
 
-    // is_active (khóa/mở khóa): admin/manager luôn được; Leader CHỈ được nếu
-    // target là user thường (không phải admin/manager) và không phải chính mình.
+    // Leader sửa NGƯỜI KHÁC (không phải chính mình, không phải admin/manager
+    // thực hiện): được phép sửa full_name/email/username/avatar_color/is_active,
+    // NHƯNG target không được là admin/manager — kiểm tra 1 lần chung cho mọi
+    // trường thay vì tách riêng như trước.
+    if (isLeader && !isSelf && !isPrivileged) {
+      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
+      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      if (['admin','manager'].includes(target.role)) {
+        return res.status(403).json({ success: false, message: 'Leader không có quyền chỉnh sửa tài khoản admin/manager' });
+      }
+    }
+
+    // is_active (khóa/mở khóa): admin/manager luôn được; Leader được (đã qua
+    // kiểm tra target ở trên) nhưng không được tự khóa/mở khóa chính mình.
     if (is_active !== undefined && !isPrivileged) {
       if (!isLeader) {
         return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi trạng thái hoạt động' });
@@ -100,38 +112,49 @@ exports.update = async (req, res) => {
       if (isSelf) {
         return res.status(400).json({ success: false, message: 'Không thể tự khóa/mở khóa chính mình' });
       }
-      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
-      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-      if (['admin','manager'].includes(target.role)) {
-        return res.status(403).json({ success: false, message: 'Leader không có quyền khóa/mở khóa tài khoản admin/manager' });
-      }
     }
 
-    // Leader chỉ được cấp quyền "khóa/mở khóa" ở trên — nếu Leader đồng thời
-    // gửi kèm full_name/email/avatar_color cho NGƯỜI KHÁC (không phải tự sửa
-    // mình), chặn lại để tránh vượt quá phạm vi quyền được cấp.
-    if (isLeader && !isSelf && !isPrivileged) {
-      if (full_name !== undefined || email !== undefined || avatar_color !== undefined) {
-        return res.status(403).json({ success: false, message: 'Leader chỉ được đổi trạng thái khóa/mở khóa, không được sửa thông tin khác của người dùng' });
-      }
+    // MSNV (username) — cho chỉnh bình thường như full_name/email, cùng cấp
+    // quyền: chính chủ, admin/manager, hoặc leader (trong giới hạn target ở
+    // trên). Chỉ giữ ký tự an toàn, không ép chữ thường vì mã nhân viên có
+    // quy ước viết hoa riêng (VD: "NV001").
+    let uname = username;
+    if (uname !== undefined) {
+      uname = String(uname).trim().replace(/[^a-zA-Z0-9._-]/g, '').substring(0, 30);
+      if (!uname) return res.status(400).json({ success: false, message: 'MSNV không được để trống' });
     }
 
     await db.query(
       `UPDATE users SET
-        full_name=COALESCE(?,full_name), email=COALESCE(?,email),
+        full_name=COALESCE(?,full_name), email=COALESCE(?,email), username=COALESCE(?,username),
         role=COALESCE(?,role), avatar_color=COALESCE(?,avatar_color),
         is_active=COALESCE(?,is_active)
        WHERE id=?`,
-      [full_name, email, role, avatar_color, is_active, id]
+      [full_name, email, uname, role, avatar_color, is_active, id]
     );
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) {
+    if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ success: false, message: 'MSNV hoặc email đã tồn tại' });
+    res.status(500).json({ success: false, message: e.message });
+  }
 };
 
+// POST /users/:id/reset-password — admin/manager đổi được cho bất kỳ ai;
+// Leader đổi được cho bất kỳ ai TRỪ admin/manager (khớp quy tắc chung đã áp
+// dụng cho update()/remove()).
 exports.resetPassword = async (req, res) => {
   try {
     const { password } = req.body;
     if (!password) return res.status(400).json({ success: false, message: 'Password required' });
+
+    if (req.user.role === 'leader') {
+      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [req.params.id]);
+      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      if (['admin','manager'].includes(target.role)) {
+        return res.status(403).json({ success: false, message: 'Leader không có quyền đổi mật khẩu tài khoản admin/manager' });
+      }
+    }
+
     await db.query('UPDATE users SET password=? WHERE id=?', [await bcrypt.hash(password, 10), req.params.id]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -142,14 +165,13 @@ exports.importUsers = async (req, res) => {
     const { users } = req.body;
     const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b'];
 
-    const genUsername = (name) => {
-      const parts = name.trim().normalize('NFD')
-        .replace(/[̀-ͯ]/g,'').toLowerCase().split(/\s+/);
-      if (!parts.length) return 'user';
-      const first    = parts[parts.length - 1];
-      const initials = parts.slice(0, parts.length - 1).map(p => p[0]).join('');
-      return (first + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g,'').substring(0, 30) || 'user';
-    };
+    // MSNV (mã số nhân viên) do người dùng nhập ở cột CSV thứ 5 — BẮT BUỘC,
+    // dùng trực tiếp làm username để đăng nhập. Không còn tự sinh từ họ tên
+    // nữa. Chỉ giữ ký tự an toàn cho username (chữ, số, chấm, gạch dưới, gạch
+    // ngang), KHÔNG ép về chữ thường vì mã nhân viên thường có quy ước viết
+    // hoa riêng (VD: "NV001").
+    const sanitizeMsnv = (msnv) =>
+      String(msnv || '').trim().replace(/[^a-zA-Z0-9._-]/g, '').substring(0, 30);
 
     let created = 0, duplicates = [], errors = [];
 
@@ -162,7 +184,12 @@ exports.importUsers = async (req, res) => {
           continue;
         }
 
-        const uname = genUsername(u.full_name.trim());
+        const uname = sanitizeMsnv(u.username);
+        if (!uname) {
+          errors.push({ name: u.full_name, error: 'Thiếu MSNV' });
+          continue;
+        }
+
         const color = COLORS[Math.floor(Math.random() * COLORS.length)];
 
         console.log('[import] Processing:', u.full_name, '→ username:', uname);

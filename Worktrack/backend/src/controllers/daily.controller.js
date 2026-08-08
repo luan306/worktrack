@@ -143,6 +143,12 @@ exports.getLogs = async (req, res) => {
       logs = l;
     }
 
+    // ⚠️ TỐI ƯU: tra Map O(1) thay vì logs.find() O(n) lặp lại cho MỖI ô của
+    // ma trận (task × member) — với nhiều task và nhiều người, .find() cũ
+    // duyệt tuyến tính lại từ đầu mỗi lần, rất chậm khi log_date có nhiều dòng.
+    const logMap = {};
+    logs.forEach(l => { logMap[`${l.daily_task_id}_${l.user_id}`] = l; });
+
     const matrix = tasks.map(task => {
       const d = new Date(date);
       const dow = d.getDay() === 0 ? 7 : d.getDay();
@@ -164,7 +170,7 @@ exports.getLogs = async (req, res) => {
         id: task.id, name: task.name, max_score: task.max_score,
         frequency: task.frequency, frequency_day: task.frequency_day,
         user_logs: members.map(m => {
-          const log = logs.find(l => l.daily_task_id === task.id && l.user_id === m.id);
+          const log = logMap[`${task.id}_${m.id}`];
           return { user_id: m.id, is_done: log?.is_done || 0, score: log?.score || 0 };
         }),
       };
@@ -178,19 +184,35 @@ exports.saveLogs = async (req, res) => {
   try {
     const { logs } = req.body;
     if (!Array.isArray(logs)) return res.status(400).json({ success: false, message: 'logs array required' });
+    if (!logs.length) return res.json({ success: true, message: 'Saved 0 logs' });
+
     const conn = await db.getConnection();
     await conn.beginTransaction();
     const activityEntries = []; // ghi log SAU khi commit thành công, tránh giữ transaction lâu
     try {
+      // ⚠️ TỐI ƯU: lấy TRƯỚC toàn bộ log hiện có cho các dòng sắp lưu bằng
+      // ĐÚNG 1 QUERY (cú pháp tuple IN của MySQL), thay vì SELECT riêng từng
+      // dòng như trước — lưu 50 điểm cùng lúc giờ chỉ tốn 1 SELECT thay vì 50.
+      const tuples = logs.map(l => [l.daily_task_id, l.user_id, l.log_date]);
+      const placeholders = tuples.map(() => '(?,?,?)').join(',');
+      const [existingRows] = await conn.query(
+        `SELECT daily_task_id, user_id, log_date, is_done, score
+         FROM daily_task_logs
+         WHERE (daily_task_id, user_id, log_date) IN (${placeholders})`,
+        tuples.flat()
+      );
+      const existingMap = {};
+      existingRows.forEach(r => {
+        const dateStr = r.log_date instanceof Date ? r.log_date.toISOString().slice(0,10) : r.log_date;
+        existingMap[`${r.daily_task_id}_${r.user_id}_${dateStr}`] = r;
+      });
+
       for (const log of logs) {
         // ⚠️ Nếu log này ĐÃ được chấm trước đó (is_done=1 hoặc score>0) và giá
         // trị mới khác giá trị cũ → bắt buộc phải có edit_reason mới cho lưu.
         // Đây là lớp bảo vệ phía server — frontend đã chặn từ trước bằng modal,
         // nhưng vẫn kiểm tra lại ở đây để không ai lách qua API trực tiếp được.
-        const [[existing]] = await conn.query(
-          'SELECT is_done, score FROM daily_task_logs WHERE daily_task_id=? AND user_id=? AND log_date=?',
-          [log.daily_task_id, log.user_id, log.log_date]
-        );
+        const existing = existingMap[`${log.daily_task_id}_${log.user_id}_${log.log_date}`];
         const wasScored = existing && (existing.is_done || +existing.score > 0);
         const changed = existing && (
           !!existing.is_done !== !!log.is_done || +existing.score !== +log.score
@@ -226,14 +248,23 @@ exports.saveLogs = async (req, res) => {
       // Clear log caches
       cache.clear('logs:'); cache.clear('board:');
 
-      // Ghi log lịch sử sau khi transaction đã commit chắc chắn thành công
+      // Ghi log lịch sử sau khi transaction đã commit chắc chắn thành công.
+      // ⚠️ TỐI ƯU: lấy tên task/tên người BATCH 1 LẦN cho toàn bộ entries,
+      // thay vì 2 SELECT riêng cho MỖI entry như trước (N entries × 2 query
+      // → chỉ còn đúng 2 query bất kể lưu bao nhiêu dòng).
       if (activityEntries.length) {
         const actorName = req.user.full_name || req.user.username;
+        const taskIds = [...new Set(activityEntries.map(e => e.log.daily_task_id))];
+        const userIds = [...new Set(activityEntries.map(e => e.log.user_id))];
+
+        const [taskRows] = await db.query('SELECT id, name FROM daily_tasks WHERE id IN (?)', [taskIds]);
+        const [userRows] = await db.query('SELECT id, full_name FROM users WHERE id IN (?)', [userIds]);
+        const taskNameMap = Object.fromEntries(taskRows.map(t => [t.id, t.name]));
+        const userNameMap = Object.fromEntries(userRows.map(u => [u.id, u.full_name]));
+
         for (const entry of activityEntries) {
-          const [[taskRow]] = await db.query('SELECT name FROM daily_tasks WHERE id=?', [entry.log.daily_task_id]);
-          const [[userRow]] = await db.query('SELECT full_name FROM users WHERE id=?', [entry.log.user_id]);
-          const taskName = taskRow?.name || `#${entry.log.daily_task_id}`;
-          const targetName = userRow?.full_name || '?';
+          const taskName   = taskNameMap[entry.log.daily_task_id] || `#${entry.log.daily_task_id}`;
+          const targetName = userNameMap[entry.log.user_id] || '?';
           if (entry.type === 'daily_scored') {
             await logActivity({
               actorId: req.user.id, actionType: 'daily_scored', entityType: 'daily_task', entityId: entry.log.daily_task_id,

@@ -46,7 +46,7 @@ exports._archiveOldCompletedTasks = archiveOldCompletedTasks;
 
 exports.list = async (req, res) => {
   try {
-    const { status, group_id, assigned_to, created_by, search, include_archived } = req.query;
+    const { status, group_id, assigned_to, created_by, search, include_archived, page, limit } = req.query;
     let sql = `
       SELECT rt.*, u.full_name as creator_name, u.avatar_color as creator_color,
              g.name as group_name,
@@ -69,6 +69,19 @@ exports.list = async (req, res) => {
     if (search)      { sql += ' AND rt.title LIKE ?'; p.push(`%${search}%`); }
     if (assigned_to) { sql += ' AND EXISTS (SELECT 1 FROM request_task_assignees WHERE task_id=rt.id AND user_id=?)'; p.push(assigned_to); }
     sql += ' GROUP BY rt.id ORDER BY rt.created_at DESC';
+
+    // ⚠️ Phân trang — CHỈ áp dụng khi caller CHỦ ĐỘNG gửi page/limit, để không
+    // phá vỡ các chỗ đang gọi API này và mong đợi nhận về TOÀN BỘ danh sách
+    // (VD: RequestsPage hiện tại tự lọc/đếm ở phía client). Đây là bước chuẩn
+    // bị an toàn — khi nào frontend sẵn sàng chuyển sang phân trang thật sự,
+    // chỉ cần gửi kèm ?page=1&limit=50 là dùng được ngay, không cần sửa gì
+    // thêm ở backend.
+    if (page || limit) {
+      const l  = Math.min(200, Math.max(1, +limit || 50));
+      const pg = Math.max(1, +page || 1);
+      sql += ' LIMIT ? OFFSET ?';
+      p.push(l, (pg - 1) * l);
+    }
 
     const [rows] = await db.query(sql, p);
     const data = rows.map(r => ({
@@ -175,6 +188,13 @@ exports.create = async (req, res) => {
         payload: { title, actorName: req.user.full_name || req.user.username },
       });
     }
+
+    // 📡 Realtime — báo cho MỌI người đang mở trang Requests biết có CV mới,
+    // để tự cập nhật danh sách ngay mà không cần F5. Dùng chung 1 sự kiện
+    // 'requests:updated' cho mọi loại thay đổi (tạo/gán/xóa người/đổi trạng
+    // thái/xóa) — phía frontend chỉ cần lắng nghe 1 chỗ rồi tự reload.
+    const _io = req.app.get('io');
+    _io?.emit('requests:updated', { taskId, action: 'created' });
 
     res.status(201).json({ success: true, data: { id: taskId } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -323,6 +343,10 @@ exports.update = async (req, res) => {
       }
     }
 
+    // 📡 Realtime — báo cho mọi người đang mở trang Requests, và nếu ai đang
+    // xem đúng CV này thì tự tải lại chi tiết (không cần F5).
+    req.app.get('io')?.emit('requests:updated', { taskId: +id, action: statusChanged ? 'status_changed' : 'edited' });
+
     res.json({ success: true });
   } catch (e) { console.error('[update error]', e.message, e.stack); res.status(500).json({ success: false, message: e.message }); }
 };
@@ -372,6 +396,9 @@ exports.addAssignee = async (req, res) => {
       payload: { title: task?.title, actorName: req.user.full_name || req.user.username },
     }).catch(err => console.error('[notify assigned]', err.message));
 
+    // 📡 Realtime
+    io?.emit('requests:updated', { taskId: +id, action: 'assignee_added' });
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -403,6 +430,9 @@ exports.removeAssignee = async (req, res) => {
       description: `${req.user.full_name || req.user.username} đã xóa ${removedUser?.full_name || '?'} khỏi CV "${task?.title || '?'}"`,
       metadata: { removed_user_id: +userId },
     });
+
+    // 📡 Realtime
+    req.app.get('io')?.emit('requests:updated', { taskId: +id, action: 'assignee_removed' });
 
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -471,7 +501,7 @@ exports.claim = async (req, res) => {
 
     const actorName = req.user.full_name || req.user.username;
 
-    // 📝 Activity log — 2 dòng theo đúng nghiệp vụ yêu cầu
+    // 📝 Activity log — ghi vào request_task_comments (hiện trong tab Nhắn tin)
     await db.query(
       'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
       [id, req.user.id, `${actorName} đã tự nhận công việc này.`, 'system']
@@ -480,6 +510,16 @@ exports.claim = async (req, res) => {
       'INSERT INTO request_task_comments (task_id,user_id,content,type) VALUES (?,?,?,?)',
       [id, req.user.id, `Công việc đã tự động bắt đầu.`, 'system']
     ).catch(() => {});
+
+    // 📝 Lịch sử thay đổi — ghi vào activity_logs để hiện trong Timeline
+    // "Tiến trình" ở chi tiết CV (trước đây bị thiếu dòng này, nên tự nhận
+    // việc không hề xuất hiện trong tiến trình). Dùng chung action_type
+    // 'request_assignee_added' với addAssignee() để đồng bộ icon/màu 🙋.
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_assignee_added', entityType: 'request', entityId: +id,
+      description: `${actorName} đã tự nhận và bắt đầu công việc "${task.title}"`,
+      metadata: { added_user_id: req.user.id, role: 'main', self_assigned: true },
+    });
 
     // 🔔 Báo cho người tạo CV biết đã có người nhận
     const io = req.app.get('io');
@@ -490,6 +530,9 @@ exports.claim = async (req, res) => {
       entityId: id,
       payload: { title: task.title, actorName },
     }).catch(err => console.error('[notify claimed]', err.message));
+
+    // 📡 Realtime
+    io?.emit('requests:updated', { taskId: +id, action: 'claimed' });
 
     res.json({ success: true, data: { status: 'in_progress' } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -602,6 +645,10 @@ exports.remove = async (req, res) => {
       actorId: req.user.id, actionType: 'request_deleted', entityType: 'request', entityId: +req.params.id,
       description: `${req.user.full_name || req.user.username} đã xóa CV "${task?.title || '?'}"`,
     });
+
+    // 📡 Realtime — action:'deleted' để frontend biết ĐÓNG panel chi tiết nếu
+    // đang mở đúng CV này, thay vì cố gọi loadTask() vào 1 CV không còn tồn tại.
+    req.app.get('io')?.emit('requests:updated', { taskId: +req.params.id, action: 'deleted' });
 
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
