@@ -35,10 +35,16 @@ exports.getScores = async (req, res) => {
       'SELECT * FROM score_periods WHERE is_locked=0 ORDER BY started_at DESC LIMIT 1'
     );
 
-    // Lấy members
+    // ⚠️ SỬA LỖI: đổi JOIN → LEFT JOIN group_members. Trước đây dùng JOIN
+    // thường (INNER JOIN), khiến user nào CHƯA được xếp vào nhóm nào sẽ biến
+    // mất khỏi Dashboard hoàn toàn, dù tài khoản vẫn active bình thường — đây
+    // chính là lý do "có nhiều user mà Dashboard chỉ hiện vài người". LEFT
+    // JOIN vẫn lọc đúng theo nhóm khi có chọn group_id (vì gm.group_id sẽ là
+    // NULL với user chưa có nhóm, không khớp điều kiện lọc), nhưng khi xem
+    // "Tất cả" (không truyền group_id) thì mọi user active đều hiện ra.
     let memberSql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.role
                      FROM users u
-                     JOIN group_members gm ON gm.user_id = u.id
+                     LEFT JOIN group_members gm ON gm.user_id = u.id
                      WHERE u.is_active = 1`;
     const mp = [];
     if (group_id) { memberSql += ' AND gm.group_id = ?'; mp.push(group_id); }
@@ -191,9 +197,9 @@ async function performLockAndReset(group_id, lockedByUserId) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // Lấy members
+  // ⚠️ Cùng bản sửa LEFT JOIN như getScores() — không loại bỏ user chưa có nhóm
   let memberSql = `SELECT DISTINCT u.id, u.full_name, u.username, u.role
-                   FROM users u JOIN group_members gm ON gm.user_id = u.id
+                   FROM users u LEFT JOIN group_members gm ON gm.user_id = u.id
                    WHERE u.is_active = 1`;
   const mp = [];
   if (group_id) { memberSql += ' AND gm.group_id = ?'; mp.push(group_id); }

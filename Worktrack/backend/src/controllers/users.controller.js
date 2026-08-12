@@ -75,7 +75,7 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, email, username, role, avatar_color, is_active } = req.body;
+    const { full_name, email, role, avatar_color, is_active, group_id } = req.body;
 
     const isSelf       = req.user.id === +id;
     const isPrivileged = ['admin','manager'].includes(req.user.role);
@@ -91,9 +91,15 @@ exports.update = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
     }
 
+    // Nhóm — CHỈ admin/manager được đổi (giống role, không giao cho Leader
+    // hay tự sửa mình, để tránh tự chuyển mình khỏi nhóm đang được quản lý).
+    if (group_id !== undefined && !isPrivileged) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi nhóm của người dùng' });
+    }
+
     // Leader sửa NGƯỜI KHÁC (không phải chính mình, không phải admin/manager
-    // thực hiện): được phép sửa full_name/email/username/avatar_color/is_active,
-    // NHƯNG target không được là admin/manager — kiểm tra 1 lần chung cho mọi
+    // thực hiện): được phép sửa full_name/email/avatar_color/is_active, NHƯNG
+    // target không được là admin/manager — kiểm tra 1 lần chung cho mọi
     // trường thay vì tách riêng như trước.
     if (isLeader && !isSelf && !isPrivileged) {
       const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
@@ -114,29 +120,29 @@ exports.update = async (req, res) => {
       }
     }
 
-    // MSNV (username) — cho chỉnh bình thường như full_name/email, cùng cấp
-    // quyền: chính chủ, admin/manager, hoặc leader (trong giới hạn target ở
-    // trên). Chỉ giữ ký tự an toàn, không ép chữ thường vì mã nhân viên có
-    // quy ước viết hoa riêng (VD: "NV001").
-    let uname = username;
-    if (uname !== undefined) {
-      uname = String(uname).trim().replace(/[^a-zA-Z0-9._-]/g, '').substring(0, 30);
-      if (!uname) return res.status(400).json({ success: false, message: 'MSNV không được để trống' });
-    }
-
     await db.query(
       `UPDATE users SET
-        full_name=COALESCE(?,full_name), email=COALESCE(?,email), username=COALESCE(?,username),
+        full_name=COALESCE(?,full_name), email=COALESCE(?,email),
         role=COALESCE(?,role), avatar_color=COALESCE(?,avatar_color),
         is_active=COALESCE(?,is_active)
        WHERE id=?`,
-      [full_name, email, uname, role, avatar_color, is_active, id]
+      [full_name, email, role, avatar_color, is_active, id]
     );
+
+    // ⚠️ Đổi nhóm — trước đây EditUserModal có ô chọn "Nhóm" nhưng backend
+    // KHÔNG hề xử lý group_id, nên chọn nhóm khác rồi Lưu không có tác dụng
+    // gì cả. Giờ thực sự cập nhật: gỡ khỏi nhóm cũ, thêm vào nhóm mới (nếu
+    // group_id rỗng/"" thì chỉ gỡ khỏi mọi nhóm, không nhóm nào — tương ứng
+    // lựa chọn "-- Không nhóm --" trên giao diện).
+    if (group_id !== undefined) {
+      await db.query('DELETE FROM group_members WHERE user_id=?', [id]);
+      if (group_id) {
+        await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [group_id, id]);
+      }
+    }
+
     res.json({ success: true });
-  } catch (e) {
-    if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ success: false, message: 'MSNV hoặc email đã tồn tại' });
-    res.status(500).json({ success: false, message: e.message });
-  }
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
 // POST /users/:id/reset-password — admin/manager đổi được cho bất kỳ ai;
@@ -165,13 +171,14 @@ exports.importUsers = async (req, res) => {
     const { users } = req.body;
     const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b'];
 
-    // MSNV (mã số nhân viên) do người dùng nhập ở cột CSV thứ 5 — BẮT BUỘC,
-    // dùng trực tiếp làm username để đăng nhập. Không còn tự sinh từ họ tên
-    // nữa. Chỉ giữ ký tự an toàn cho username (chữ, số, chấm, gạch dưới, gạch
-    // ngang), KHÔNG ép về chữ thường vì mã nhân viên thường có quy ước viết
-    // hoa riêng (VD: "NV001").
-    const sanitizeMsnv = (msnv) =>
-      String(msnv || '').trim().replace(/[^a-zA-Z0-9._-]/g, '').substring(0, 30);
+    const genUsername = (name) => {
+      const parts = name.trim().normalize('NFD')
+        .replace(/[̀-ͯ]/g,'').toLowerCase().split(/\s+/);
+      if (!parts.length) return 'user';
+      const first    = parts[parts.length - 1];
+      const initials = parts.slice(0, parts.length - 1).map(p => p[0]).join('');
+      return (first + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g,'').substring(0, 30) || 'user';
+    };
 
     let created = 0, duplicates = [], errors = [];
 
@@ -184,12 +191,7 @@ exports.importUsers = async (req, res) => {
           continue;
         }
 
-        const uname = sanitizeMsnv(u.username);
-        if (!uname) {
-          errors.push({ name: u.full_name, error: 'Thiếu MSNV' });
-          continue;
-        }
-
+        const uname = genUsername(u.full_name.trim());
         const color = COLORS[Math.floor(Math.random() * COLORS.length)];
 
         console.log('[import] Processing:', u.full_name, '→ username:', uname);
