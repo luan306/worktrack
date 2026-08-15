@@ -787,14 +787,17 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
 }
 
 // ── Modal: Sửa user ──
-// currentUserRole: nếu là 'leader', cũng ẩn dropdown role như AddUserModal (phòng khi
-// sau này leader được cấp quyền vào danh sách user để sửa thông tin).
+// currentUserRole: nếu là 'leader', cũng ẩn dropdown role như AddUserModal.
+// ⚠️ MỚI: thêm ô sửa MSNV (username) — trước đây modal này không cho sửa
+// MSNV, giờ cho sửa được, gửi kèm trong payload lúc Lưu (backend cũng cần
+// hỗ trợ nhận field username, xem users.controller.js).
 function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
   const isLeader = currentUserRole === 'leader';
   const [f,setF]=useState({});
   useEffect(()=>{
     if(user) setF({
+      username: user.username,
       full_name:user.full_name,
       email:user.email,
       role:user.role,
@@ -804,12 +807,16 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   },[user]);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
+    if(!f.username||!f.username.trim()) return alert(t('users_missing_msnv','Thiếu MSNV'));
     onSave(isLeader ? {...f, role:f.role} : f); // leader không có UI đổi role nên giữ nguyên role gốc
   };
   return (
     <Modal show={show} title={`✏️ ${t('users_edit_employee')}`} onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
-        <div><label style={FL}>{t('profile_fullname')}</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 160px'}}><label style={FL}>{t('profile_fullname')}</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
+          <div style={{flex:'1 1 160px'}}><label style={FL}>MSNV *</label><input style={FI} value={f.username||''} onChange={e=>s('username',e.target.value)} placeholder="019..."/></div>
+        </div>
         <div><label style={FL}>Email</label><input type="email" style={FI} value={f.email||''} onChange={e=>s('email',e.target.value)}/></div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
           {!isLeader && (

@@ -62,20 +62,21 @@ exports.create = async (req, res) => {
 };
 
 // PUT /users/:id — cho phép các trường hợp sau:
-//   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active.
+//   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active/nhóm.
 //   2) Leader: KHÔNG được đổi role của ai (kể cả chính mình), nhưng ĐƯỢC sửa
-//      thông tin (full_name/email/avatar_color) VÀ khóa/mở khóa (is_active)
-//      của bất kỳ ai TRỪ admin/manager — không được đụng vào admin/manager
-//      dưới bất kỳ hình thức nào, không tự khóa chính mình.
+//      thông tin (full_name/email/avatar_color), khóa/mở khóa (is_active),
+//      VÀ ĐỔI NHÓM (group_id) cho bất kỳ ai TRỪ admin/manager — không được
+//      đụng vào admin/manager dưới bất kỳ hình thức nào, không tự khóa
+//      chính mình.
 //   3) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
 //      CHỈ với các trường an toàn (full_name, email, avatar_color) — tuyệt đối
-//      không cho tự đổi role/is_active dù là tự sửa mình, để tránh tự nâng
-//      quyền hoặc tự kích hoạt lại tài khoản đã bị khóa.
+//      không cho tự đổi role/is_active/group_id dù là tự sửa mình, để tránh
+//      tự nâng quyền hoặc tự chuyển nhóm/kích hoạt lại tài khoản đã bị khóa.
 // Mọi trường hợp khác (user thường sửa người khác) → 403.
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, email, role, avatar_color, is_active, group_id } = req.body;
+    const { username, full_name, email, role, avatar_color, is_active, group_id } = req.body;
 
     const isSelf       = req.user.id === +id;
     const isPrivileged = ['admin','manager'].includes(req.user.role);
@@ -85,25 +86,40 @@ exports.update = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa người dùng khác' });
     }
 
+    // ⚠️ Lấy TRƯỚC thông tin hiện tại của target — cần để so sánh "có thực sự
+    // ĐỔI giá trị hay không" thay vì chỉ xét "field có được gửi lên hay
+    // không". Trước đây EditUserModal luôn gửi kèm role=giá trị hiện tại (kể
+    // cả khi Leader không đổi role), khiến role!==undefined luôn đúng và
+    // Leader bị chặn 403 dù chỉ đang đổi NHÓM chứ không hề đụng tới role.
+    const [[target]] = !isSelf ? await db.query('SELECT role, is_active FROM users WHERE id=?', [id]) : [[null]];
+    if (!isSelf && !target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+
     // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi, kể cả Leader
-    // hay chính chủ tự sửa mình cũng không được.
-    if (role !== undefined && !isPrivileged) {
+    // hay chính chủ tự sửa mình cũng không được. Chỉ chặn khi GIÁ TRỊ thực
+    // sự khác với role hiện tại (không chặn oan khi field được gửi lên
+    // nhưng giữ nguyên giá trị cũ).
+    const roleChanging = role !== undefined && (isSelf || role !== target.role);
+    if (roleChanging && !isPrivileged) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
     }
 
-    // Nhóm — CHỈ admin/manager được đổi (giống role, không giao cho Leader
-    // hay tự sửa mình, để tránh tự chuyển mình khỏi nhóm đang được quản lý).
+    // Nhóm — admin/manager luôn được; Leader ĐƯỢC đổi nhóm cho người khác
+    // (đã qua kiểm tra target không phải admin/manager ở khối bên dưới),
+    // nhưng KHÔNG được tự chuyển nhóm của chính mình.
     if (group_id !== undefined && !isPrivileged) {
-      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi nhóm của người dùng' });
+      if (!isLeader) {
+        return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi nhóm của người dùng' });
+      }
+      if (isSelf) {
+        return res.status(400).json({ success: false, message: 'Không thể tự đổi nhóm của chính mình' });
+      }
     }
 
     // Leader sửa NGƯỜI KHÁC (không phải chính mình, không phải admin/manager
-    // thực hiện): được phép sửa full_name/email/avatar_color/is_active, NHƯNG
-    // target không được là admin/manager — kiểm tra 1 lần chung cho mọi
+    // thực hiện): được phép sửa full_name/email/avatar_color/is_active/group_id,
+    // NHƯNG target không được là admin/manager — kiểm tra 1 lần chung cho mọi
     // trường thay vì tách riêng như trước.
     if (isLeader && !isSelf && !isPrivileged) {
-      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
-      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
       if (['admin','manager'].includes(target.role)) {
         return res.status(403).json({ success: false, message: 'Leader không có quyền chỉnh sửa tài khoản admin/manager' });
       }
@@ -111,7 +127,9 @@ exports.update = async (req, res) => {
 
     // is_active (khóa/mở khóa): admin/manager luôn được; Leader được (đã qua
     // kiểm tra target ở trên) nhưng không được tự khóa/mở khóa chính mình.
-    if (is_active !== undefined && !isPrivileged) {
+    // Cũng chỉ chặn khi GIÁ TRỊ thực sự đổi, cùng lý do như role ở trên.
+    const activeChanging = is_active !== undefined && (isSelf || +is_active !== +target.is_active);
+    if (activeChanging && !isPrivileged) {
       if (!isLeader) {
         return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi trạng thái hoạt động' });
       }
@@ -120,20 +138,24 @@ exports.update = async (req, res) => {
       }
     }
 
-    await db.query(
-      `UPDATE users SET
-        full_name=COALESCE(?,full_name), email=COALESCE(?,email),
-        role=COALESCE(?,role), avatar_color=COALESCE(?,avatar_color),
-        is_active=COALESCE(?,is_active)
-       WHERE id=?`,
-      [full_name, email, role, avatar_color, is_active, id]
-    );
+    try {
+      await db.query(
+        `UPDATE users SET
+          username=COALESCE(?,username), full_name=COALESCE(?,full_name), email=COALESCE(?,email),
+          role=COALESCE(?,role), avatar_color=COALESCE(?,avatar_color),
+          is_active=COALESCE(?,is_active)
+         WHERE id=?`,
+        [username, full_name, email, role, avatar_color, is_active, id]
+      );
+    } catch (ue) {
+      if (ue.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ success: false, message: 'MSNV hoặc email đã được dùng bởi tài khoản khác' });
+      }
+      throw ue;
+    }
 
-    // ⚠️ Đổi nhóm — trước đây EditUserModal có ô chọn "Nhóm" nhưng backend
-    // KHÔNG hề xử lý group_id, nên chọn nhóm khác rồi Lưu không có tác dụng
-    // gì cả. Giờ thực sự cập nhật: gỡ khỏi nhóm cũ, thêm vào nhóm mới (nếu
-    // group_id rỗng/"" thì chỉ gỡ khỏi mọi nhóm, không nhóm nào — tương ứng
-    // lựa chọn "-- Không nhóm --" trên giao diện).
+    // Đổi nhóm — gỡ khỏi nhóm cũ, thêm vào nhóm mới (group_id rỗng/"" thì chỉ
+    // gỡ khỏi mọi nhóm, không nhóm nào — tương ứng lựa chọn "-- Không nhóm --").
     if (group_id !== undefined) {
       await db.query('DELETE FROM group_members WHERE user_id=?', [id]);
       if (group_id) {
