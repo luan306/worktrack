@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import api from '../../api/client';
+import api, { clearApiCache } from '../../api/client';
 import useAuth from '../../store/authStore';
+import { getSocket } from '../../lib/socket';
 
 /* ============================================================
    DESIGN TOKENS — cùng hệ thống với BoardPage (control-panel):
@@ -88,6 +90,7 @@ export default function DailyPage() {
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
   const { user, can } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isAdmin  = can('admin');
   const isLeader = can('admin','manager','leader');
 
@@ -103,6 +106,11 @@ export default function DailyPage() {
   const [scoreWarn,       setScoreWarn]      = useState({}); // {key: true} — điểm vừa nhập vượt quá điểm tối đa
   const [saving,          setSaving]         = useState(false);
   const [showAddTask,     setShowAddTask]     = useState(false);
+  // Import nhanh công việc Daily từ CSV
+  const [showImport,      setShowImport]      = useState(false);
+  const [importFile,      setImportFile]      = useState(null);
+  const [importPreview,   setImportPreview]   = useState(null);
+  const [importing,       setImporting]       = useState(false);
   const [editTask,        setEditTask]       = useState(null);
   const [deleteTask,      setDeleteTask]     = useState(null);
   const [confirmDelGroup, setConfirmDelGroup]= useState(null);
@@ -115,11 +123,20 @@ export default function DailyPage() {
   const [viewReasonTarget, setViewReasonTarget] = useState(null); // {taskId,dateStr,taskName,dateLabel}
   const [viewReasonText,   setViewReasonText]   = useState('');
   const [savingReason,     setSavingReason]     = useState(false);
+  // Lịch sử TẤT CẢ lần chấm/sửa của đúng 1 ô — mỗi người từng ghi lý do gì,
+  // giữ nguyên riêng biệt (không bị người sau ghi đè mất như trước).
+  const [noteHistory,      setNoteHistory]      = useState([]);
+  const [viewScoreValue,   setViewScoreValue]   = useState(0);
+  const [loadingHistory,   setLoadingHistory]   = useState(false);
   const [calMonth,        setCalMonth]       = useState(()=>{ const d=new Date(); return {y:d.getFullYear(),m:d.getMonth()}; });
 
   // viewDays: 7 ngày (week) hoặc toàn tháng (month) — VẪN HIỂN THỊ T7/CN,
   // nhưng các ngày này sẽ bị khoá không cho chấm điểm (xem isWeekend bên dưới).
-  const viewDays = viewMode === 'month'
+  // ⚠️ TỐI ƯU: bọc useMemo — trước đây tính lại TOÀN BỘ mảng ngày (tạo mới
+  // 7-42 object Date) mỗi lần component render, kể cả khi chỉ gõ điểm 1 ô
+  // (không liên quan gì tới ngày tháng). Giờ chỉ tính lại khi weekStart/viewMode
+  // thực sự đổi.
+  const viewDays = useMemo(() => (viewMode === 'month'
     ? (() => {
         const d = new Date(weekStart);
         const year = d.getFullYear();
@@ -136,12 +153,36 @@ export default function DailyPage() {
         }
         return days;
       })()
-    : getWeekDays(weekStart);
+    : getWeekDays(weekStart)
+  ), [weekStart, viewMode]);
 
   const weekDays = viewDays; // alias để không phải đổi hết code bên dưới
 
   useEffect(()=>{ if(user) loadGroups(); },[user]);
+
+  // 📍 Nhảy đúng tuần chứa ngày trong link thông báo (VD: /daily?date=2026-08-12)
+  // — chỉ chạy 1 lần lúc mở trang từ link, không chạy lại khi user tự đổi tuần.
+  useEffect(()=>{
+    const dateParam = searchParams.get('date');
+    if (dateParam) {
+      const d = new Date(dateParam);
+      if (!isNaN(d)) { setViewMode('week'); setWeekStart(getWeekStart(d)); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(()=>{ if(selectedGroup&&user) loadTasksAndLogs(); },[selectedGroup,weekStart,viewMode,user]);
+
+  // 📡 Realtime — tự tải lại khi có ai chấm/sửa điểm Daily ở bất kỳ đâu,
+  // không cần F5. Xóa cache client trước khi fetch lại (cache GET chỉ tự
+  // xóa khi CHÍNH tab này gọi POST/PUT/DELETE, không biết gì về thay đổi
+  // từ tab/người khác — xem giải thích tương tự ở RequestsPage.jsx).
+  useEffect(()=>{
+    if (!user?.id) return;
+    const socket = getSocket(user.id);
+    const onUpdate = () => { clearApiCache(); loadTasksAndLogs(); };
+    socket.on('daily:updated', onUpdate);
+    return () => socket.off('daily:updated', onUpdate);
+  }, [user?.id, selectedGroup]);
 
   const loadGroups = async () => {
     try {
@@ -150,7 +191,12 @@ export default function DailyPage() {
       const userGroupIds = user?.groups?.map(g=>g.id)||[];
       const visible = can('admin','manager') ? all : all.filter(g=>userGroupIds.includes(g.id));
       setGroups(visible);
-      if (visible.length) setSelectedGroup(visible[0]);
+      // ⚠️ Nhảy đúng nhóm khi mở từ link thông báo (VD: /daily?group_id=3&date=2026-08-12)
+      // — thay vì luôn mặc định chọn nhóm ĐẦU TIÊN như trước.
+      const gidParam = searchParams.get('group_id');
+      const target = gidParam ? visible.find(g => String(g.id) === gidParam) : null;
+      if (target) setSelectedGroup(target);
+      else if (visible.length) setSelectedGroup(visible[0]);
     } catch(e){ console.error(e); }
   };
 
@@ -267,21 +313,31 @@ export default function DailyPage() {
     doSaveLogs();
   };
 
-  // Lưu lại LÝ DO đã sửa cho 1 ô (không đổi điểm/tick — chỉ cập nhật edit_reason)
+  // Lưu điểm + lý do từ panel bên phải — CHO PHÉP sửa cả điểm ngay tại đây,
+  // không chỉ ghi lý do suông nữa. Nếu điểm thực sự đổi so với trước và ô đó
+  // đã từng được chấm, bắt buộc phải có lý do (khớp luật phía backend).
   const saveViewedReason = async () => {
     if (!viewReasonTarget || !activeMember) return;
-    if (!viewReasonText.trim()) { alert(t('daily_reason_placeholder','Nhập lý do sửa điểm...')); return; }
     const key = `${viewReasonTarget.taskId}_${activeMember.id}_${viewReasonTarget.dateStr}`;
     const existing = logs[key] || { is_done:0, score:0 };
+    const newScore = +viewScoreValue || 0;
+    const scoreChanged = +existing.score !== newScore;
+    const wasScored = existing.is_done || +existing.score > 0;
+    if (wasScored && scoreChanged && !viewReasonText.trim()) {
+      alert(t('daily_reason_placeholder','Nhập lý do sửa điểm...')); return;
+    }
     setSavingReason(true);
     try {
       await api.post('/daily/logs',{ logs: [{
         daily_task_id: viewReasonTarget.taskId,
         user_id: activeMember.id,
         log_date: viewReasonTarget.dateStr,
-        is_done: existing.is_done,
-        score: existing.score,
-        edit_reason: viewReasonText.trim(),
+        is_done: newScore > 0 ? 1 : existing.is_done,
+        score: newScore,
+        // ⚠️ Để trống ô lý do → GIỮ NGUYÊN lý do cũ (nếu có), không ghi đè
+        // thành rỗng/null — trước đây cứ Lưu mà không gõ gì là mất luôn lý
+        // do đã lưu trước đó.
+        edit_reason: viewReasonText.trim() || (existing.edit_reason && existing.edit_reason!=='null' ? existing.edit_reason : null),
       }]});
       await loadTasksAndLogs();
       setViewReasonTarget(null);
@@ -302,6 +358,141 @@ export default function DailyPage() {
       setShowAddTask(false);
       loadTasksAndLogs();
     } catch(e){ alert(e.response?.data?.message||e.message); }
+  };
+
+  // ── Import nhanh công việc Daily từ CSV ──
+  // Format cột: Tên công việc, Điểm tối đa, Tần suất, Ngày áp dụng, Giao cho
+  //   - Tần suất: "Hằng ngày" / "Nhiều thứ/tuần" / "Nhiều ngày/tháng" (hoặc
+  //     daily/weekly_count/monthly_count viết thẳng cũng được)
+  //   - Ngày áp dụng: bỏ trống nếu Hằng ngày; "2,4,6" (T2=1..CN=7) nếu Nhiều
+  //     thứ/tuần; "1,15" nếu Nhiều ngày/tháng
+  //   - Giao cho: bỏ trống = Tất cả mọi người; hoặc gõ đúng Họ tên 1 thành
+  //     viên trong nhóm đang chọn để giao RIÊNG cho người đó
+  const FREQ_ALIASES = {
+    'hằng ngày':'daily', 'hang ngay':'daily', 'daily':'daily',
+    'nhiều thứ/tuần':'weekly_count', 'nhieu thu/tuan':'weekly_count', 'weekly_count':'weekly_count',
+    'nhiều ngày/tháng':'monthly_count', 'nhieu ngay/thang':'monthly_count', 'monthly_count':'monthly_count',
+  };
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImportFile(file);
+
+    const readFile = (f, enc) => new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload  = ev => res(ev.target.result);
+      reader.onerror = rej;
+      reader.readAsText(f, enc);
+    });
+    const buffer = await file.arrayBuffer();
+    const bytes  = new Uint8Array(buffer);
+    let text = '';
+    if (bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF) {
+      text = await readFile(file, 'utf-8');
+    } else if (bytes[0]===0xFF && bytes[1]===0xFE) {
+      text = new TextDecoder('utf-16le').decode(buffer);
+    } else {
+      const utf8 = new TextDecoder('utf-8').decode(buffer);
+      const hasGarbled = /[�Ãáà]/.test(utf8.slice(0,200));
+      text = hasGarbled ? await readFile(file, 'windows-1252') : utf8;
+    }
+    text = text.replace(/^\uFEFF/, '');
+    const lines = text.trim().split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0, 300);
+
+    // ⚠️ TỐI ƯU/SỬA LỖI: parser CSV chuẩn — tôn trọng dấu ngoặc kép. Trước đây
+    // dùng line.split(',') đơn giản, nên cột dạng "2,4,6" (có phẩy BÊN TRONG
+    // dấu ngoặc kép) bị tách vỡ thành nhiều cột sai lệch hết các cột phía sau.
+    const parseCsvLine = (line) => {
+      const out = [];
+      let cur = '', inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (line[i+1] === '"') { cur += '"'; i++; } // "" → 1 dấu " thật
+            else inQuotes = false;
+          } else cur += ch;
+        } else {
+          if (ch === '"') inQuotes = true;
+          else if (ch === ',') { out.push(cur); cur = ''; }
+          else cur += ch;
+        }
+      }
+      out.push(cur);
+      return out.map(s => s.trim());
+    };
+
+    const isHeader = l => /^(t[eê]n|name|c[oô]ng vi[eệ]c)/i.test(parseCsvLine(l)[0]||'');
+    const dataLines = lines.filter(l => !isHeader(l));
+
+    const rows = dataLines.map(line => {
+      const parts = parseCsvLine(line);
+      const name       = parts[0] || '';
+      const max_score  = parts[1] || '';
+      const freqRaw    = (parts[2] || 'daily').toLowerCase();
+      const days       = parts[3] || '';
+      const assignee   = parts[4] || '';
+      const frequency  = FREQ_ALIASES[freqRaw] || 'daily';
+      const member     = assignee ? members.find(m => m.full_name.toLowerCase() === assignee.toLowerCase()) : null;
+      // ⚠️ Ghi rõ LÝ DO lỗi cho từng dòng thay vì chỉ báo ✗ trơn — người
+      // import biết chính xác cần sửa gì trong file, không phải đoán.
+      let error = '';
+      if (!name || name.length <= 1)              error = t('daily_import_err_name','Thiếu/sai tên công việc');
+      else if (!max_score || +max_score <= 0)      error = t('daily_import_err_score','Điểm tối đa phải > 0');
+      else if (frequency!=='daily' && !days.length) error = t('daily_import_err_days','Thiếu "Ngày áp dụng" (bắt buộc với tần suất không phải Hằng ngày)');
+      else if (assignee && !member)                error = t('daily_import_err_assignee',`Không tìm thấy "${assignee}" trong nhóm đang chọn`,{name:assignee});
+      const valid = !error;
+      return { name, max_score: +max_score||0, frequency, frequency_day: frequency==='daily'?null:days, assignee, member, valid, error };
+    });
+    setImportPreview(rows);
+  };
+
+  const downloadImportTemplate = () => {
+    const csv = [
+      'Tên công việc,Điểm tối đa,Tần suất,Ngày áp dụng,Giao cho',
+      'Kiểm tra máy đầu ca,3,Hằng ngày,,',
+      'Vệ sinh khu vực,2,Nhiều thứ/tuần,"2,4,6",',
+      'Báo cáo tồn kho,5,Nhiều ngày/tháng,"1,15",',
+    ].join('\n');
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csv], {type:'text/csv;charset=utf-8;'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'mau_import_cong_viec_daily.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const doImportTasks = async () => {
+    if (!importPreview || !selectedGroup) return;
+    const validRows = importPreview.filter(r=>r.valid);
+    if (!validRows.length) return;
+    setImporting(true);
+    try {
+      const { data: tgData } = await api.get(`/daily/task-groups?group_id=${selectedGroup.id}`);
+      let tgId;
+      if (tgData.data.length) { tgId = tgData.data[0].id; }
+      else {
+        const { data: newTg } = await api.post('/daily/task-groups',{group_id:selectedGroup.id,name:selectedGroup.name,icon:selectedGroup.icon||'📋'});
+        tgId = newTg.data.id;
+      }
+      let created = 0, failed = 0;
+      for (const row of validRows) {
+        try {
+          await api.post(`/daily/task-groups/${tgId}/tasks`, {
+            name: row.name, max_score: row.max_score, frequency: row.frequency,
+            frequency_day: row.frequency_day, assigned_user_id: row.member?.id || null,
+          });
+          created++;
+        } catch { failed++; }
+      }
+      alert(`✅ Đã import ${created} công việc${failed?`, ${failed} lỗi`:''}`);
+      setShowImport(false); setImportFile(null); setImportPreview(null);
+      loadTasksAndLogs();
+    } catch(e){ alert(e.response?.data?.message||e.message); }
+    finally{ setImporting(false); }
   };
 
   const updateTask = async (id,form) => {
@@ -350,10 +541,15 @@ export default function DailyPage() {
     return false;
   };
 
+  // Task này có hiện với memberId không — null/không gán = hiện cho tất cả;
+  // có gán = chỉ hiện đúng người đó. Dùng chung cho cả bảng ma trận lẫn các
+  // hàm tính tổng điểm bên dưới, để tổng không bị lẫn công việc riêng của người khác.
+  const taskVisibleToMember = (task, memberId) => !task.assigned_user_id || +task.assigned_user_id === +memberId;
+
   // Tổng điểm 1 member theo tuần
   const memberWeekTotal = (memberId) => {
     let total=0;
-    tasks.forEach(t=>{
+    tasks.filter(t=>taskVisibleToMember(t,memberId)).forEach(t=>{
       weekDays.forEach(day=>{
         if (isWeekend(day)) return;
         if (!taskShowsOnDay(t,day)) return;
@@ -368,15 +564,15 @@ export default function DailyPage() {
     if (isWeekend(day)) return 0;
     let total=0;
     const dateStr=ymd(day);
-    tasks.forEach(t=>{
+    tasks.filter(t=>taskVisibleToMember(t,memberId)).forEach(t=>{
       if (!taskShowsOnDay(t,day)) return;
       total+=+(getLog(t.id,memberId,dateStr).score)||0;
     });
     return total;
   };
 
-  // Tổng max 1 ngày (T7/CN không tính vì không được chấm điểm)
-  const dayMax = (day) => isWeekend(day) ? 0 : tasks.filter(t=>taskShowsOnDay(t,day)).reduce((s,t)=>s+(+t.max_score||0),0);
+  // Tổng max 1 ngày — CHO ĐÚNG activeMember (T7/CN không tính vì không được chấm điểm)
+  const dayMax = (day) => isWeekend(day) ? 0 : tasks.filter(t=>taskShowsOnDay(t,day)&&taskVisibleToMember(t,activeMember?.id)).reduce((s,t)=>s+(+t.max_score||0),0);
 
   // Member score summary
   const pendingCount = activeMember
@@ -496,6 +692,12 @@ export default function DailyPage() {
           <button onClick={()=>setShowAddTask(true)}
             style={{padding:'6px 14px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub}}>
             ➕ {t('daily_add_task')}
+          </button>
+        )}
+        {isLeader&&selectedGroup&&(
+          <button onClick={()=>setShowImport(true)}
+            style={{padding:'6px 14px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub}}>
+            📥 {t('daily_import_btn','Import')}
           </button>
         )}
         <button onClick={saveLogs} disabled={saving} className="dp-btn-primary"
@@ -764,7 +966,10 @@ export default function DailyPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tasks.map(task=>{
+                  {/* ⚠️ Lọc theo assigned_user_id — task không gán riêng ai (null) thì
+                    hiện cho tất cả; task gán riêng 1 người thì CHỈ hiện khi đang
+                    xem đúng người đó. */}
+                {tasks.filter(task => taskVisibleToMember(task, activeMember.id)).map(task=>{
                     const isMultiDay = task.frequency==='weekly_count' || task.frequency==='monthly_count';
                     const selectedDays = isMultiDay ? parseFreqDays(task.frequency_day) : [];
                     const freqColor = task.frequency==='daily'  ?{bg:C.successSoft,color:C.success}
@@ -835,6 +1040,7 @@ export default function DailyPage() {
                           // Lý do sửa điểm đã LƯU (không lấy từ pending — chỉ hiện icon
                           // cho những gì đã thực sự ghi vào DB).
                           const savedReason = logs[`${task.id}_${activeMember.id}_${dateStr}`]?.edit_reason;
+                          const hasReason = savedReason && savedReason !== 'null';
 
                           return (
                             <td key={i} style={{
@@ -846,14 +1052,22 @@ export default function DailyPage() {
                               position:'relative',
                               transition:'background .15s ease',
                             }}>
-                              {savedReason&&(
+                              {!locked&&isLeader&&(
                                 <span onClick={(e)=>{
                                     e.stopPropagation();
-                                    setViewReasonTarget({ taskId:task.id, dateStr, taskName:task.name, dateLabel:fmtDate(day) });
-                                    setViewReasonText(savedReason);
+                                    const isNew = !logs[`${task.id}_${activeMember.id}_${dateStr}`];
+                                    setViewReasonTarget({ taskId:task.id, dateStr, taskName:task.name, dateLabel:fmtDate(day), isNew, maxScore:task.max_score });
+                                    setViewReasonText(''); // luôn trống — mỗi người ghi lý do MỚI của riêng mình, không hiện lý do của người trước
+                                    setViewScoreValue(getLog(task.id,activeMember.id,dateStr).score||0);
+                                    setNoteHistory([]);
+                                    setLoadingHistory(true);
+                                    api.get(`/daily/note-history?task_id=${task.id}&user_id=${activeMember.id}&log_date=${dateStr}`)
+                                      .then(r=>setNoteHistory(r.data.data||[]))
+                                      .catch(()=>setNoteHistory([]))
+                                      .finally(()=>setLoadingHistory(false));
                                   }}
-                                  title={`${t('daily_reason_tooltip_prefix','Lý do sửa điểm')}: ${savedReason}`}
-                                  style={{position:'absolute',top:2,right:2,fontSize:11,cursor:'pointer',opacity:0.8,padding:2}}>📝</span>
+                                  title={hasReason ? `${t('daily_reason_tooltip_prefix','Lý do')}: ${savedReason}` : t('daily_reason_add_hint','Ghi lý do cho điểm...')}
+                                  style={{position:'absolute',top:2,right:2,fontSize:11,cursor:'pointer',opacity:hasReason?0.9:0.35,padding:2}}>📝</span>
                               )}
                               <div style={{padding:'8px 6px',display:'flex',flexDirection:'column',alignItems:'center',gap:5}}>
                                 {/* Tick */}
@@ -869,11 +1083,19 @@ export default function DailyPage() {
                                 }}>
                                   {isDone?'✓':''}
                                 </div>
-                                {/* Score */}
-                                <input className="dp-score-input" type="number" inputMode="decimal" min="0" max={task.max_score} step="0.5"
-                                  value={locked?'':(score||0)}
+                                {/* Score — ⚠️ TỐI ƯU: đổi từ input CÓ ĐIỀU KHIỂN (value=...) sang
+                                    KHÔNG ĐIỀU KHIỂN (defaultValue=...) — trước đây mỗi ký tự gõ vào
+                                    đều gọi setScore() → setPending() → re-render LẠI TOÀN BỘ bảng
+                                    (mọi task × mọi ngày), rất giật khi bảng nhiều dòng. Giờ gõ chỉ
+                                    thay đổi trong chính ô đó (trình duyệt tự xử lý, không qua React),
+                                    chỉ đẩy lên state chung lúc rời ô (blur) hoặc bấm Enter.
+                                    `key` đảm bảo ô tự "làm mới" đúng giá trị khi đổi người/ngày. */}
+                                <input key={`${task.id}_${activeMember.id}_${dateStr}_${score||0}`}
+                                  className="dp-score-input" type="number" inputMode="decimal" min="0" max={task.max_score} step="0.5"
+                                  defaultValue={locked?'':(score||0)}
                                   disabled={locked||!isLeader}
-                                  onChange={e=>setScore(task.id,activeMember.id,dateStr,e.target.value,task.max_score)}
+                                  onBlur={e=>setScore(task.id,activeMember.id,dateStr,e.target.value,task.max_score)}
+                                  onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); }}
                                   style={{
                                     width:44,textAlign:'center',borderRadius:7,padding:'3px 4px',
                                     fontSize:12,fontWeight:700,outline:'none',fontFamily:FONT_MONO,
@@ -950,9 +1172,86 @@ export default function DailyPage() {
 
       {/* Modals */}
       {(showAddTask||editTask)&&(
-        <TaskModal task={editTask}
+        <TaskModal task={editTask} members={members} activeMember={activeMember}
           onClose={()=>{setShowAddTask(false);setEditTask(null);}}
           onSave={form=>editTask?updateTask(editTask.id,form):createTask(form)}/>
+      )}
+      {showImport&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,41,.5)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(3px)',WebkitBackdropFilter:'blur(3px)'}}
+          onClick={e=>{ if(e.target===e.currentTarget){ setShowImport(false); setImportFile(null); setImportPreview(null); } }}>
+          <div className="dp-modal" style={{background:'#fff',borderRadius:18,padding:28,width:620,maxWidth:'94vw',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 30px 70px rgba(15,23,41,.3)',fontFamily:FONT_SANS}}>
+            <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:6}}>📥 {t('daily_import_title','Import nhanh công việc Daily')}</div>
+            <div style={{fontSize:12,color:C.sub,marginBottom:16,lineHeight:1.6}}>
+              {t('daily_import_desc','Định dạng CSV')}: <code style={{background:C.canvas,padding:'1px 6px',borderRadius:4,fontFamily:FONT_MONO}}>Tên công việc, Điểm tối đa, Tần suất, Ngày áp dụng, Giao cho</code>
+              <br/>{t('daily_import_hint','Cột "Giao cho" để trống = công việc chung cả nhóm; gõ đúng Họ tên 1 thành viên để giao riêng cho người đó.')}
+            </div>
+
+            <button onClick={downloadImportTemplate}
+              style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 14px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,color:C.sub,cursor:'pointer',marginBottom:14}}>
+              ⬇️ {t('daily_import_download_template','Tải file mẫu')}
+            </button>
+
+            <label style={{display:'block',border:`2.5px dashed ${C.line}`,borderRadius:12,padding:22,textAlign:'center',cursor:'pointer'}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.background=C.primarySoft;}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background='transparent';}}>
+              <div style={{fontSize:30,marginBottom:8}}>📊</div>
+              <div style={{fontSize:12,color:C.sub}}>{t('daily_import_click_choose','Bấm để chọn file CSV')}</div>
+              {importFile&&<div style={{fontSize:12,color:C.primary,marginTop:8,fontWeight:700}}>📎 {importFile.name}</div>}
+              <input type="file" accept=".csv" style={{display:'none'}} onChange={handleImportFile}/>
+            </label>
+
+            {importPreview&&(()=>{
+              const validCount = importPreview.filter(r=>r.valid).length;
+              const invalidCount = importPreview.length - validCount;
+              return (
+                <div style={{marginTop:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+                    {t('daily_import_preview','Xem trước dữ liệu')}
+                    {validCount>0&&<span style={{fontSize:11,background:C.successSoft,color:C.success,fontWeight:700,padding:'2px 8px',borderRadius:8}}>{validCount} {t('daily_import_valid','hợp lệ')}</span>}
+                    {invalidCount>0&&<span style={{fontSize:11,background:C.dangerSoft,color:C.danger,fontWeight:700,padding:'2px 8px',borderRadius:8}}>{invalidCount} {t('daily_import_invalid','lỗi')}</span>}
+                  </div>
+                  <div style={{overflowX:'auto',border:`1px solid ${C.line}`,borderRadius:10}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5,minWidth:680}}>
+                      <thead>
+                        <tr style={{background:C.canvas}}>
+                          {['Tên','Điểm','Tần suất','Ngày','Giao cho','Trạng thái'].map(h=>(
+                            <th key={h} style={{padding:'6px 10px',textAlign:'left',color:C.faint,fontWeight:700,whiteSpace:'nowrap',borderBottom:`1px solid ${C.line}`,minWidth:h==='Trạng thái'?200:undefined}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importPreview.map((row,i)=>(
+                          <tr key={i} style={{borderBottom:`1px solid ${C.lineSoft}`,background:row.valid?'transparent':'#fffafa'}}>
+                            <td style={{padding:'6px 10px',fontWeight:600,color:row.valid?C.ink:C.danger}}>{row.name||'—'}</td>
+                            <td style={{padding:'6px 10px',fontFamily:FONT_MONO}}>{row.max_score||'—'}</td>
+                            <td style={{padding:'6px 10px'}}>{row.frequency}</td>
+                            <td style={{padding:'6px 10px',fontFamily:FONT_MONO}}>{row.frequency_day||'—'}</td>
+                            <td style={{padding:'6px 10px'}}>{row.assignee||<span style={{color:C.faint}}>{t('daily_field_assignee_all_short','Tất cả')}</span>}</td>
+                            <td style={{padding:'6px 10px',color:row.valid?C.success:C.danger,fontWeight:700,whiteSpace:'normal',lineHeight:1.4}}>
+                              {row.valid ? '✓' : <span title={row.error}>✗ {row.error}</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}}>
+                    <ModalBtn onClick={()=>{setImportPreview(null);setImportFile(null);}}>{t('daily_cancel_btn2','Huỷ')}</ModalBtn>
+                    <ModalBtn onClick={doImportTasks} variant="primary">
+                      {importing?'...':`✓ ${t('daily_import_confirm_btn',{count:validCount, defaultValue:`Import ${validCount} công việc`})}`}
+                    </ModalBtn>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {!importPreview&&(
+              <div style={{display:'flex',justifyContent:'flex-end',marginTop:16}}>
+                <ModalBtn onClick={()=>{setShowImport(false);setImportFile(null);setImportPreview(null);}}>{t('daily_cancel_btn2','Huỷ')}</ModalBtn>
+              </div>
+            )}
+          </div>
+        </div>
       )}
       {deleteTask&&(
         <ConfirmModal
@@ -990,11 +1289,18 @@ export default function DailyPage() {
           }}/>
       )}
       {viewReasonTarget&&(
-        <ViewEditReasonModal
+        <ViewEditReasonPanel
           taskName={viewReasonTarget.taskName}
           dateLabel={viewReasonTarget.dateLabel}
+          isNew={viewReasonTarget.isNew}
+          maxScore={viewReasonTarget.maxScore}
+          score={viewScoreValue}
+          onChangeScore={setViewScoreValue}
           reason={viewReasonText}
           saving={savingReason}
+          history={noteHistory}
+          loadingHistory={loadingHistory}
+          currentLocale={currentLocale}
           onChangeReason={setViewReasonText}
           onCancel={()=>setViewReasonTarget(null)}
           onSave={saveViewedReason}/>
@@ -1027,21 +1333,103 @@ const ModalBtn = ({ children, onClick, disabled, variant='ghost' }) => {
   );
 };
 
-// Modal xem lại + SỬA lý do của 1 ô đã lưu — mở khi bấm icon 📝 trên ô điểm.
-function ViewEditReasonModal({ taskName, dateLabel, reason, saving, onChangeReason, onCancel, onSave }) {
+// Panel trượt ra từ BÊN TRÁI (không phải popup giữa màn hình nữa) — xem/ghi
+// lý do cho MỌI ô điểm, mở khi bấm icon 📝. Tự đổi nhãn theo ngữ cảnh:
+//   - isNew=true  → "Lý do cho điểm" (lần đầu chấm, chưa có gì trước đó)
+//   - isNew=false → "Lý do sửa điểm" (ô này đã từng có điểm/tick trước rồi)
+function ViewEditReasonPanel({ taskName, dateLabel, isNew, maxScore, score, onChangeScore, reason, saving, history=[], loadingHistory, currentLocale='vi-VN', onChangeReason, onCancel, onSave }) {
   const { t } = useTranslation();
-  return (
-    <ModalShell width={400} onBackdropClick={onCancel}>
-      <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>📝 {t('daily_reason_view_title','Lý do sửa điểm')}</div>
-      <div style={{fontSize:12,color:C.faint,marginBottom:14}}>{taskName} · {dateLabel}</div>
-      <textarea value={reason} onChange={e=>onChangeReason(e.target.value)} autoFocus
-        placeholder={t('daily_reason_placeholder','Nhập lý do sửa điểm...')}
-        style={{width:'100%',padding:'9px 11px',border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:13,resize:'vertical',minHeight:80,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
-      <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:18}}>
-        <ModalBtn onClick={onCancel}>{t('daily_cancel_btn2','Huỷ')}</ModalBtn>
-        <ModalBtn onClick={onSave} disabled={saving} variant="primary">{saving?'...':`💾 ${t('save','Lưu')}`}</ModalBtn>
+  const title = isNew
+    ? t('daily_reason_new_title','Lý do cho điểm')
+    : t('daily_reason_edit_title','Lý do sửa điểm');
+  const fmtDt = (d) => new Date(d).toLocaleString(currentLocale, { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  // ⚠️ Render thẳng vào document.body qua Portal — né hoàn toàn trường hợp 1
+  // phần tử cha nào đó (Layout, wrapper card...) có transform/filter/overflow
+  // khiến position:fixed bị bó vùng theo phần tử cha thay vì theo cả màn hình
+  // (đây là hành vi CSS chuẩn: transform/filter tạo containing block mới).
+  return createPortal(
+    <div style={{position:'fixed',inset:0,zIndex:70,display:'flex'}}>
+      <div onClick={onCancel} style={{flex:1,background:'rgba(15,23,41,.4)',backdropFilter:'blur(2px)',WebkitBackdropFilter:'blur(2px)'}}/>
+      <div className="dp-reason-panel" style={{
+        width:340,maxWidth:'88vw',height:'100%',background:'#fff',boxShadow:'-8px 0 40px rgba(15,23,41,.25)',
+        display:'flex',flexDirection:'column',fontFamily:FONT_SANS,
+      }}>
+        <div style={{padding:'18px 20px',borderBottom:`1px solid ${C.line}`}}>
+          <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>📝 {t('daily_reason_panel_title','Sửa điểm & ghi chú')}</div>
+          <div style={{fontSize:12,color:C.faint}}>{taskName} · {dateLabel}</div>
+        </div>
+        <div style={{padding:'16px 20px',flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:14}}>
+          {/* Điểm — giờ SỬA được ngay tại đây thay vì chỉ hiện tĩnh */}
+          <div style={{background:C.canvas,borderRadius:10,padding:'10px 13px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+            <span style={{fontSize:11,color:C.faint,fontWeight:700,textTransform:'uppercase',letterSpacing:.3}}>{t('daily_reason_current_score','Điểm')}</span>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <input type="number" min={0} max={maxScore||undefined} step="0.5" value={score}
+                onChange={e=>onChangeScore(e.target.value)}
+                style={{width:70,padding:'6px 8px',border:`1.5px solid ${C.line}`,borderRadius:8,fontSize:15,fontWeight:800,color:C.primary,fontFamily:FONT_MONO,textAlign:'right',outline:'none'}}/>
+              <span style={{fontSize:13,color:C.faint,fontWeight:700}}>/ {maxScore||0}đ</span>
+            </div>
+          </div>
+
+          {/* Lịch sử ghi chú — MỖI người từng chấm/sửa giữ NGUYÊN ghi chú
+              riêng của họ, không bị người sau ghi đè mất. */}
+          <div>
+            <label style={{display:'block',fontSize:11,fontWeight:800,color:C.faint,textTransform:'uppercase',letterSpacing:.4,marginBottom:7}}>
+              {t('daily_reason_history_label','Lịch sử ghi chú')}
+            </label>
+            {loadingHistory&&<div style={{fontSize:12,color:C.faint,padding:'8px 0'}}>⏳</div>}
+            {!loadingHistory&&!history.length&&(
+              <div style={{fontSize:12,color:C.faint,padding:'8px 0'}}>{t('daily_reason_history_empty','Chưa có ghi chú nào cho ô này.')}</div>
+            )}
+            {!loadingHistory&&history.length>0&&(
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                {history.map(h=>(
+                  <div key={h.id} style={{background:C.canvas,borderRadius:10,padding:'9px 12px',border:`1px solid ${C.line}`}}>
+                    <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:4}}>
+                      <div style={{width:18,height:18,borderRadius:'50%',background:h.actor_color||C.primary,color:'#fff',fontSize:8,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                        {(h.actor_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
+                      </div>
+                      <span style={{fontSize:11.5,fontWeight:700,color:C.ink,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{h.actor_name||'?'}</span>
+                      <span style={{fontSize:10,color:C.faint,fontFamily:FONT_MONO,flexShrink:0}}>{fmtDt(h.created_at)}</span>
+                    </div>
+                    {h.action_type==='daily_score_edited'&&(
+                      <div style={{fontSize:10.5,color:C.warning,fontFamily:FONT_MONO,marginBottom:3}}>
+                        {(+h.new_score > +h.old_score)
+                          ? t('daily_reason_history_up','Sửa từ {{old}}đ lên {{new}}đ',{old:h.old_score,new:h.new_score})
+                          : t('daily_reason_history_down','Sửa từ {{old}}đ xuống {{new}}đ',{old:h.old_score,new:h.new_score})}
+                      </div>
+                    )}
+                    {/* ⚠️ Guard: một số bản MySQL trả về chuỗi literal "null" khi
+                        JSON_UNQUOTE trên field JSON null thay vì SQL NULL thật —
+                        kiểm tra thêm cả trường hợp đó để không lọt chữ "null" ra
+                        giao diện khi người chấm không ghi chú gì. */}
+                    {(h.reason && h.reason!=='null')
+                      ? <div style={{fontSize:12,color:C.ink,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{h.reason}</div>
+                      : <div style={{fontSize:11.5,color:C.faint,fontStyle:'italic'}}>{t('daily_reason_history_no_note','(không ghi chú)')}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label style={{display:'block',fontSize:11,fontWeight:800,color:C.faint,textTransform:'uppercase',letterSpacing:.4,marginBottom:7}}>{title}</label>
+            <textarea value={reason} onChange={e=>onChangeReason(e.target.value)} autoFocus
+              placeholder={isNew ? t('daily_reason_new_placeholder','Vd: hoàn thành đúng tiêu chuẩn, đúng giờ...') : t('daily_reason_placeholder','Nhập lý do sửa điểm...')}
+              style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:13,resize:'vertical',minHeight:90,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+            <div style={{fontSize:11,color:C.faint,marginTop:6,lineHeight:1.5}}>
+              {isNew
+                ? t('daily_reason_new_hint','Không bắt buộc — ghi chú ngắn về lý do cho điểm này để sau dễ tra lại.')
+                : t('daily_reason_edit_hint','Bắt buộc khi đổi điểm đã từng chấm — giúp minh bạch khi có ai hỏi lại.')}
+            </div>
+          </div>
+        </div>
+        <div style={{padding:'14px 20px',borderTop:`1px solid ${C.line}`,display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <ModalBtn onClick={onCancel}>{t('daily_cancel_btn2','Huỷ')}</ModalBtn>
+          <ModalBtn onClick={onSave} disabled={saving} variant="primary">{saving?'...':`💾 ${t('save','Lưu')}`}</ModalBtn>
+        </div>
       </div>
-    </ModalShell>
+    </div>,
+    document.body
   );
 }
 
@@ -1091,9 +1479,13 @@ function ConfirmModal({ icon, title, desc, warn, onCancel, onConfirm, confirmLab
   );
 }
 
-function TaskModal({ task, onClose, onSave }) {
+function TaskModal({ task, members=[], activeMember, onClose, onSave }) {
   const { t } = useTranslation();
-  const [form,setForm]=useState({name:task?.name||'',max_score:task?.max_score||3,frequency:task?.frequency||'daily',frequency_day:task?.frequency_day||''});
+  // Đang TẠO MỚI (không phải sửa) → tự điền sẵn "Giao cho" = người Leader
+  // đang chọn ở sidebar, đỡ phải chọn lại lần nữa cho mất công. Đang SỬA 1
+  // task có sẵn thì vẫn giữ đúng giá trị đã lưu của nó (kể cả khi đó là
+  // "Tất cả" / rỗng), không tự ý đổi theo activeMember.
+  const [form,setForm]=useState({name:task?.name||'',max_score:task?.max_score||3,frequency:task?.frequency||'daily',frequency_day:task?.frequency_day||'',assigned_user_id: task ? (task.assigned_user_id||'') : (activeMember?.id||'')});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const selectedDaysArr = (form.frequency_day||'').toString().split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
   const toggleDay = (dayNum) => {
@@ -1111,7 +1503,7 @@ function TaskModal({ task, onClose, onSave }) {
     if (form.frequency==='monthly_count'&&!form.frequency_day) { alert(t('daily_alert_need_monthly_days','Chọn ít nhất 1 ngày trong tháng!')); return; }
     // ⚠️ KHÔNG dùng +form.frequency_day nữa — với weekly_count/monthly_count,
     // giá trị là chuỗi nhiều ngày (VD "2,4,6"), ép +Number sẽ ra NaN.
-    onSave({name:form.name,max_score:+form.max_score,frequency:form.frequency,frequency_day:form.frequency!=='daily'?form.frequency_day:null});
+    onSave({name:form.name,max_score:+form.max_score,frequency:form.frequency,frequency_day:form.frequency!=='daily'?form.frequency_day:null,assigned_user_id:form.assigned_user_id||null});
   };
   const FI={width:'100%',padding:'9px 12px',border:`1.5px solid ${C.line}`,borderRadius:9,fontSize:13,color:C.ink,outline:'none',boxSizing:'border-box',fontFamily:FONT_SANS};
   const FL={display:'block',fontSize:11,fontWeight:800,color:C.faint,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:6};
@@ -1169,6 +1561,18 @@ function TaskModal({ task, onClose, onSave }) {
             <div style={{fontSize:11,color:C.faint,marginTop:5}}>{t('daily_field_monthly_days_hint','Công việc chỉ hiện ra và tính điểm đúng vào những ngày đã chọn — bấm để chọn/bỏ chọn.')}</div>
           </div>
         )}
+        {/* Giao cho — mặc định "Tất cả" (công việc chung cả nhóm, hành vi cũ).
+            Chọn 1 người cụ thể → công việc RIÊNG, chỉ hiện khi xem đúng người đó. */}
+        <div style={{marginBottom:16}}>
+          <label style={FL}>{t('daily_field_assignee','Giao cho')}</label>
+          <select style={FI} value={form.assigned_user_id} onChange={e=>set('assigned_user_id',e.target.value)}>
+            <option value="">{t('daily_field_assignee_all','👥 Tất cả mọi người trong nhóm')}</option>
+            {members.map(m=>(
+              <option key={m.id} value={m.id}>{m.full_name}</option>
+            ))}
+          </select>
+          <div style={{fontSize:11,color:C.faint,marginTop:5}}>{t('daily_field_assignee_hint','Nếu chọn 1 người cụ thể, công việc này chỉ hiện ra khi bạn đang xem đúng người đó — người khác trong nhóm sẽ không thấy.')}</div>
+        </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:22}}>
           <ModalBtn onClick={onClose}>{t('daily_cancel_btn2','Huỷ')}</ModalBtn>
           <ModalBtn onClick={submit} variant="primary">💾 {t('daily_save_task_btn','Lưu công việc')}</ModalBtn>

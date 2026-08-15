@@ -94,6 +94,9 @@ function Countdown({deadline, status}) {
 
 // Giờ công tự động: đếm lên liên tục kể từ started_at trong lúc đang làm,
 // và đứng yên = khoảng thời gian thực (started_at → completed_at) khi task đã "done".
+// ⚠️ Khi vượt quá 24h thì tính thành "X ngày Y giờ Z phút" — cứ đủ 24h thì
+// ghi nhận 1 ngày rồi tiếp tục đếm phần lẻ còn lại, thay vì hiện 1 con số
+// giờ dồn rất dài (VD: "26h 30p" → "1 ngày 2h 30p").
 function WorkDuration({startedAt, completedAt, status}) {
   const { t } = useTranslation();
   const finished = status==='done' && !!completedAt;
@@ -109,12 +112,22 @@ function WorkDuration({startedAt, completedAt, status}) {
   const endMs = finished ? new Date(completedAt).getTime() : now;
   const ms = Math.max(0, endMs - new Date(startedAt).getTime());
   const totalMin = Math.floor(ms/60000);
-  const h = Math.floor(totalMin/60), m = totalMin%60, s = Math.floor((ms%60000)/1000);
+  const days = Math.floor(totalMin/1440);           // đủ 24h (1440 phút) = 1 ngày
+  const h    = Math.floor((totalMin%1440)/60);       // giờ lẻ còn lại trong ngày hiện tại
+  const m    = totalMin%60;
+  const s    = Math.floor((ms%60000)/1000);
 
   if (finished) {
-    return <span style={{fontSize:13,fontWeight:700,color:C.success}}>✅ {t('req_hours_worked_total', { defaultValue:`{{h}}h {{m}}p`, h, m })}</span>;
+    const label = days>0
+      ? t('req_hours_worked_total_days', { defaultValue:`{{d}} ngày {{h}}h {{m}}p`, d:days, h, m })
+      : t('req_hours_worked_total', { defaultValue:`{{h}}h {{m}}p`, h, m });
+    return <span style={{fontSize:13,fontWeight:700,color:C.success}}>✅ {label}</span>;
   }
-  return <span style={{fontSize:13,fontWeight:700,color:C.warning}}>⏱ {String(h).padStart(2,'0')}:{String(m).padStart(2,'0')}:{String(s).padStart(2,'0')}</span>;
+  // Đang chạy trực tiếp — vẫn đếm giây, nhưng thêm "X ngày" phía trước nếu đã qua 24h.
+  const liveLabel = days>0
+    ? `${days} ${t('req_days_short','ngày')} ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+    : `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return <span style={{fontSize:13,fontWeight:700,color:C.warning}}>⏱ {liveLabel}</span>;
 }
 
 function Section({icon,title,extra,children}){

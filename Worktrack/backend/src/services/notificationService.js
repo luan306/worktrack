@@ -4,6 +4,10 @@ const db = require('../config/db');
 // Map entity_type -> đường dẫn frontend để click thông báo là nhảy đúng chỗ
 const ENTITY_LINK = {
   request: (id) => `/requests?id=${id}`,
+  // ⚠️ Nhảy thẳng tới ĐÚNG nhóm + ĐÚNG ngày + ĐÚNG công việc thay vì chỉ mở
+  // trang Daily chung chung — cần groupId/logDate được gửi kèm trong payload
+  // lúc gọi notify() (xem daily.controller.js).
+  daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
 };
 
 /**
@@ -29,7 +33,7 @@ async function notify(io, { userId, actorId, type, entityType = 'request', entit
     payload,
     is_read: 0,
     created_at: new Date().toISOString(),
-    link: (ENTITY_LINK[entityType] || (() => null))(entityId),
+    link: (ENTITY_LINK[entityType] || (() => null))(entityId, payload),
   };
 
   // Mỗi user join room `user:{id}` lúc connect socket — xem hướng dẫn mount ở app.js

@@ -37,6 +37,10 @@ router.delete('/groups/:id/members/:userId', auth(['admin','manager','leader']),
 router.get('/daily/board',                    auth(),                          dC.getBoardData);
 router.get('/daily/page-data',                auth(),                          dC.getPageData);
 router.get('/daily/logs/week',                auth(),                          dC.getWeekLogs);
+// ⚠️ MỚI — lịch sử ghi chú của ĐÚNG 1 ô (task+người+ngày), dùng cho panel 📝
+// bên trong DailyPage.jsx. Phải đứng TRƯỚC '/daily/logs' vì không xung đột
+// path nhưng để cùng nhóm static route cho dễ theo dõi.
+router.get('/daily/note-history',             auth(),                          dC.getNoteHistory);
 router.get('/daily/logs',                     auth(),                          dC.getLogs);
 router.post('/daily/logs',                    auth(['admin','manager','leader']), dC.saveLogs);
 router.get   ('/daily/task-groups',           auth(),                          dC.listGroups);

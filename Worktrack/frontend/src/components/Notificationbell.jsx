@@ -14,6 +14,7 @@ const STATUS_TKEY = {
 const TYPE_ICON = {
   request_assigned: '📨', request_status_changed: '🔄',
   request_commented: '💬', request_scored: '⭐', request_claimed: '🙋',
+  daily_scored: '📅', daily_score_edited: '✏️',
 };
 
 function NotificationText({ n, t }) {
@@ -26,6 +27,14 @@ function NotificationText({ n, t }) {
     case 'request_commented':      return t('notif_commented', { actor, title });
     case 'request_scored':         return t('notif_scored', { actor, title, score: p.score });
     case 'request_claimed':        return t('notif_claimed', { actor, title });
+    // ⚠️ MỚI — payload của 2 loại này dùng taskName/score/oldScore/newScore,
+    // KHÔNG có field "title" như các loại request ở trên, nên trước đây rơi
+    // vào default và hiện chữ RỖNG (không phải không tạo thông báo — thông
+    // báo vẫn được tạo, chỉ là không có chữ để hiện).
+    case 'daily_scored':
+      return t('notif_daily_scored', { actor, task: p.taskName, score: p.score, defaultValue: `${actor} đã chấm điểm công việc "${p.taskName}": ${p.score}đ` });
+    case 'daily_score_edited':
+      return t('notif_daily_score_edited', { actor, task: p.taskName, old: p.oldScore, new: p.newScore, defaultValue: `${actor} đã sửa điểm công việc "${p.taskName}": ${p.oldScore}đ → ${p.newScore}đ` });
     default:                       return title;
   }
 }

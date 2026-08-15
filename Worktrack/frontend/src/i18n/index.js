@@ -357,6 +357,8 @@ const en = {
   activity_log_title:'Activity Log',
   profile_title:'Profile',
   profile_account:'Account',
+  weekly_count:"{{count}} this week",
+  monthly_count:"{{count}} this month",
 
 };
 
@@ -714,6 +716,8 @@ const ja = {
   nav_activity_log:'アクティビティログ',
   activity_log_title:'アクティビティログ',
   profile_title:'プロフィール',
+  monthly_count:"今月 {{count}} 件",
+  weekly_count:"今週 {{count}} 件",
 };
 
 const vi = {
@@ -1070,6 +1074,9 @@ const vi = {
   nav_activity_log:'Nhật ký hoạt động',
   activity_log_title:'Nhật ký hoạt động',
   profile_title:'Hồ sơ',
+  monthly_count:"{{count}} việc trong tháng",
+  weekly_count:"{{count}} việc trong tuần",
+  
 };
 
 i18n.use(initReactI18next).init({

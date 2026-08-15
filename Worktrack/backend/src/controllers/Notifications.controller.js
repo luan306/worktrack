@@ -1,8 +1,14 @@
 const db = require('../config/db');
 
 // Map entity_type -> đường dẫn frontend — dùng để tính `link` khi trả về danh sách
+// ⚠️ File này có map RIÊNG, TÁCH BIỆT với services/notificationService.js —
+// trước đây chỉ có 'request' nên mọi thông báo Daily (daily_scored/
+// daily_score_edited) đều ra link=null, bấm vào không nhảy đi đâu cả. Giờ
+// thêm 'daily_task' khớp với bên đó, dùng payload.groupId/logDate để build
+// đúng link nhảy tới đúng nhóm + đúng ngày.
 const ENTITY_LINK = {
   request: (id) => `/requests?id=${id}`,
+  daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
 };
 
 // GET /api/notifications?limit=20&before=123
@@ -27,11 +33,14 @@ exports.list = async (req, res) => {
       success: true,
       // ⚠️ mysql2 tự parse cột JSON thành object JS sẵn (không phải string nữa),
       // nên chỉ JSON.parse khi nó thực sự còn là string — tránh lỗi 500 ở đây.
-      data: rows.map(r => ({
-        ...r,
-        payload: typeof r.payload === 'string' ? JSON.parse(r.payload) : (r.payload || {}),
-        link: (ENTITY_LINK[r.entity_type] || (() => null))(r.entity_id),
-      })),
+      data: rows.map(r => {
+        const payload = typeof r.payload === 'string' ? JSON.parse(r.payload) : (r.payload || {});
+        return {
+          ...r,
+          payload,
+          link: (ENTITY_LINK[r.entity_type] || (() => null))(r.entity_id, payload),
+        };
+      }),
     });
   } catch (e) {
     console.error('[notifications.list]', e.message);

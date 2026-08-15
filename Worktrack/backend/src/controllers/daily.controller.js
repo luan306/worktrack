@@ -1,6 +1,7 @@
 const db    = require('../config/db');
 const cache = require('../config/cache');
 const { logActivity } = require('../services/activityLogService');
+const { notify, notifyMany } = require('../services/notificationService');
 
 // ── Task Groups ──
 
@@ -33,6 +34,12 @@ exports.createGroup = async (req, res) => {
       [group_id, name, icon, req.user.id]
     );
     cache.clear('tg:');
+
+    await logActivity({
+      actorId: req.user.id, actionType: 'daily_group_created', entityType: 'daily_task_group', entityId: r.insertId,
+      description: `${req.user.full_name || req.user.username} đã tạo nhóm công việc Daily "${name}"`,
+    });
+
     res.status(201).json({ success: true, data: { id: r.insertId, group_id, name, icon } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -72,26 +79,50 @@ exports.listTasks = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
+// POST /daily/task-groups/:groupId/tasks
+// ⚠️ assigned_user_id (mới): NULL = công việc chung cho CẢ NHÓM (mặc định,
+// hành vi cũ). Có giá trị = công việc RIÊNG, chỉ hiện với đúng 1 người đó
+// khi Leader bấm chọn họ trong bảng chấm điểm — người khác trong nhóm sẽ
+// không thấy dòng công việc này.
 exports.createTask = async (req, res) => {
   try {
-    const { name, max_score=10, frequency='daily', frequency_day=null } = req.body;
+    const { name, max_score=10, frequency='daily', frequency_day=null, assigned_user_id=null } = req.body;
     if (!name) return res.status(400).json({ success: false, message: 'name required' });
     const [r] = await db.query(
-      'INSERT INTO daily_tasks (task_group_id,name,max_score,frequency,frequency_day) VALUES (?,?,?,?,?)',
-      [req.params.groupId, name, max_score, frequency, frequency_day]
+      'INSERT INTO daily_tasks (task_group_id,name,max_score,frequency,frequency_day,assigned_user_id) VALUES (?,?,?,?,?,?)',
+      [req.params.groupId, name, max_score, frequency, frequency_day, assigned_user_id||null]
     );
     cache.clear('tasks:'); cache.clear('page:'); cache.clear('board:');
-    res.status(201).json({ success: true, data: { id: r.insertId, name, max_score, frequency, frequency_day } });
+
+    const freqLabel = frequency === 'daily' ? 'Hằng ngày'
+      : frequency === 'weekly' ? 'Tuần 1 lần'
+      : frequency === 'monthly' ? 'Tháng 1 lần'
+      : frequency === 'weekly_count' ? 'Nhiều thứ/tuần'
+      : frequency === 'monthly_count' ? 'Nhiều ngày/tháng'
+      : frequency;
+    let assigneeNote = '';
+    if (assigned_user_id) {
+      const [[u]] = await db.query('SELECT full_name FROM users WHERE id=?', [assigned_user_id]);
+      assigneeNote = ` — riêng cho ${u?.full_name || '?'}`;
+    }
+    await logActivity({
+      actorId: req.user.id, actionType: 'daily_task_created', entityType: 'daily_task', entityId: r.insertId,
+      description: `${req.user.full_name || req.user.username} đã tạo công việc Daily "${name}" (${freqLabel}, tối đa ${max_score}đ)${assigneeNote}`,
+    });
+
+    res.status(201).json({ success: true, data: { id: r.insertId, name, max_score, frequency, frequency_day, assigned_user_id } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
 exports.updateTask = async (req, res) => {
   try {
-    const { name, max_score, frequency, frequency_day } = req.body;
+    const { name, max_score, frequency, frequency_day, assigned_user_id } = req.body;
     await db.query(
       `UPDATE daily_tasks SET name=COALESCE(?,name), max_score=COALESCE(?,max_score),
-       frequency=COALESCE(?,frequency), frequency_day=COALESCE(?,frequency_day) WHERE id=?`,
-      [name, max_score, frequency, frequency_day, req.params.id]
+       frequency=COALESCE(?,frequency), frequency_day=COALESCE(?,frequency_day),
+       assigned_user_id=?
+       WHERE id=?`,
+      [name, max_score, frequency, frequency_day, assigned_user_id===undefined?null:assigned_user_id, req.params.id]
     );
     cache.clear('tasks:'); cache.clear('page:'); cache.clear('board:');
     res.json({ success: true });
@@ -143,9 +174,6 @@ exports.getLogs = async (req, res) => {
       logs = l;
     }
 
-    // ⚠️ TỐI ƯU: tra Map O(1) thay vì logs.find() O(n) lặp lại cho MỖI ô của
-    // ma trận (task × member) — với nhiều task và nhiều người, .find() cũ
-    // duyệt tuyến tính lại từ đầu mỗi lần, rất chậm khi log_date có nhiều dòng.
     const logMap = {};
     logs.forEach(l => { logMap[`${l.daily_task_id}_${l.user_id}`] = l; });
 
@@ -153,22 +181,18 @@ exports.getLogs = async (req, res) => {
       const d = new Date(date);
       const dow = d.getDay() === 0 ? 7 : d.getDay();
       const dom = d.getDate();
-      // frequency_day giờ là VARCHAR (có thể chứa "3" hoặc "2,4,6") — luôn so
-      // sánh dạng số, không dùng === trực tiếp với chuỗi từ DB.
       const parseDays = (v) => (v==null?'':String(v)).split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n));
       let shouldShow = false;
       if (task.frequency === 'daily') shouldShow = true;
       else if (task.frequency === 'weekly'  && parseDays(task.frequency_day)[0] === dow) shouldShow = true;
       else if (task.frequency === 'monthly' && parseDays(task.frequency_day)[0] === dom) shouldShow = true;
-      // ⚠️ "weekly_count" = chọn SẴN NHIỀU THỨ cụ thể trong tuần (VD "2,4,6" =
-      // T2+T4+T6); "monthly_count" = chọn SẴN NHIỀU NGÀY cụ thể trong tháng.
-      // Chỉ hiện ra đúng những ngày đã chọn, không phải mọi ngày.
       else if (task.frequency === 'weekly_count'  && parseDays(task.frequency_day).includes(dow)) shouldShow = true;
       else if (task.frequency === 'monthly_count' && parseDays(task.frequency_day).includes(dom)) shouldShow = true;
       if (!shouldShow) return null;
       return {
         id: task.id, name: task.name, max_score: task.max_score,
         frequency: task.frequency, frequency_day: task.frequency_day,
+        assigned_user_id: task.assigned_user_id,
         user_logs: members.map(m => {
           const log = logMap[`${task.id}_${m.id}`];
           return { user_id: m.id, is_done: log?.is_done || 0, score: log?.score || 0 };
@@ -188,30 +212,34 @@ exports.saveLogs = async (req, res) => {
 
     const conn = await db.getConnection();
     await conn.beginTransaction();
-    const activityEntries = []; // ghi log SAU khi commit thành công, tránh giữ transaction lâu
+    const activityEntries = [];
     try {
-      // ⚠️ TỐI ƯU: lấy TRƯỚC toàn bộ log hiện có cho các dòng sắp lưu bằng
-      // ĐÚNG 1 QUERY (cú pháp tuple IN của MySQL), thay vì SELECT riêng từng
-      // dòng như trước — lưu 50 điểm cùng lúc giờ chỉ tốn 1 SELECT thay vì 50.
       const tuples = logs.map(l => [l.daily_task_id, l.user_id, l.log_date]);
       const placeholders = tuples.map(() => '(?,?,?)').join(',');
       const [existingRows] = await conn.query(
-        `SELECT daily_task_id, user_id, log_date, is_done, score
+        `SELECT daily_task_id, user_id, log_date, is_done, score, scored_by
          FROM daily_task_logs
          WHERE (daily_task_id, user_id, log_date) IN (${placeholders})`,
         tuples.flat()
       );
       const existingMap = {};
       existingRows.forEach(r => {
-        const dateStr = r.log_date instanceof Date ? r.log_date.toISOString().slice(0,10) : r.log_date;
+        // ⚠️ SỬA LỖI MÚI GIỜ NGHIÊM TRỌNG: .toISOString() quy đổi Date object
+        // sang giờ UTC trước khi cắt lấy ngày — với server chạy múi giờ VN
+        // (UTC+7), ngày có thể bị LÙI 1 NGÀY (VD: 13/08 00:00 giờ VN →
+        // 12/08 17:00 UTC → cắt ra "12/08" SAI). Điều này khiến khóa tra cứu
+        // existingMap không khớp với ngày thực sự gửi lên, nên code LUÔN coi
+        // mọi lần chấm là "mới" (existing=undefined) dù đã có người chấm
+        // trước đó — hậu quả: không phát hiện được đây là SỬA điểm, nên
+        // không thông báo đúng cho người đã chấm trước (VD: Leader). Dùng
+        // local date components (getFullYear/getMonth/getDate) thay vì UTC.
+        const dateStr = r.log_date instanceof Date
+          ? `${r.log_date.getFullYear()}-${String(r.log_date.getMonth()+1).padStart(2,'0')}-${String(r.log_date.getDate()).padStart(2,'0')}`
+          : r.log_date;
         existingMap[`${r.daily_task_id}_${r.user_id}_${dateStr}`] = r;
       });
 
       for (const log of logs) {
-        // ⚠️ Nếu log này ĐÃ được chấm trước đó (is_done=1 hoặc score>0) và giá
-        // trị mới khác giá trị cũ → bắt buộc phải có edit_reason mới cho lưu.
-        // Đây là lớp bảo vệ phía server — frontend đã chặn từ trước bằng modal,
-        // nhưng vẫn kiểm tra lại ở đây để không ai lách qua API trực tiếp được.
         const existing = existingMap[`${log.daily_task_id}_${log.user_id}_${log.log_date}`];
         const wasScored = existing && (existing.is_done || +existing.score > 0);
         const changed = existing && (
@@ -232,34 +260,35 @@ exports.saveLogs = async (req, res) => {
           [log.daily_task_id, log.user_id, log.log_date, log.is_done, log.score, req.user.id, log.edit_reason || null]
         );
 
-        // 📝 Lịch sử thay đổi — chỉ ghi khi thực sự có điểm/tick (bỏ qua việc
-        // tick-rồi-bỏ-tick về 0 không phải sửa gì đáng kể), phân biệt CHẤM MỚI
-        // và SỬA LẠI (có lý do) để hiển thị đúng loại hành động ở trang lịch sử.
         if (wasScored && changed) {
-          activityEntries.push({
-            type: 'daily_score_edited', log,
-            oldScore: existing.score, oldDone: existing.is_done,
-          });
+          activityEntries.push({ type: 'daily_score_edited', log, oldScore: existing.score, oldDone: existing.is_done, oldScoredBy: existing.scored_by });
         } else if (!wasScored && (log.is_done || +log.score > 0)) {
           activityEntries.push({ type: 'daily_scored', log });
         }
       }
       await conn.commit();
-      // Clear log caches
       cache.clear('logs:'); cache.clear('board:');
 
-      // Ghi log lịch sử sau khi transaction đã commit chắc chắn thành công.
-      // ⚠️ TỐI ƯU: lấy tên task/tên người BATCH 1 LẦN cho toàn bộ entries,
-      // thay vì 2 SELECT riêng cho MỖI entry như trước (N entries × 2 query
-      // → chỉ còn đúng 2 query bất kể lưu bao nhiêu dòng).
+      // 📡 Realtime — báo cho MỌI người đang mở trang Daily biết vừa có điểm
+      // mới/sửa, để tự tải lại ngay không cần F5 (giống cơ chế đã làm cho
+      // Requests). Gửi kèm user_id bị ảnh hưởng để frontend biết có liên
+      // quan tới mình hay không.
+      const affectedUserIds = [...new Set(logs.map(l => l.user_id))];
+      req.app.get('io')?.emit('daily:updated', { taskIds: [...new Set(logs.map(l=>l.daily_task_id))], userIds: affectedUserIds, logDate: logs[0]?.log_date });
+
       if (activityEntries.length) {
         const actorName = req.user.full_name || req.user.username;
         const taskIds = [...new Set(activityEntries.map(e => e.log.daily_task_id))];
         const userIds = [...new Set(activityEntries.map(e => e.log.user_id))];
 
-        const [taskRows] = await db.query('SELECT id, name FROM daily_tasks WHERE id IN (?)', [taskIds]);
+        const [taskRows] = await db.query(
+          `SELECT dt.id, dt.name, dtg.group_id
+           FROM daily_tasks dt JOIN daily_task_groups dtg ON dtg.id=dt.task_group_id
+           WHERE dt.id IN (?)`, [taskIds]
+        );
         const [userRows] = await db.query('SELECT id, full_name FROM users WHERE id IN (?)', [userIds]);
         const taskNameMap = Object.fromEntries(taskRows.map(t => [t.id, t.name]));
+        const taskGroupMap = Object.fromEntries(taskRows.map(t => [t.id, t.group_id]));
         const userNameMap = Object.fromEntries(userRows.map(u => [u.id, u.full_name]));
 
         for (const entry of activityEntries) {
@@ -269,13 +298,42 @@ exports.saveLogs = async (req, res) => {
             await logActivity({
               actorId: req.user.id, actionType: 'daily_scored', entityType: 'daily_task', entityId: entry.log.daily_task_id,
               description: `${actorName} đã chấm "${taskName}" cho ${targetName}: ${entry.log.score}đ (ngày ${entry.log.log_date})`,
+              metadata: { user_id: entry.log.user_id, log_date: entry.log.log_date, new_score: entry.log.score, reason: entry.log.edit_reason || null },
             });
           } else {
             await logActivity({
               actorId: req.user.id, actionType: 'daily_score_edited', entityType: 'daily_task', entityId: entry.log.daily_task_id,
-              description: `${actorName} đã SỬA điểm "${taskName}" cho ${targetName}: ${entry.oldScore}đ → ${entry.log.score}đ (ngày ${entry.log.log_date}). Lý do: ${entry.log.edit_reason}`,
-              metadata: { old_score: entry.oldScore, new_score: entry.log.score, reason: entry.log.edit_reason },
+              description: `${actorName} đã SỬA điểm "${taskName}" cho ${targetName}: ${entry.oldScore}đ → ${entry.log.score}đ (ngày ${entry.log.log_date})${entry.log.edit_reason ? `. Lý do: ${entry.log.edit_reason}` : ''}`,
+              metadata: { user_id: entry.log.user_id, log_date: entry.log.log_date, old_score: entry.oldScore, new_score: entry.log.score, reason: entry.log.edit_reason },
             });
+          }
+        }
+
+        // 🔔 Thông báo — CHẤM MỚI: báo cho chính người được chấm (User).
+        // SỬA LẠI: báo cho CẢ người được chấm (User) LẪN người đã chấm lần
+        // trước đó (VD: Leader) để họ biết điểm mình chấm vừa bị đổi — trừ
+        // khi người đó chính là người vừa thực hiện hành động (không tự báo mình).
+        const io = req.app.get('io');
+        for (const entry of activityEntries) {
+          const taskName = taskNameMap[entry.log.daily_task_id] || `#${entry.log.daily_task_id}`;
+          const groupId  = taskGroupMap[entry.log.daily_task_id];
+          if (entry.type === 'daily_scored') {
+            if (entry.log.user_id !== req.user.id) {
+              notify(io, {
+                userId: entry.log.user_id, actorId: req.user.id, type: 'daily_scored',
+                entityType: 'daily_task', entityId: entry.log.daily_task_id,
+                payload: { taskName, score: entry.log.score, logDate: entry.log.log_date, groupId, actorName, reason: entry.log.edit_reason || null },
+              }).catch(err => console.error('[notify daily_scored]', err.message));
+            }
+          } else {
+            const targets = new Set([entry.log.user_id, entry.oldScoredBy].filter(id => id && id !== req.user.id));
+            if (targets.size) {
+              notifyMany(io, [...targets], {
+                actorId: req.user.id, type: 'daily_score_edited',
+                entityType: 'daily_task', entityId: entry.log.daily_task_id,
+                payload: { taskName, oldScore: entry.oldScore, newScore: entry.log.score, logDate: entry.log.log_date, groupId, actorName, reason: entry.log.edit_reason },
+              }).catch(err => console.error('[notify daily_score_edited]', err.message));
+            }
           }
         }
       }
@@ -313,7 +371,7 @@ exports.getWeekLogs = async (req, res) => {
       if (group_id) { sql += ' AND dtg.group_id=?'; p.push(group_id); }
       if (user_id)  { sql += ' AND dtl.user_id=?'; p.push(user_id); }
       [rows] = await db.query(sql, p);
-      cache.set(cKey, rows, 15000); // 15s cache
+      cache.set(cKey, rows, 15000);
     }
     res.json({ success: true, data: { start, end: endStr, logs: rows } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -334,7 +392,7 @@ exports.getBoardData = async (req, res) => {
            JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? AND u.is_active=1`, [group_id]
         ),
         db.query(`
-          SELECT dt.id, dt.name, dt.max_score, dt.frequency, dt.frequency_day,
+          SELECT dt.id, dt.name, dt.max_score, dt.frequency, dt.frequency_day, dt.assigned_user_id,
                  dtg.group_id, dtg.name as tg_name, dtg.icon as tg_icon,
                  dtl.is_done, dtl.score, dtl.user_id as log_user_id
           FROM daily_tasks dt
@@ -347,7 +405,7 @@ exports.getBoardData = async (req, res) => {
 
       result = [{ group_id, tasks: rows.map(r=>({
         id:r.id, name:r.name, max_score:r.max_score,
-        frequency:r.frequency, frequency_day:r.frequency_day,
+        frequency:r.frequency, frequency_day:r.frequency_day, assigned_user_id:r.assigned_user_id,
         today_done:r.is_done||0, today_score:r.score||0,
       })), members }];
       cache.set(cKey, result, 15000);
@@ -380,9 +438,36 @@ exports.getPageData = async (req, res) => {
         ),
       ]);
       data = { tasks, members };
-      cache.set(cKey, data, 60000); // 60s — tasks/members ít thay đổi
+      cache.set(cKey, data, 60000);
     }
     res.json({ success: true, data });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// GET /daily/note-history?task_id=&user_id=&log_date=
+// Lịch sử TẤT CẢ lần chấm/sửa điểm của ĐÚNG 1 Ô (task+người+ngày cụ thể) —
+// mỗi người từng ghi lý do ở lần chấm/sửa của họ đều được giữ lại riêng biệt.
+exports.getNoteHistory = async (req, res) => {
+  try {
+    const { task_id, user_id, log_date } = req.query;
+    if (!task_id || !user_id || !log_date) {
+      return res.status(400).json({ success: false, message: 'task_id, user_id, log_date required' });
+    }
+    const [rows] = await db.query(
+      `SELECT al.id, al.action_type, al.created_at,
+              u.full_name as actor_name, u.avatar_color as actor_color,
+              JSON_UNQUOTE(JSON_EXTRACT(al.metadata,'$.old_score')) as old_score,
+              JSON_UNQUOTE(JSON_EXTRACT(al.metadata,'$.new_score')) as new_score,
+              JSON_UNQUOTE(JSON_EXTRACT(al.metadata,'$.reason'))    as reason
+         FROM activity_logs al
+         LEFT JOIN users u ON u.id=al.actor_id
+        WHERE al.entity_type='daily_task' AND al.entity_id=?
+          AND JSON_UNQUOTE(JSON_EXTRACT(al.metadata,'$.user_id'))=?
+          AND JSON_UNQUOTE(JSON_EXTRACT(al.metadata,'$.log_date'))=?
+        ORDER BY al.created_at ASC`,
+      [task_id, user_id, log_date]
+    );
+    res.json({ success: true, data: rows });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
