@@ -23,8 +23,8 @@ api.interceptors.request.use(cfg => {
 
 api.interceptors.response.use(
   res => {
-    // Cache GET
-    if (res.config.method === 'get') {
+    // Cache GET (trừ file tải về / gọi với { cache: false })
+    if (res.config.method === 'get' && res.config.cache !== false && !res.config.responseType) {
       cache.set(cacheKey(res.config), { data: res.data, ts: Date.now() });
     }
     // Clear cache on mutations
@@ -35,6 +35,9 @@ api.interceptors.response.use(
   },
   async err => {
     const orig = err.config;
+    // 401 của chính API đăng nhập = sai mật khẩu, không phải token hết hạn →
+    // trả lỗi về cho LoginPage hiển thị, không refresh + tải lại trang
+    if (/\/auth\/(login|refresh)$/.test(orig?.url || '')) return Promise.reject(err);
     if (err.response?.status !== 401 || orig._retry) return Promise.reject(err);
     if (refreshing) {
       return new Promise((res, rej) => queue.push({ resolve: res, reject: rej }))
@@ -62,14 +65,26 @@ api.interceptors.response.use(
 // Wrap get để dùng cache
 const _get = api.get.bind(api);
 api.get = (url, cfg = {}) => {
+  if (cfg.cache === false || cfg.responseType) return _get(url, cfg);
   const key = `${url}?${new URLSearchParams(cfg.params||{}).toString()}`;
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.ts < TTL) {
+  if (hit) {
     // Return cached as promise
-    return Promise.resolve({ data: hit.data, config: { method: 'get', url, ...cfg } });
+    if (Date.now() - hit.ts < TTL) return Promise.resolve({ data: hit.data, config: { method: 'get', url, ...cfg } });
+    cache.delete(key); // hết hạn → bỏ luôn, không giữ trong bộ nhớ
   }
   return _get(url, cfg);
 };
+
+// Tải 1 file từ API về máy (Excel, CSV...) — lấy tên file từ Content-Disposition nếu có
+export async function downloadFile(url, { params, fallbackName = 'download', timeout = 120000 } = {}) {
+  const r = await api.get(url, { params, responseType: 'blob', timeout });
+  const name = /filename="?([^"]+)"?/.exec(r.headers?.['content-disposition'] || '')?.[1] || fallbackName;
+  const href = URL.createObjectURL(new Blob([r.data]));
+  const a = Object.assign(document.createElement('a'), { href, download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
 
 // Prefetch helper — gọi trước khi cần
 api.prefetch = (url, cfg = {}) => {

@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import api, { clearApiCache } from '../../api/client';
 import useAuth from '../../store/authStore';
-import { getSocket } from '../../lib/socket';
+import { onRealtime } from '../../lib/socket';
+import { useNow } from '../../lib/useNow';
 
 /* ============================================================
    DESIGN TOKENS
@@ -12,26 +13,26 @@ import { getSocket } from '../../lib/socket';
    digital-readout type for countdowns/scores/page numbers.
    ============================================================ */
 const C = {
-  ink:        '#0f1729',
-  sub:        '#6b7280',
-  faint:      '#9aa3b2',
-  surface:    '#ffffff',
-  canvas:     '#eef1f8',
-  line:       '#e6e9f2',
-  lineSoft:   '#f0f2f8',
+  ink:        'var(--wt-ink)',
+  sub:        'var(--wt-text-2)',
+  faint:      'var(--wt-text-3)',
+  surface:    'var(--wt-surface)',
+  canvas:     'var(--wt-canvas)',
+  line:       'var(--wt-line)',
+  lineSoft:   'var(--wt-surface-3)',
 
   primary:      '#3654ff',
   primaryDeep:  '#2440d6',
-  primarySoft:  '#eaefff',
+  primarySoft:  'var(--wt-tint-primary)',
 
   success:     '#17b26a',
-  successSoft: '#e8f9f0',
+  successSoft: 'var(--wt-tint-success)',
   warning:     '#f59e0b',
-  warningSoft: '#fef3e2',
+  warningSoft: 'var(--wt-tint-warning)',
   danger:      '#e5384d',
-  dangerSoft:  '#fdeaec',
+  dangerSoft:  'var(--wt-tint-danger)',
   violet:      '#8b5cf6',
-  violetSoft:  '#f2ecfe',
+  violetSoft:  'var(--wt-tint-violet)',
 };
 
 const FONT_SANS = "'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
@@ -68,20 +69,6 @@ const isRecentlyAssigned = (task) => {
 const isMine = (task, myId) => !!myId && !!task.assignees?.some(a => String(a.user_id) === String(myId));
 
 /* ---------------- shared atoms ---------------- */
-
-const Chip = ({ color = C.primary, name = '?', size = 22, ring = false }) => {
-  const ini = (name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  return (
-    <div style={{
-      background: `linear-gradient(135deg, ${color}, ${color}cc)`,
-      width: size, height: size, borderRadius: '50%',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontSize: size * 0.42, fontWeight: 700, flexShrink: 0,
-      fontFamily: FONT_SANS, letterSpacing: 0.2,
-      boxShadow: ring ? `0 0 0 2px #fff, 0 0 0 3.5px ${color}55` : '0 1px 2px rgba(15,23,41,.15)',
-    }}>{ini}</div>
-  );
-};
 
 const MetaRow = ({ icon, label, value, vc = C.ink }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: C.faint, fontFamily: FONT_SANS, minWidth: 0 }}>
@@ -133,7 +120,7 @@ function Pagination({ page, totalPages, onChange }) {
   const btn = (active, disabled) => ({
     minWidth: 26, height: 26, padding: '0 7px', borderRadius: 8,
     border: active ? 'none' : `1.5px solid ${C.line}`,
-    background: active ? `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})` : '#fff',
+    background: active ? `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})` : 'var(--wt-surface)',
     color: active ? '#fff' : disabled ? C.faint : C.sub,
     fontSize: 11, fontWeight: 700, cursor: disabled ? 'default' : 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -164,11 +151,9 @@ function Pagination({ page, totalPages, onChange }) {
 
 function Countdown({ deadline, status }) {
   const { t } = useTranslation();
-  const [diff, setDiff] = useState(new Date(deadline) - new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setDiff(new Date(deadline) - new Date()), 1000);
-    return () => clearInterval(timer);
-  }, [deadline]);
+  // Còn > 1 ngày chỉ hiện ngày/giờ → cập nhật mỗi phút là đủ
+  const now = useNow(n => (new Date(deadline) - n > 86400000 ? 60000 : 1000), status !== 'done');
+  const diff = new Date(deadline) - now;
   if (status === 'done') return null;
   if (diff <= 0) return (
     <span style={{ fontSize: 10.5, fontWeight: 800, color: '#fff', background: C.danger, padding: '3px 8px', borderRadius: 7, fontFamily: FONT_MONO, letterSpacing: .3, display: 'inline-flex', alignItems: 'center', gap: 5, animation: 'brdPulse 1.4s ease-in-out infinite' }}>⚠ {t('late')}</span>
@@ -188,49 +173,6 @@ function Countdown({ deadline, status }) {
 
 /* ---------------- cards ---------------- */
 
-function DailyCard({ group, onClick }) {
-  const { t } = useTranslation();
-  const tasks = group.tasks || [];
-  const total = tasks.reduce((s, tk) => s + parseFloat(tk.today_score || 0), 0);
-  const max = tasks.reduce((s, tk) => s + (+tk.max_score || 0), 0);
-  const pct = max > 0 ? Math.min(100, (total / max) * 100) : 0;
-  const sc = total === 0 ? C.faint : total >= max * 0.8 ? C.success : C.warning;
-  return (
-    <div onClick={onClick} className="brd-card" style={{ background: C.surface, borderRadius: 14, border: `1px solid ${C.line}`, overflow: 'hidden', cursor: 'pointer' }}>
-      <div style={{ padding: '12px 14px 10px', display: 'flex', alignItems: 'center', gap: 9 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 9, background: C.primarySoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>{group.icon || '🏭'}</div>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, flex: 1, minWidth: 0, fontFamily: FONT_SANS, lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.name}</div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: sc, fontFamily: FONT_MONO, flexShrink: 0, whiteSpace: 'nowrap' }}>{total.toFixed(1)}<span style={{ color: C.faint, fontWeight: 500 }}>/{max}đ</span></span>
-      </div>
-      <div style={{ margin: '0 14px', height: 5, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 4, background: `linear-gradient(90deg, ${sc}, ${sc}cc)`, transition: 'width .4s ease' }} />
-      </div>
-      <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {tasks.slice(0, 4).map(tk => (
-          <div key={tk.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8, background: C.canvas }}>
-            <div style={{ width: 15, height: 15, borderRadius: 5, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, border: `2px solid ${tk.today_done ? C.success : '#c7d0e0'}`, background: tk.today_done ? C.success : 'transparent', color: '#fff' }}>{tk.today_done ? '✓' : ''}</div>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: tk.today_done ? C.faint : C.ink, textDecoration: tk.today_done ? 'line-through' : 'none', fontFamily: FONT_SANS, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tk.name}</span>
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: tk.today_score > 0 ? C.primary : C.faint, fontFamily: FONT_MONO, flexShrink: 0, whiteSpace: 'nowrap' }}>{tk.today_score || 0}đ</span>
-          </div>
-        ))}
-        {tasks.length > 4 && <div style={{ fontSize: 10.5, color: C.faint, textAlign: 'center', fontFamily: FONT_SANS }}>{t('board_more_tasks', { count: tasks.length - 4 })}</div>}
-        {!tasks.length && <div style={{ fontSize: 11.5, color: C.faint, textAlign: 'center', padding: 4, fontFamily: FONT_SANS }}>{t('board_no_tasks_today')}</div>}
-      </div>
-      <div style={{ padding: '9px 14px', borderTop: `1px solid ${C.lineSoft}`, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ flex: 1 }} />
-        <div style={{ display: 'flex' }}>
-          {(group.members || []).slice(0, 4).map((m, i) => (
-            <div key={m.id || i} style={{ marginLeft: i === 0 ? 0 : -6 }}><Chip color={m.avatar_color || C.primary} name={m.full_name || '?'} size={21} ring /></div>
-          ))}
-          {(group.members || []).length > 4 && (
-            <div style={{ marginLeft: -6, width: 21, height: 21, borderRadius: '50%', background: '#e5e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8.5, fontWeight: 700, color: C.sub, boxShadow: '0 0 0 2px #fff' }}>+{(group.members || []).length - 4}</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function RequestCard({ task, onNav, myId }) {
   const { t } = useTranslation();
   const priKey = task.priority === 'high' ? 'high' : task.priority === 'low' ? 'low' : 'medium';
@@ -244,11 +186,10 @@ function RequestCard({ task, onNav, myId }) {
   const mineNew = mine && isRecentlyAssigned(task);
   const fmt = d => d ? new Date(d).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   const accentColor = overdue ? C.danger : near ? C.warning : priColor;
-  const tint = overdue ? C.dangerSoft : near ? C.warningSoft : C.surface;
 
   return (
     <div onClick={onNav} className="brd-card" style={{
-      background: tint, borderRadius: 14,
+      background: C.surface, borderRadius: 14,
       border: `1px solid ${mine ? C.primary : C.line}`,
       borderLeft: `5px solid ${accentColor}`,
       overflow: 'hidden', cursor: 'pointer', position: 'relative',
@@ -264,7 +205,7 @@ function RequestCard({ task, onNav, myId }) {
             padding: '3px 8px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
             boxShadow: mineNew ? `0 2px 8px ${C.danger}66` : `0 2px 6px ${C.primary}66`,
           }}>
-            {mineNew && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fff', animation: 'brdPulse 1.1s ease-in-out infinite', flexShrink: 0 }} />}
+            {mineNew && <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--wt-surface)', animation: 'brdPulse 1.1s ease-in-out infinite', flexShrink: 0 }} />}
             {mineNew ? `🔔 ${t('board_tag_newly_assigned_to_me', 'Mới giao cho bạn')}` : `👷 ${t('board_tag_assigned_to_me', 'Của bạn')}`}
           </span>
         ) : (
@@ -272,17 +213,29 @@ function RequestCard({ task, onNav, myId }) {
         )}
       </div>
       <div style={{ padding: '2px 12px 0 14px', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-        {overdue && <Badge text={t('board_tag_overdue', 'Trễ hạn')} bg={C.danger} color="#fff" pulse />}
+        {/* Trễ hạn đã thể hiện ở viền đỏ + dòng deadline "Quá hạn" bên dưới → không lặp nhãn ở đây */}
         {!overdue && near && <Badge text={t('board_tag_near_deadline', 'Sắp hết hạn')} bg={C.warningSoft} color={C.warning} />}
         {fresh && <Badge text={`🆕 ${t('board_tag_new', 'Mới')}`} bg={C.primarySoft} color={C.primary} />}
+        {task.status === 'scoring' && <Badge text={`🏆 ${t('board_tag_scoring', 'Chờ Leader chấm điểm')}`} bg={C.violetSoft} color={C.violet} />}
         {unassigned && <Badge text={`👷 ${t('board_tag_unassigned', 'Chưa nhận')}`} bg={C.violetSoft} color={C.violet} />}
         {!unassigned && !mine && <Badge text={`✅ ${t('board_tag_assigned', 'Đã giao')}`} bg={C.successSoft} color={C.success} />}
       </div>
-      <div style={{ padding: '10px 12px 12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <MetaRow icon="👤" label={t('label_assigned_by')} value={task.creator_name} />
-        <MetaRow icon="👷" label={t('label_assignee')} value={assignee ? assignee.full_name : t('board_not_assigned')} vc={assignee ? C.ink : C.faint} />
-        {task.deadline && <MetaRow icon="⏰" label={t('label_deadline')} value={fmt(task.deadline)} vc={overdue ? C.danger : C.ink} />}
-        {task.deadline && <Countdown deadline={task.deadline} status={task.status} />}
+      <div style={{ padding: '9px 12px 11px 14px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: C.faint, fontFamily: FONT_SANS, minWidth: 0 }}>
+          <span title={t('label_assigned_by')} style={{ flexShrink: 0 }}>👤</span>
+          <span style={{ color: C.sub, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{task.creator_name}</span>
+          <span style={{ flexShrink: 0 }}>→</span>
+          <span title={t('label_assignee')} style={{ flexShrink: 0 }}>👷</span>
+          <span style={{ color: assignee ? C.ink : C.faint, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>
+            {assignee ? assignee.full_name + ((task.assignees?.length || 0) > 1 ? ` +${task.assignees.length - 1}` : '') : t('board_not_assigned')}
+          </span>
+        </div>
+        {task.deadline && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <MetaRow icon="⏰" label="" value={fmt(task.deadline)} vc={overdue ? C.danger : C.ink} />
+            <Countdown deadline={task.deadline} status={task.status} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -302,6 +255,41 @@ function CompletedCard({ task, onNav }) {
         <MetaRow icon="👤" label={t('label_assigned_by')} value={task.creator_name} />
         {task.completed_at && <MetaRow icon="✅" label={t('label_completed_at')} value={fmt(task.completed_at)} vc={C.success} />}
         {task.score != null && <MetaRow icon="⭐" label={t('label_score')} value={`${task.score}đ`} vc={C.primary} />}
+      </div>
+    </div>
+  );
+}
+
+// CV đã nộp + đã có điểm sơ bộ của Leader, đang chờ Manager duyệt lần cuối
+function ReviewCard({ task, onNav, canApprove }) {
+  const { t } = useTranslation();
+  const fmt = d => d ? new Date(d).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const assignees = (task.assignees || []).map(a => a.full_name + (a.role === 'support' ? ' (hỗ trợ)' : '')).join(', ');
+  const lateSubmit = isLateSubmit(task);
+  // Đã chờ duyệt bao lâu (tính từ lúc nộp) — cập nhật mỗi phút
+  const now = useNow(60000);
+  const waitMs = task.completed_at ? Math.max(0, now - new Date(task.completed_at)) : 0;
+  const waitDays = Math.floor(waitMs / 86400000);
+  const waitLabel = waitDays > 0 ? t('board_waited_days', { n: waitDays, defaultValue: `Đã chờ ${waitDays} ngày` })
+    : t('board_waited_hours', { n: Math.max(1, Math.floor(waitMs / 3600000)), defaultValue: `Đã chờ ${Math.max(1, Math.floor(waitMs / 3600000))} giờ` });
+  const waitColor = waitDays >= 3 ? C.danger : waitDays >= 1 ? C.warning : C.sub;
+  return (
+    <div onClick={onNav} className="brd-card" style={{ background: C.surface, borderRadius: 14, border: `1px solid ${canApprove ? C.violet : C.line}`, borderLeft: `5px solid ${C.violet}`, overflow: 'hidden', cursor: 'pointer' }}>
+      <div style={{ padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ width: 26, height: 26, borderRadius: '50%', background: C.violetSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 }}>⏳</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, flex: 1, minWidth: 0, fontFamily: FONT_SANS, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</div>
+        {canApprove && <span style={{ fontSize: 9.5, fontWeight: 800, padding: '3px 9px', borderRadius: 20, background: C.violet, color: '#fff', fontFamily: FONT_SANS, flexShrink: 0, whiteSpace: 'nowrap' }}>{t('board_tag_need_approve', 'Cần bạn duyệt')}</span>}
+      </div>
+      <div style={{ padding: '0 14px 11px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <MetaRow icon="👷" label={t('label_assignee')} value={assignees || t('board_not_assigned')} />
+        <MetaRow icon="👤" label={t('label_assigned_by')} value={`${task.creator_name || '—'}${task.group_name ? ` · ${task.group_name}` : ''}`} vc={C.sub} />
+        <MetaRow icon="📤" label={t('board_submitted_at', 'Nộp lúc')} value={fmt(task.completed_at)} vc={lateSubmit ? C.danger : C.ink} />
+        <MetaRow icon="⭐" label={t('board_prelim_score', 'Điểm sơ bộ')} value={task.score != null ? `${+task.score}đ` : '—'} vc={C.primary} />
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+          <Badge text={`⏱ ${waitLabel}`} bg={waitDays >= 1 ? (waitDays >= 3 ? C.dangerSoft : C.warningSoft) : C.lineSoft} color={waitColor} pulse={waitDays >= 3} />
+          {lateSubmit && <Badge text={t('board_tag_late_submit', 'Nộp trễ hạn')} bg={C.dangerSoft} color={C.danger} />}
+          {task.score == null && <Badge text={t('board_tag_unscored', 'Chưa có điểm')} bg={C.warningSoft} color={C.warning} />}
+        </div>
       </div>
     </div>
   );
@@ -334,7 +322,7 @@ function ExpandModal({ open, onClose, icon, iconBg, iconColor, title, count, fil
               <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, fontFamily: FONT_SANS, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
               <div style={{ fontSize: 11, color: C.faint, fontFamily: FONT_MONO }}>{count} mục</div>
             </div>
-            <button onClick={onClose} aria-label="close" style={{ width: 32, height: 32, borderRadius: 9, border: `1px solid ${C.line}`, background: '#fff', color: C.sub, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>✕</button>
+            <button onClick={onClose} aria-label="close" style={{ width: 32, height: 32, borderRadius: 9, border: `1px solid ${C.line}`, background: 'var(--wt-surface)', color: C.sub, fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>✕</button>
           </div>
           {filterBar && <div style={{ marginTop: 12 }}>{filterBar}</div>}
         </div>
@@ -348,12 +336,66 @@ function ExpandModal({ open, onClose, icon, iconBg, iconColor, title, count, fil
   );
 }
 
-const ModalSearch = ({ value, onChange, placeholder }) => (
-  <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{
-    width: '100%', padding: '8px 12px', borderRadius: 9, border: `1.5px solid ${C.line}`, outline: 'none',
-    fontSize: 12.5, fontFamily: FONT_SANS, background: C.canvas, color: C.ink,
-  }} />
+/* ---------------- tìm kiếm + lọc dùng chung cho cả 3 cột và modal ---------------- */
+
+// Tìm KHÔNG DẤU: gõ "nguyen van a" hay "bao cao" vẫn ra "Nguyễn Văn A", "Báo cáo"
+const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+// Khớp theo tên CV, người giao, nhóm, người thực hiện
+const matchQ = (tk, q) => {
+  const n = norm(q.trim());
+  if (!n) return true;
+  return [tk.title, tk.creator_name, tk.group_name, ...(tk.assignees || []).map(a => a.full_name)].some(v => norm(v).includes(n));
+};
+const isLateSubmit = (tk) => !!(tk.deadline && tk.completed_at && new Date(tk.completed_at) > new Date(tk.deadline));
+
+const ColSearch = ({ value, onChange, placeholder }) => (
+  <div style={{ position: 'relative', flex: '1 1 140px', minWidth: 0 }}>
+    <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 11.5, opacity: .5, pointerEvents: 'none' }}>🔎</span>
+    <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="brd-search" style={{
+      width: '100%', padding: '7px 28px 7px 30px', borderRadius: 9, border: `1.5px solid ${C.line}`, outline: 'none',
+      fontSize: 12, fontFamily: FONT_SANS, background: C.canvas, color: C.ink,
+    }} />
+    {value && <button onClick={() => onChange('')} aria-label="clear" style={{
+      position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 20, height: 20, borderRadius: 6,
+      border: 'none', background: C.line, color: C.sub, cursor: 'pointer', fontSize: 10, lineHeight: 1,
+    }}>✕</button>}
+  </div>
 );
+
+// Các nút lọc trên 1 hàng, cuộn ngang khi cột hẹp (không chiếm 2–3 dòng như trước)
+// items: [[key, nhãn, icon, số lượng], ...]
+const ChipRow = ({ items, value, onChange, color = C.primary }) => (
+  <div className="brd-chiprow" style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: '1 1 auto', minWidth: 0 }}>
+    {items.map(([key, label, icon, count]) => {
+      const on = value === key;
+      return (
+        <button key={key} className="brd-filter-chip" onClick={() => onChange(key)} style={{
+          padding: '4px 10px', borderRadius: 16, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: FONT_SANS,
+          flexShrink: 0, whiteSpace: 'nowrap', border: `1.5px solid ${on ? color : C.line}`,
+          background: on ? color : '#fff', color: on ? '#fff' : C.sub,
+        }}>
+          {icon && `${icon} `}{label}
+          {count > 0 && <span style={{ marginLeft: 4, opacity: on ? .85 : .7, fontFamily: FONT_MONO }}>{count}</span>}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const MiniSelect = ({ value, onChange, active, title, children }) => (
+  <select value={value} onChange={e => onChange(e.target.value)} title={title} className="brd-mini-select" style={{
+    padding: '6px 8px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, fontFamily: FONT_SANS, outline: 'none', cursor: 'pointer',
+    border: `1.5px solid ${active ? C.primary : C.line}`, background: active ? C.primarySoft : 'var(--wt-surface)', color: active ? C.primaryDeep : C.sub,
+    flexShrink: 0, maxWidth: 150,
+  }}>{children}</select>
+);
+
+const FilterBar = ({ children }) => (
+  <div className="brd-filterbar" style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line}`, background: C.surface, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
+    {children}
+  </div>
+);
+const FilterRow = ({ children }) => <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>{children}</div>;
 
 /* ============================================================
    MAIN PAGE
@@ -373,28 +415,32 @@ export default function BoardPage() {
     return t('greeting_evening', 'Chào buổi tối');
   })();
 
-  const [dailyGroups, setDailyGroups] = useState([]);
   const [allGroups, setAllGroups] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [reviewing, setReviewing] = useState([]); // chờ Manager duyệt
   const [completedAll, setCompletedAll] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Modal mở rộng: null | 'daily' | 'requests' | 'completed'
+  // Modal mở rộng: null | 'requests' | 'reviewing' | 'completed'
   const [expanded, setExpanded] = useState(null);
-  const [dailyQ, setDailyQ] = useState('');
-  const [reqModalQ, setReqModalQ] = useState('');
+  // Bộ lọc — dùng chung giữa cột và modal mở rộng của cột đó
+  const [reqQ, setReqQ] = useState('');
+  const [reqFilter, setReqFilter] = useState('all');
+  const [reqGroupFilter, setReqGroupFilter] = useState('');
+  const [reviewQ, setReviewQ] = useState('');
+  const [reviewFilter, setReviewFilter] = useState('all');   // all | late | ontime | unscored
+  const [reviewGroup, setReviewGroup] = useState('');
+  const [reviewSort, setReviewSort] = useState('oldest');    // oldest | newest | score_high | score_low
   const [doneQ, setDoneQ] = useState('');
   const [doneFilter, setDoneFilter] = useState('all'); // all | on_time | late
 
-  const [reqFilter, setReqFilter] = useState('all');
-  const [reqGroupFilter, setReqGroupFilter] = useState('');
-
-  const [dailyPage, setDailyPage] = useState(1);
+  const [reviewPage, setReviewPage] = useState(1);
   const [reqPage, setReqPage] = useState(1);
   const [donePage, setDonePage] = useState(1);
-  useEffect(() => { setDailyPage(p => Math.min(p, totalPagesOf(dailyGroups))); }, [dailyGroups]);
-  useEffect(() => { setReqPage(1); }, [reqFilter, reqGroupFilter]);
-  useEffect(() => { setDonePage(p => Math.min(p, totalPagesOf(completedAll))); }, [completedAll]);
+  // Đổi bộ lọc → về trang 1 (tránh đứng ở trang 3 của danh sách chỉ còn 1 trang)
+  useEffect(() => { setReqPage(1); }, [reqFilter, reqGroupFilter, reqQ]);
+  useEffect(() => { setReviewPage(1); }, [reviewFilter, reviewGroup, reviewSort, reviewQ]);
+  useEffect(() => { setDonePage(1); }, [doneFilter, doneQ]);
 
   useEffect(() => { if (user) fetchAll(); }, [user]);
 
@@ -417,47 +463,21 @@ export default function BoardPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const ts = Date.now();
-      const [gRes, r1, r2, r3, cRes] = await Promise.all([
+      // 1 lần gọi cho mọi trạng thái của luồng Yêu cầu → Chờ duyệt → Hoàn thành
+      const [gRes, rRes] = await Promise.all([
         api.get('/groups'),
-        api.get(`/requests?status=pending&_t=${ts}`),
-        api.get(`/requests?status=assigned&_t=${ts}`),
-        api.get(`/requests?status=in_progress&_t=${ts}`),
-        api.get(`/requests?status=done&_t=${ts}`),
+        api.get(`/requests?status=pending,assigned,in_progress,scoring,reviewing,done&_t=${Date.now()}`),
       ]);
-
-      const allReq = [...(r1.data.data || []), ...(r2.data.data || []), ...(r3.data.data || [])]
-        .filter((tk, i, a) => a.findIndex(x => x.id === tk.id) === i);
-      setRequests(sortByUrgency(allReq));
-      setCompletedAll(cRes.data.data || []);
-
-      const allGroupsRes = gRes.data.data || [];
-      setAllGroups(allGroupsRes);
-      const userGroupIds = user?.groups?.map(g => g.id) || [];
-      const visible = can('admin', 'manager') ? allGroupsRes : allGroupsRes.filter(g => userGroupIds.includes(g.id));
-      if (!visible.length) { setDailyGroups([]); return; }
-
-      const boardResults = await Promise.all(
-        visible.map(g => api.get(`/daily/board?group_id=${g.id}&date=${today}`).catch(() => ({ data: { data: [] } })))
-      );
-      const d = new Date(); const dow = d.getDay() === 0 ? 7 : d.getDay(); const dom = d.getDate();
-      const parseFreqDays = (v) => (v == null ? '' : String(v)).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-      const enriched = visible.map((g, gi) => {
-        const item = (boardResults[gi].data.data || [])[0] || {};
-        const tasks = (item.tasks || []).filter(tk => {
-          if (tk.frequency === 'daily') return true;
-          if (tk.frequency === 'weekly')  return parseFreqDays(tk.frequency_day)[0] === dow;
-          if (tk.frequency === 'monthly') return parseFreqDays(tk.frequency_day)[0] === dom;
-          if (tk.frequency === 'weekly_count')  return parseFreqDays(tk.frequency_day).includes(dow);
-          if (tk.frequency === 'monthly_count') return parseFreqDays(tk.frequency_day).includes(dom);
-          return false;
-        });
-        return { ...g, tasks, members: item.members || [] };
-      });
-      setDailyGroups(enriched);
+      const list = rRes.data.data || [];
+      setRequests(sortByUrgency(list.filter(tk => !['reviewing', 'done'].includes(tk.status))));
+      // Chờ lâu nhất lên đầu để Manager duyệt trước
+      setReviewing(list.filter(tk => tk.status === 'reviewing')
+        .sort((a, b) => new Date(a.completed_at || a.created_at) - new Date(b.completed_at || b.created_at)));
+      setCompletedAll(list.filter(tk => tk.status === 'done'));
+      setAllGroups(gRes.data.data || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [user]);
+  }, []);
 
   // 📡 Realtime — tự cập nhật cột "Yêu cầu"/"Hoàn thành" khi có CV mới/đổi
   // trạng thái/gán người... ở bất kỳ đâu, không cần F5. Xóa cache client
@@ -468,10 +488,7 @@ export default function BoardPage() {
   // render (temporal dead zone), không đợi tới lúc effect thật sự chạy.
   useEffect(() => {
     if (!user?.id) return;
-    const socket = getSocket(user.id);
-    const onUpdate = () => { clearApiCache(); fetchAll(); };
-    socket.on('requests:updated', onUpdate);
-    return () => socket.off('requests:updated', onUpdate);
+    return onRealtime('requests:updated', () => { clearApiCache(); fetchAll(); });
   }, [user?.id, fetchAll]);
 
   const localeMap = { vi: 'vi-VN', en: 'en-US', ja: 'ja-JP' };
@@ -483,65 +500,93 @@ export default function BoardPage() {
   };
 
   const myId = user?.id;
-  const reqCounts = {
-    all: requests.length,
-    mine: requests.filter(tk => isMine(tk, myId)).length,
-    overdue: requests.filter(isOverdue).length,
-    near: requests.filter(isNearDeadline).length,
-    new: requests.filter(isTaskNew).length,
-    unassigned: requests.filter(isUnassigned).length,
+  const canApprove = can('admin', 'manager');
+  const groupOptions = allGroups.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>);
+
+  // ── Cột 1: Yêu cầu ──
+  const REQ_PRED = {
+    all: () => true, mine: tk => isMine(tk, myId), overdue: isOverdue,
+    near: isNearDeadline, new: isTaskNew, unassigned: isUnassigned,
+    scoring: tk => tk.status === 'scoring',
   };
-  const REQ_FILTERS = [
-    ['all',        t('board_filter_all', 'Tất cả'),         null],
-    ['mine',       t('board_filter_mine', 'Của tôi'),        '🔔'],
-    ['overdue',    t('board_tag_overdue', 'Trễ hạn'),        '⚠'],
-    ['near',       t('board_tag_near_deadline', 'Sắp hết hạn'), '⏳'],
-    ['new',        t('board_tag_new', 'Mới'),                '🆕'],
-    ['unassigned', t('board_tag_unassigned', 'Chưa nhận'),   '👷'],
-  ];
-  const filteredRequests = requests.filter(tsk => {
-    if (reqGroupFilter && String(tsk.group_id) !== reqGroupFilter) return false;
-    if (reqFilter === 'all')        return true;
-    if (reqFilter === 'mine')       return isMine(tsk, myId);
-    if (reqFilter === 'overdue')    return isOverdue(tsk);
-    if (reqFilter === 'near')       return isNearDeadline(tsk);
-    if (reqFilter === 'new')        return isTaskNew(tsk);
-    if (reqFilter === 'unassigned') return isUnassigned(tsk);
-    return true;
-  });
-  const modalRequests = filteredRequests.filter(tsk => !reqModalQ.trim() || (tsk.title || '').toLowerCase().includes(reqModalQ.trim().toLowerCase()));
-  const modalDaily = dailyGroups.filter(g => !dailyQ.trim() || (g.name || '').toLowerCase().includes(dailyQ.trim().toLowerCase()));
-  const modalCompleted = completedAll.filter(tk => {
-    if (doneFilter === 'on_time' && tk.is_late) return false;
-    if (doneFilter === 'late' && !tk.is_late) return false;
-    if (doneQ.trim() && !(tk.title || '').toLowerCase().includes(doneQ.trim().toLowerCase())) return false;
-    return true;
-  });
+  const reqBase = requests.filter(tk => (!reqGroupFilter || String(tk.group_id) === reqGroupFilter) && matchQ(tk, reqQ));
+  const reqCounts = Object.fromEntries(Object.entries(REQ_PRED).map(([k, f]) => [k, reqBase.filter(f).length]));
+  const filteredRequests = reqBase.filter(REQ_PRED[reqFilter] || REQ_PRED.all);
+  const reqFilterBar = (
+    <>
+      <FilterRow>
+        <ColSearch value={reqQ} onChange={setReqQ} placeholder={t('board_search_ph', 'Tìm CV, người giao, người làm...')} />
+        {allGroups.length > 0 && (
+          <MiniSelect value={reqGroupFilter} onChange={setReqGroupFilter} active={!!reqGroupFilter} title={t('board_all_groups', 'Tất cả nhóm')}>
+            <option value="">🏭 {t('board_all_groups', 'Tất cả nhóm')}</option>{groupOptions}
+          </MiniSelect>
+        )}
+      </FilterRow>
+      <ChipRow value={reqFilter} onChange={setReqFilter} items={[
+        ['all',        t('board_filter_all', 'Tất cả'),                 null, reqCounts.all],
+        ['mine',       t('board_filter_mine', 'Của tôi'),               '🔔', reqCounts.mine],
+        ['overdue',    t('board_tag_overdue', 'Trễ hạn'),               '⚠', reqCounts.overdue],
+        ['near',       t('board_tag_near_deadline', 'Sắp hết hạn'),     '⏳', reqCounts.near],
+        ['unassigned', t('board_tag_unassigned', 'Chưa nhận'),          '👷', reqCounts.unassigned],
+        ['scoring',    t('board_tag_scoring', 'Chờ Leader chấm điểm'), '🏆', reqCounts.scoring],
+        ['new',        t('board_tag_new', 'Mới'),                       '🆕', reqCounts.new],
+      ]} />
+    </>
+  );
 
-  const reqGroups = allGroups.map(g => ({ id: String(g.id), name: g.name }));
+  // ── Cột 2: Chờ Manager duyệt ──
+  const REVIEW_PRED = { all: () => true, late: isLateSubmit, ontime: tk => !isLateSubmit(tk), unscored: tk => tk.score == null };
+  const submittedAt = tk => new Date(tk.completed_at || tk.created_at).getTime();
+  const REVIEW_SORT = {
+    oldest:     (a, b) => submittedAt(a) - submittedAt(b),       // chờ lâu nhất lên đầu
+    newest:     (a, b) => submittedAt(b) - submittedAt(a),
+    score_high: (a, b) => (b.score ?? -1) - (a.score ?? -1),
+    score_low:  (a, b) => (a.score ?? Infinity) - (b.score ?? Infinity),
+  };
+  const reviewBase = reviewing.filter(tk => (!reviewGroup || String(tk.group_id) === reviewGroup) && matchQ(tk, reviewQ));
+  const reviewCounts = Object.fromEntries(Object.entries(REVIEW_PRED).map(([k, f]) => [k, reviewBase.filter(f).length]));
+  const filteredReviewing = reviewBase.filter(REVIEW_PRED[reviewFilter]).sort(REVIEW_SORT[reviewSort]);
+  const reviewFilterBar = (
+    <>
+      <FilterRow>
+        <ColSearch value={reviewQ} onChange={setReviewQ} placeholder={t('board_search_ph', 'Tìm CV, người giao, người làm...')} />
+        {allGroups.length > 0 && (
+          <MiniSelect value={reviewGroup} onChange={setReviewGroup} active={!!reviewGroup} title={t('board_all_groups', 'Tất cả nhóm')}>
+            <option value="">🏭 {t('board_all_groups', 'Tất cả nhóm')}</option>{groupOptions}
+          </MiniSelect>
+        )}
+      </FilterRow>
+      <FilterRow>
+        <ChipRow value={reviewFilter} onChange={setReviewFilter} color={C.violet} items={[
+          ['all',      t('board_filter_all', 'Tất cả'),               null, reviewCounts.all],
+          ['late',     t('board_tag_late_submit', 'Nộp trễ hạn'),     '⚠', reviewCounts.late],
+          ['ontime',   t('on_time', 'Đúng hạn'),                      '✓', reviewCounts.ontime],
+          ['unscored', t('board_tag_unscored', 'Chưa có điểm'),       '☆', reviewCounts.unscored],
+        ]} />
+        <MiniSelect value={reviewSort} onChange={setReviewSort} active={reviewSort !== 'oldest'} title={t('board_sort', 'Sắp xếp')}>
+          <option value="oldest">↕ {t('board_sort_oldest', 'Chờ lâu nhất')}</option>
+          <option value="newest">↕ {t('board_sort_newest', 'Mới nộp')}</option>
+          <option value="score_high">↕ {t('board_sort_score_high', 'Điểm cao → thấp')}</option>
+          <option value="score_low">↕ {t('board_sort_score_low', 'Điểm thấp → cao')}</option>
+        </MiniSelect>
+      </FilterRow>
+    </>
+  );
 
-  const ReqFilterChips = () => (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-      {REQ_FILTERS.map(([key, label, icon]) => (
-        <button key={key} className="brd-filter-chip" onClick={() => setReqFilter(key)} style={{
-          padding: '5px 11px', borderRadius: 16, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: FONT_SANS,
-          border: `1.5px solid ${reqFilter === key ? C.primary : C.line}`,
-          background: reqFilter === key ? `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})` : '#fff',
-          color: reqFilter === key ? '#fff' : C.sub, whiteSpace: 'nowrap',
-        }}>{icon && `${icon} `}{label} {reqCounts[key] > 0 && <span style={{ opacity: .8, fontFamily: FONT_MONO }}>{reqCounts[key]}</span>}</button>
-      ))}
-      {reqGroups.length > 0 && (
-        <select value={reqGroupFilter} onChange={e => setReqGroupFilter(e.target.value)} className="brd-group-select" style={{
-          padding: '5px 10px', borderRadius: 16, fontSize: 11, fontWeight: 700, color: reqGroupFilter ? '#fff' : C.sub,
-          border: `1.5px solid ${reqGroupFilter ? C.primary : C.line}`, fontFamily: FONT_SANS,
-          background: reqGroupFilter ? C.primary : '#fff', outline: 'none', cursor: 'pointer', marginLeft: 'auto',
-          maxWidth: '100%',
-        }}>
-          <option value="">🏭 {t('board_all_groups', 'Tất cả nhóm')}</option>
-          {reqGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-        </select>
-      )}
-    </div>
+  // ── Cột 3: Hoàn thành ──
+  const DONE_PRED = { all: () => true, on_time: tk => !tk.is_late, late: tk => !!tk.is_late };
+  const doneBase = completedAll.filter(tk => matchQ(tk, doneQ));
+  const doneCounts = Object.fromEntries(Object.entries(DONE_PRED).map(([k, f]) => [k, doneBase.filter(f).length]));
+  const filteredCompleted = doneBase.filter(DONE_PRED[doneFilter]);
+  const doneFilterBar = (
+    <>
+      <ColSearch value={doneQ} onChange={setDoneQ} placeholder={t('board_search_ph', 'Tìm CV, người giao, người làm...')} />
+      <ChipRow value={doneFilter} onChange={setDoneFilter} color={C.success} items={[
+        ['all',     t('board_filter_all', 'Tất cả'), null, doneCounts.all],
+        ['on_time', t('on_time', 'Đúng hạn'),        '✓', doneCounts.on_time],
+        ['late',    t('late', 'Trễ hạn'),            '⚠', doneCounts.late],
+      ]} />
+    </>
   );
 
   const ColHdr = ({ icon, iconBg, iconColor, title, count, total, countBg, countColor, onExpand, extra }) => (
@@ -580,11 +625,18 @@ export default function BoardPage() {
         @keyframes brdPop { from{opacity:0; transform:scale(.96) translateY(8px)} to{opacity:1; transform:scale(1) translateY(0)} }
 
         .brd-root .brd-shimmer { position:absolute; inset:0; background: linear-gradient(90deg, transparent, rgba(54,84,255,.06), transparent); animation: brdShimmer 1.3s ease-in-out infinite; }
-        .brd-root .brd-card { transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; animation: brdRise .25s ease both; }
+        /* flex-shrink:0 — không cho danh sách tự ép dẹt thẻ cho vừa chiều cao cột (trước đây làm mất dòng deadline) */
+        .brd-root .brd-card { flex-shrink: 0; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; animation: brdRise .25s ease both; }
         .brd-root .brd-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15,23,41,.09); border-color: ${C.primary}33; }
 
         .brd-root .brd-filter-chip { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
         .brd-root .brd-filter-chip:active { transform: scale(0.94); }
+        .brd-root .brd-filter-chip:hover { border-color: ${C.primary}66; }
+        .brd-root .brd-chiprow { scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); padding-right: 14px; }
+        .brd-root .brd-chiprow::-webkit-scrollbar { display: none; }
+        .brd-root .brd-search { transition: border-color .15s, background .15s, box-shadow .15s; }
+        .brd-root .brd-search:focus { border-color: ${C.primary}; background: var(--wt-surface); box-shadow: 0 0 0 3px ${C.primary}1f; }
+        .brd-root .brd-mini-select:focus { border-color: ${C.primary}; }
 
         .brd-root .brd-btn-primary { transition: transform .12s ease, box-shadow .12s ease; }
         .brd-root .brd-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px ${C.primary}66; }
@@ -598,8 +650,8 @@ export default function BoardPage() {
         .brd-root .brd-backdrop { animation: brdFadeIn .18s ease both; }
 
         .brd-root ::-webkit-scrollbar { width: 8px; height: 8px; }
-        .brd-root ::-webkit-scrollbar-thumb { background: #d3d9e8; border-radius: 8px; }
-        .brd-root ::-webkit-scrollbar-thumb:hover { background: #b9c1d8; }
+        .brd-root ::-webkit-scrollbar-thumb { background: var(--wt-line-strong); border-radius: 8px; }
+        .brd-root ::-webkit-scrollbar-thumb:hover { background: var(--wt-text-4); }
 
         @media (prefers-reduced-motion: reduce) { .brd-root * { animation: none !important; transition: none !important; } }
 
@@ -634,8 +686,7 @@ export default function BoardPage() {
           .brd-root .brd-col:last-child { margin-right: 0 !important; }
           .brd-root .brd-col-hdr { padding: 12px 14px !important; }
           .brd-root .brd-col-hdr-title { font-size: 13.5px !important; }
-          .brd-root .brd-req-filterbar { padding: 8px 10px !important; }
-          .brd-root .brd-group-select { margin-left: 0 !important; flex: 1 1 100% !important; }
+          .brd-root .brd-filterbar { padding: 8px 10px !important; }
           .brd-root .brd-modal { max-height: 92vh !important; border-radius: 16px !important; }
         }
         @media (max-width: 480px) {
@@ -679,33 +730,18 @@ export default function BoardPage() {
       </div>
 
       <div className="brd-body" style={{ flex: 1, display: 'flex', overflowX: 'auto', overflowY: 'hidden', minHeight: 480 }}>
-        {/* Col 1: Hằng ngày */}
-        <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.line}`, overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
-          <ColHdr icon="📋" iconBg={C.primarySoft} iconColor={C.primary} title={t('board_col_daily')} count={dailyGroups.length}
-            countBg={C.primarySoft} countColor={C.primary}
-            onExpand={dailyGroups.length > 0 ? () => setExpanded('daily') : null}
-            extra={isLeader && <BtnPrimary small onClick={() => navigate('/daily')}>＋</BtnPrimary>} />
-          <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {loading ? <SkeletonList /> : <>
-              {pageSliceOf(dailyGroups, dailyPage).map(g => <DailyCard key={g.id} group={g} onClick={() => navigate('/daily')} />)}
-              {!dailyGroups.length && <Empty text={t('board_empty_daily')} icon="📋" />}
-            </>}
-          </div>
-          {!loading && <Pagination page={dailyPage} totalPages={totalPagesOf(dailyGroups)} onChange={setDailyPage} />}
-        </div>
-
-        {/* Col 2: Yêu cầu */}
+        {/* Col 1: Yêu cầu (chờ nhận → đang làm → chờ Leader chấm) */}
         <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.line}`, overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
           <ColHdr icon="📨" iconBg={C.warningSoft} iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length} total={requests.length}
             countBg={C.warningSoft} countColor={C.warning}
             onExpand={requests.length > 0 ? () => setExpanded('requests') : null}
             extra={isLeader && <BtnPrimary small onClick={() => navigate('/requests?create=1')}>＋ {t('create')}</BtnPrimary>} />
 
-          <div className="brd-req-filterbar" style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line}`, background: C.surface, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {reqCounts.mine > 0 && (
+          <FilterBar>
+            {reqCounts.mine > 0 && reqFilter !== 'mine' && (
               <div onClick={() => setReqFilter('mine')} className="brd-notify-banner" style={{
                 display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 11, cursor: 'pointer',
-                background: `linear-gradient(135deg, ${C.primarySoft}, #f3f0ff)`, border: `1px solid ${C.primary}33`,
+                background: `linear-gradient(135deg, ${C.primarySoft}, var(--wt-tint-violet))`, border: `1px solid ${C.primary}33`,
               }}>
                 <span style={{ width: 24, height: 24, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0, animation: 'brdPulse 2s ease-in-out infinite' }}>🔔</span>
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, color: C.primaryDeep, fontFamily: FONT_SANS, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -714,66 +750,69 @@ export default function BoardPage() {
                 <span style={{ fontSize: 11, fontWeight: 800, color: C.primary, fontFamily: FONT_SANS, whiteSpace: 'nowrap', flexShrink: 0 }}>{t('board_view_all', 'Xem')} →</span>
               </div>
             )}
-            <ReqFilterChips />
-          </div>
+            {reqFilterBar}
+          </FilterBar>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
             {loading ? <SkeletonList /> : <>
               {pageSliceOf(filteredRequests, reqPage).map(tk => <RequestCard key={tk.id} task={tk} myId={myId} onNav={() => navigate(`/requests?id=${tk.id}`)} />)}
-              {!filteredRequests.length && <Empty text={t('board_empty_requests')} icon="📨" />}
+              {!filteredRequests.length && <Empty text={requests.length ? t('board_no_match', 'Không có công việc khớp bộ lọc') : t('board_empty_requests')} icon={requests.length ? '🔍' : '📨'} />}
             </>}
           </div>
           {!loading && <Pagination page={reqPage} totalPages={totalPagesOf(filteredRequests)} onChange={setReqPage} />}
         </div>
 
-        {/* Col 3: Hoàn thành */}
-        <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
-          <ColHdr icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={completedAll.length}
-            countBg={C.successSoft} countColor={C.success}
-            onExpand={completedAll.length > 0 ? () => setExpanded('completed') : null} />
+        {/* Col 2: Chờ Manager duyệt */}
+        <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.line}`, overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
+          <ColHdr icon="⏳" iconBg={C.violetSoft} iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length} total={reviewing.length}
+            countBg={C.violetSoft} countColor={C.violet}
+            onExpand={reviewing.length > 0 ? () => setExpanded('reviewing') : null} />
+          {reviewing.length > 0 && <FilterBar>{reviewFilterBar}</FilterBar>}
           <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
             {loading ? <SkeletonList /> : <>
-              {pageSliceOf(completedAll, donePage).map(tk => <CompletedCard key={tk.id} task={tk} onNav={() => navigate(`/requests?id=${tk.id}`)} />)}
-              {!completedAll.length && <Empty text={t('board_empty_completed')} icon="✅" />}
+              {pageSliceOf(filteredReviewing, reviewPage).map(tk => <ReviewCard key={tk.id} task={tk} canApprove={canApprove} onNav={() => navigate(`/requests?id=${tk.id}`)} />)}
+              {!filteredReviewing.length && <Empty text={reviewing.length ? t('board_no_match', 'Không có công việc khớp bộ lọc') : t('board_empty_reviewing', 'Không có công việc nào đang chờ duyệt')} icon={reviewing.length ? '🔍' : '⏳'} />}
             </>}
           </div>
-          {!loading && <Pagination page={donePage} totalPages={totalPagesOf(completedAll)} onChange={setDonePage} />}
+          {!loading && <Pagination page={reviewPage} totalPages={totalPagesOf(filteredReviewing)} onChange={setReviewPage} />}
+        </div>
+
+        {/* Col 3: Hoàn thành */}
+        <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
+          <ColHdr icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length} total={completedAll.length}
+            countBg={C.successSoft} countColor={C.success}
+            onExpand={completedAll.length > 0 ? () => setExpanded('completed') : null} />
+          {completedAll.length > 0 && <FilterBar>{doneFilterBar}</FilterBar>}
+          <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {loading ? <SkeletonList /> : <>
+              {pageSliceOf(filteredCompleted, donePage).map(tk => <CompletedCard key={tk.id} task={tk} onNav={() => navigate(`/requests?id=${tk.id}`)} />)}
+              {!filteredCompleted.length && <Empty text={completedAll.length ? t('board_no_match', 'Không có công việc khớp bộ lọc') : t('board_empty_completed')} icon={completedAll.length ? '🔍' : '✅'} />}
+            </>}
+          </div>
+          {!loading && <Pagination page={donePage} totalPages={totalPagesOf(filteredCompleted)} onChange={setDonePage} />}
         </div>
       </div>
 
-      {/* ---- Modal mở rộng: Hằng ngày ---- */}
-      <ExpandModal open={expanded === 'daily'} onClose={() => setExpanded(null)}
-        icon="📋" iconBg={C.primarySoft} iconColor={C.primary} title={t('board_col_daily')} count={modalDaily.length}
-        filterBar={<ModalSearch value={dailyQ} onChange={setDailyQ} placeholder="🔎 Tìm theo tên nhóm..." />}>
-        {modalDaily.map(g => <DailyCard key={g.id} group={g} onClick={() => { setExpanded(null); navigate('/daily'); }} />)}
-        {!modalDaily.length && <Empty text="Không tìm thấy nhóm phù hợp" icon="🔍" />}
-      </ExpandModal>
-
-      {/* ---- Modal mở rộng: Yêu cầu ---- */}
+      {/* ---- Modal mở rộng: dùng CHUNG bộ lọc với cột (lọc ở đâu cũng giữ nguyên) ---- */}
       <ExpandModal open={expanded === 'requests'} onClose={() => setExpanded(null)}
-        icon="📨" iconBg={C.warningSoft} iconColor={C.warning} title={t('board_col_requests')} count={modalRequests.length}
-        filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}><ReqFilterChips /><ModalSearch value={reqModalQ} onChange={setReqModalQ} placeholder="🔎 Tìm theo tên công việc..." /></div>}>
-        {modalRequests.map(tk => <RequestCard key={tk.id} task={tk} myId={myId} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
-        {!modalRequests.length && <Empty text="Không tìm thấy yêu cầu phù hợp" icon="🔍" />}
+        icon="📨" iconBg={C.warningSoft} iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length}
+        filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{reqFilterBar}</div>}>
+        {filteredRequests.map(tk => <RequestCard key={tk.id} task={tk} myId={myId} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
+        {!filteredRequests.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
       </ExpandModal>
 
-      {/* ---- Modal mở rộng: Hoàn thành ---- */}
+      <ExpandModal open={expanded === 'reviewing'} onClose={() => setExpanded(null)}
+        icon="⏳" iconBg={C.violetSoft} iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length}
+        filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{reviewFilterBar}</div>}>
+        {filteredReviewing.map(tk => <ReviewCard key={tk.id} task={tk} canApprove={canApprove} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
+        {!filteredReviewing.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
+      </ExpandModal>
+
       <ExpandModal open={expanded === 'completed'} onClose={() => setExpanded(null)}
-        icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={modalCompleted.length}
-        filterBar={
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 160px', minWidth: 0 }}><ModalSearch value={doneQ} onChange={setDoneQ} placeholder="🔎 Tìm theo tên công việc..." /></div>
-            {['all', 'on_time', 'late'].map(k => (
-              <button key={k} onClick={() => setDoneFilter(k)} style={{
-                padding: '0 13px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT_SANS,
-                border: `1.5px solid ${doneFilter === k ? C.primary : C.line}`,
-                background: doneFilter === k ? C.primary : '#fff', color: doneFilter === k ? '#fff' : C.sub, whiteSpace: 'nowrap', flexShrink: 0,
-              }}>{k === 'all' ? t('board_filter_all', 'Tất cả') : k === 'on_time' ? t('on_time') : t('late')}</button>
-            ))}
-          </div>
-        }>
-        {modalCompleted.map(tk => <CompletedCard key={tk.id} task={tk} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
-        {!modalCompleted.length && <Empty text="Không tìm thấy công việc phù hợp" icon="🔍" />}
+        icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length}
+        filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{doneFilterBar}</div>}>
+        {filteredCompleted.map(tk => <CompletedCard key={tk.id} task={tk} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
+        {!filteredCompleted.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
       </ExpandModal>
     </div>
   );

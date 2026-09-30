@@ -30,7 +30,15 @@ export default function LoginPage() {
     if (!form.username || !form.password) { setErr(t('login_fill_required')); return; }
     setBusy(true); setErr('');
     try { await login(form.username, form.password); navigate('/'); }
-    catch { setErr(t('bad_creds')); }
+    catch (e) {
+      // Chỉ báo "sai thông tin" khi server thật sự trả 401 — các lỗi khác (quá
+      // nhiều lần thử, mất kết nối server...) phải hiện đúng lý do, nếu không
+      // người dùng tưởng mình nhập sai mật khẩu.
+      const status = e.response?.status;
+      if (status === 401) setErr(t('bad_creds'));
+      else if (!e.response) setErr('Không kết nối được máy chủ, vui lòng thử lại sau');
+      else setErr(e.response.data?.message || t('bad_creds'));
+    }
     finally { setBusy(false); }
   };
 

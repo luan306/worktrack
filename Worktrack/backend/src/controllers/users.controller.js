@@ -1,13 +1,45 @@
 const bcrypt = require('bcryptjs');
+const ExcelJS = require('exceljs');
+const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
 const db = require('../config/db');
+const cache = require('../config/cache');
+const { invalidateUser } = require('../middleware/auth');
+const { logActivity, diffFields } = require('../services/activityLogService');
+
+// ── Lịch sử thay đổi tài khoản ──
+const ROLE_LABEL = { user: 'Nhân viên', leader: 'Leader', manager: 'Manager', admin: 'Admin' };
+async function getUserSnapshot(id) {
+  const [[u]] = await db.query(
+    `SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active,
+            GROUP_CONCAT(g.name ORDER BY g.name SEPARATOR ', ') AS group_names
+       FROM users u
+       LEFT JOIN group_members gm ON gm.user_id=u.id
+       LEFT JOIN \`groups\` g ON g.id=gm.group_id
+      WHERE u.id=? GROUP BY u.id`, [id]);
+  return u;
+}
+const USER_FIELDS = {
+  username:    ['tên đăng nhập'],
+  full_name:   ['họ tên'],
+  email:       ['email'],
+  role:        ['vai trò', v => ROLE_LABEL[v] || v],
+  is_active:   ['trạng thái', v => (+v ? 'Hoạt động' : 'Đã khóa')],
+  group_names: ['nhóm', v => v || '(không nhóm)'],
+};
+const actorOf = (req) => req.user.full_name || req.user.username;
+
+const ROLES = ['user', 'leader', 'manager', 'admin'];
+const MIN_PASSWORD = 8;
+const weakPassword = (p) => typeof p !== 'string' || p.length < MIN_PASSWORD;
+// Chỉ Admin mới được tạo/nâng quyền Admin hoặc đụng vào tài khoản Admin —
+// trước đây Manager có thể tự nâng mình lên Admin, đổi mật khẩu/xóa Admin.
+const ADMIN_ONLY = { success: false, message: 'Chỉ Admin mới được thao tác với tài khoản/quyền Admin' };
 
 exports.list = async (req, res) => {
   try {
     const { group_id, role, search, is_active } = req.query;
 
-    // Tăng giới hạn GROUP_CONCAT
-    await db.query('SET SESSION group_concat_max_len = 10000');
-
+    // group_concat_max_len đã được set cho mọi connection ở config/db.js
     let sql = `SELECT u.id,u.username,u.email,u.full_name,u.role,u.avatar_color,u.is_active,u.last_login,u.created_at,
                GROUP_CONCAT(DISTINCT CONCAT(g.id,':',g.name) ORDER BY g.name SEPARATOR '|') as groups_raw
                FROM users u
@@ -22,13 +54,19 @@ exports.list = async (req, res) => {
     // theo is_active nếu người dùng chủ động chọn qua bộ lọc.
     if (is_active !== undefined && is_active !== '') { sql += ' AND u.is_active=?'; p.push(is_active); }
     if (role)     { sql += ' AND u.role=?'; p.push(role); }
-    if (search)   { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
+    // User thường chỉ cần danh sách tên để chọn người (giao việc, lọc...) —
+    // không trả tên đăng nhập / email / lần đăng nhập cuối, tránh lộ danh sách
+    // tài khoản admin để dò mật khẩu. Tìm kiếm cũng chỉ theo họ tên.
+    const limited = !['admin','manager','leader'].includes(req.user.role);
+    if (search && limited) { sql += ' AND u.full_name LIKE ?'; p.push(`%${search}%`); }
+    else if (search) { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
     if (group_id) { sql += ' AND gm.group_id=?'; p.push(group_id); }
     sql += ' GROUP BY u.id ORDER BY u.full_name';
 
     const [rows] = await db.query(sql, p);
-    const data = rows.map(r => ({
+    const data = rows.map(({ username, email, last_login, created_at, ...r }) => ({
       ...r,
+      ...(limited ? {} : { username, email, last_login, created_at }),
       groups: r.groups_raw
         ? r.groups_raw.split('|').map(s => { const [id,...rest]=s.split(':'); return {id:+id, name:rest.join(':')}; })
         : [],
@@ -43,6 +81,11 @@ exports.create = async (req, res) => {
     const { username, email, full_name, role='user', password, avatar_color='#3a7bd5', group_id } = req.body;
     if (!username || !email || !full_name || !password)
       return res.status(400).json({ success: false, message: 'Missing fields' });
+    if (!ROLES.includes(role))
+      return res.status(400).json({ success: false, message: 'Role không hợp lệ' });
+    if (weakPassword(password))
+      return res.status(400).json({ success: false, message: `Mật khẩu phải có ít nhất ${MIN_PASSWORD} ký tự` });
+    if (role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
 
     // Leader chỉ được tạo tài khoản role 'user' — không được tự gán admin/manager/leader
     if (req.user.role === 'leader' && role !== 'user')
@@ -54,6 +97,12 @@ exports.create = async (req, res) => {
       [username, email, hash, full_name, role, avatar_color]
     );
     if (group_id) await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [group_id, r.insertId]);
+    const created = await getUserSnapshot(r.insertId);
+    await logActivity({
+      actorId: req.user.id, actionType: 'user_created', entityType: 'user', entityId: r.insertId,
+      description: `${actorOf(req)} đã tạo tài khoản ${full_name} (${username}, ${ROLE_LABEL[role] || role}, nhóm: ${created?.group_names || 'không nhóm'})`,
+      metadata: { user_id: r.insertId, username, role, group_id: group_id || null },
+    });
     res.status(201).json({ success: true, data: { id: r.insertId, username, email, full_name, role } });
   } catch (e) {
     if (e.code === 'ER_DUP_ENTRY') return res.status(409).json({ success: false, message: 'Username or email already exists' });
@@ -76,7 +125,7 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, full_name, email, role, avatar_color, is_active, group_id } = req.body;
+    const { full_name, email, role, avatar_color, is_active, group_id } = req.body;
 
     const isSelf       = req.user.id === +id;
     const isPrivileged = ['admin','manager'].includes(req.user.role);
@@ -93,6 +142,14 @@ exports.update = async (req, res) => {
     // Leader bị chặn 403 dù chỉ đang đổi NHÓM chứ không hề đụng tới role.
     const [[target]] = !isSelf ? await db.query('SELECT role, is_active FROM users WHERE id=?', [id]) : [[null]];
     if (!isSelf && !target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+
+    if (role !== undefined && !ROLES.includes(role))
+      return res.status(400).json({ success: false, message: 'Role không hợp lệ' });
+    if (req.user.role !== 'admin' && (role === 'admin' || target?.role === 'admin'))
+      return res.status(403).json(ADMIN_ONLY);
+
+    // username (MSNV) là tên đăng nhập — chính chủ không tự đổi được
+    const username = isSelf && !isPrivileged ? undefined : req.body.username;
 
     // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi, kể cả Leader
     // hay chính chủ tự sửa mình cũng không được. Chỉ chặn khi GIÁ TRỊ thực
@@ -138,6 +195,9 @@ exports.update = async (req, res) => {
       }
     }
 
+    const before = await getUserSnapshot(id);
+    if (!before) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+
     try {
       await db.query(
         `UPDATE users SET
@@ -154,6 +214,8 @@ exports.update = async (req, res) => {
       throw ue;
     }
 
+    invalidateUser(id); // khóa / đổi role có hiệu lực ngay, không chờ token hết hạn
+
     // Đổi nhóm — gỡ khỏi nhóm cũ, thêm vào nhóm mới (group_id rỗng/"" thì chỉ
     // gỡ khỏi mọi nhóm, không nhóm nào — tương ứng lựa chọn "-- Không nhóm --").
     if (group_id !== undefined) {
@@ -161,6 +223,19 @@ exports.update = async (req, res) => {
       if (group_id) {
         await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [group_id, id]);
       }
+    }
+
+    // 📝 Ghi đúng những gì đã đổi: cũ → mới
+    const after = await getUserSnapshot(id);
+    const diff = diffFields(before, after, USER_FIELDS);
+    if (diff.text) {
+      const action = diff.changes.is_active ? (+after.is_active ? 'user_unlocked' : 'user_locked')
+        : diff.changes.role ? 'user_role_changed' : 'user_updated';
+      await logActivity({
+        actorId: req.user.id, actionType: action, entityType: 'user', entityId: +id,
+        description: `${actorOf(req)} đã sửa tài khoản ${before.full_name} (${before.username}): ${diff.text}`,
+        metadata: { user_id: +id, changes: diff.changes },
+      });
     }
 
     res.json({ success: true });
@@ -173,17 +248,25 @@ exports.update = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   try {
     const { password } = req.body;
-    if (!password) return res.status(400).json({ success: false, message: 'Password required' });
+    if (weakPassword(password))
+      return res.status(400).json({ success: false, message: `Mật khẩu phải có ít nhất ${MIN_PASSWORD} ký tự` });
 
-    if (req.user.role === 'leader') {
-      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [req.params.id]);
-      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-      if (['admin','manager'].includes(target.role)) {
-        return res.status(403).json({ success: false, message: 'Leader không có quyền đổi mật khẩu tài khoản admin/manager' });
-      }
+    const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [req.params.id]);
+    if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    if (req.user.role === 'leader' && ['admin','manager'].includes(target.role)) {
+      return res.status(403).json({ success: false, message: 'Leader không có quyền đổi mật khẩu tài khoản admin/manager' });
     }
+    if (target.role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
 
     await db.query('UPDATE users SET password=? WHERE id=?', [await bcrypt.hash(password, 10), req.params.id]);
+    // Buộc đăng nhập lại trên mọi thiết bị của người bị đổi mật khẩu
+    await db.query('DELETE FROM refresh_tokens WHERE user_id=?', [req.params.id]);
+    const t = await getUserSnapshot(req.params.id);
+    await logActivity({
+      actorId: req.user.id, actionType: 'user_password_reset', entityType: 'user', entityId: +req.params.id,
+      description: `${actorOf(req)} đã đặt lại mật khẩu cho ${t?.full_name} (${t?.username})`,
+      metadata: { user_id: +req.params.id },
+    });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -193,14 +276,6 @@ exports.importUsers = async (req, res) => {
     const { users } = req.body;
     const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b'];
 
-    const genUsername = (name) => {
-      const parts = name.trim().normalize('NFD')
-        .replace(/[̀-ͯ]/g,'').toLowerCase().split(/\s+/);
-      if (!parts.length) return 'user';
-      const first    = parts[parts.length - 1];
-      const initials = parts.slice(0, parts.length - 1).map(p => p[0]).join('');
-      return (first + (initials ? '.' + initials : '')).replace(/[^a-z0-9.]/g,'').substring(0, 30) || 'user';
-    };
 
     let created = 0, duplicates = [], errors = [];
 
@@ -213,7 +288,10 @@ exports.importUsers = async (req, res) => {
           continue;
         }
 
-        const uname = genUsername(u.full_name.trim());
+        // MSNV = tên đăng nhập. Luôn xử lý như CHUỖI để giữ số 0 ở đầu (VD: 019123)
+        const uname = String(u.username ?? '').replace(/\s+/g, '');
+        if (!uname) { errors.push({ name: u.full_name, error: 'Thiếu MSNV' }); continue; }
+        if (uname.length > 50) { errors.push({ name: u.full_name, error: 'MSNV quá dài (tối đa 50 ký tự)' }); continue; }
         const color = COLORS[Math.floor(Math.random() * COLORS.length)];
 
         console.log('[import] Processing:', u.full_name, '→ username:', uname);
@@ -230,7 +308,7 @@ exports.importUsers = async (req, res) => {
         const hash = await bcrypt.hash('Welcome00', 10);
         const [r]  = await db.query(
           'INSERT INTO users (username,email,password,full_name,role,avatar_color) VALUES (?,?,?,?,?,?)',
-          [uname, u.email||null, hash, u.full_name.trim(), u.role||'user', color]
+          [uname, u.email||null, hash, u.full_name.trim(), ROLES.includes(u.role) ? u.role : 'user', color]
         );
         console.log('[import] Insert result:', r.insertId, r.affectedRows);
 
@@ -263,6 +341,11 @@ exports.importUsers = async (req, res) => {
       } catch (e) { errors.push({ name: u.full_name, error: e.message }); }
     }
 
+    if (created) await logActivity({
+      actorId: req.user.id, actionType: 'user_imported', entityType: 'user',
+      description: `${actorOf(req)} đã nhập ${created} tài khoản từ file${duplicates.length ? ` (${duplicates.length} trùng, bỏ qua)` : ''}`,
+      metadata: { created, duplicates: duplicates.length, errors: errors.length },
+    });
     res.json({ success: true, data: { created, duplicates, errors,
       message: `Đã tạo ${created} user${duplicates.length ? `, ${duplicates.length} trùng username` : ''}${errors.length ? `, ${errors.length} lỗi` : ''}`
     }});
@@ -275,26 +358,93 @@ exports.remove = async (req, res) => {
     const { id } = req.params;
     if (+id === req.user.id) return res.status(400).json({ success: false, message: 'Không thể xóa chính mình!' });
 
+    const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
+    if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     // Leader có quyền xóa user, NHƯNG không được xóa tài khoản admin/manager
-    if (req.user.role === 'leader') {
-      const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
-      if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-      if (['admin','manager'].includes(target.role)) {
-        return res.status(403).json({ success: false, message: 'Leader không có quyền xóa tài khoản admin/manager' });
-      }
+    if (req.user.role === 'leader' && ['admin','manager'].includes(target.role)) {
+      return res.status(403).json({ success: false, message: 'Leader không có quyền xóa tài khoản admin/manager' });
     }
+    if (target.role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
+    const removed = await getUserSnapshot(id);
+    const [[{ logs: dailyCount }]] = await db.query(
+      `SELECT (SELECT COUNT(*) FROM daily_task_logs WHERE user_id=?) + (SELECT COUNT(*) FROM daily_day_scores WHERE user_id=?) AS logs`, [id, id]);
 
     const conn = await db.getConnection();
     await conn.beginTransaction();
     try {
       await conn.query('DELETE FROM group_members          WHERE user_id=?', [id]);
       await conn.query('DELETE FROM daily_task_logs        WHERE user_id=?', [id]);
+      await conn.query('DELETE FROM daily_entries          WHERE user_id=?', [id]);
+      await conn.query('DELETE FROM daily_day_scores       WHERE user_id=?', [id]);
+      await conn.query('DELETE FROM daily_day_offs         WHERE user_id=?', [id]);
       await conn.query('DELETE FROM request_task_assignees WHERE user_id=?', [id]);
       await conn.query('DELETE FROM refresh_tokens         WHERE user_id=?', [id]);
       await conn.query('DELETE FROM users                  WHERE id=?',      [id]);
       await conn.commit();
+      invalidateUser(id);
+      await logActivity({
+        actorId: req.user.id, actionType: 'user_deleted', entityType: 'user', entityId: +id,
+        description: `${actorOf(req)} đã XÓA tài khoản ${removed.full_name} (${removed.username}, ${ROLE_LABEL[removed.role] || removed.role}, nhóm: ${removed.group_names || 'không nhóm'}) — kèm ${dailyCount} lượt chấm Daily của người này`,
+        metadata: { user: removed, deleted_daily_logs: dailyCount },
+      });
+      cache.clear('req:'); // người bị xóa không còn trong danh sách assignees
       res.json({ success: true });
     } catch(e) { await conn.rollback(); throw e; }
     finally { conn.release(); }
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// ── Nhập tài khoản từ Excel ───────────────────────────────────────
+// GET /users/import/template — file mẫu .xlsx, cột MSNV định dạng TEXT để Excel
+// không tự bỏ số 0 ở đầu (019123 → 19123) như khi mở file .csv.
+exports.importTemplate = async (req, res) => {
+  try {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Nhân viên');
+    ws.columns = [
+      { header: 'Họ tên', key: 'name', width: 26 },
+      { header: 'Email', key: 'email', width: 26 },
+      { header: 'Vai trò (user/leader/manager/admin)', key: 'role', width: 20 },
+      { header: 'Nhóm', key: 'group', width: 18 },
+      { header: 'MSNV', key: 'msnv', width: 14, style: { numFmt: '@' } },
+    ];
+    styleHeader(ws);
+    [['Nguyễn Văn A', 'nva@smc.com', 'user', 'MES', '019001'],
+     ['Trần Thị B', '', 'user', 'MES', '019002'],
+     ['Lê Văn C', 'lvc@smc.com', 'leader', 'Bảo trì', '009003']]
+      .forEach(([name, email, role, group, msnv]) => ws.addRow({ name, email, role, group, msnv }));
+    // Định dạng TEXT cho cả cột MSNV (kể cả các dòng người dùng gõ thêm sau này)
+    for (let r = 2; r <= 1000; r++) ws.getCell(`E${r}`).numFmt = '@';
+    ws.getCell('E1').note = 'Cột này là dạng CHỮ (Text) — gõ 019123 sẽ giữ nguyên số 0 ở đầu';
+    await sendXlsx(res, wb, 'mau_import_user.xlsx');
+  } catch (e) { xlsxError(res, e); }
+};
+
+// POST /users/import/parse (multipart, field "file") — đọc .xlsx, trả về các dòng
+// dạng mảng chữ ĐÚNG NHƯ HIỂN THỊ trong Excel (cell.text) → ô MSNV định dạng
+// "000000" hay dạng Text đều giữ được số 0 ở đầu.
+exports.parseImportFile = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'Chưa chọn file' });
+    const name = (req.file.originalname || '').toLowerCase();
+    if (name.endsWith('.xls')) return res.status(400).json({ success: false, message: 'File .xls (Excel cũ) chưa hỗ trợ — hãy "Lưu thành" .xlsx hoặc .csv' });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(req.file.buffer);
+    const ws = wb.worksheets[0];
+    if (!ws) return res.status(400).json({ success: false, message: 'File không có trang tính nào' });
+    const rows = [];
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      if (rows.length >= 501) return;
+      const cells = [];
+      for (let c = 1; c <= 5; c++) {
+        const cell = row.getCell(c);
+        let text = String(cell.text ?? '').trim();
+        // Ô SỐ có định dạng hiển thị "000000" → Excel hiện 019123 nhưng giá trị là 19123 → thêm lại số 0
+        const fmt = cell.numFmt || '';
+        if (typeof cell.value === 'number' && /^0+$/.test(fmt) && /^\d+$/.test(text)) text = text.padStart(fmt.length, '0');
+        cells.push(text);
+      }
+      if (cells.some(Boolean)) rows.push(cells);
+    });
+    res.json({ success: true, data: rows });
+  } catch (e) { res.status(400).json({ success: false, message: `Không đọc được file Excel: ${e.message}` }); }
 };

@@ -3,34 +3,35 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
+import useAuthStore from '../../store/authStore';
 
 /* ============================================================
    DESIGN TOKENS — cùng hệ thống với Board/Daily/Requests/Completed.
    ============================================================ */
 const C = {
-  ink:        '#0f1729',
-  sub:        '#6b7280',
-  faint:      '#9aa3b2',
-  surface:    '#ffffff',
-  canvas:     '#eef1f8',
-  line:       '#e6e9f2',
-  lineSoft:   '#f0f2f8',
+  ink:        'var(--wt-ink)',
+  sub:        'var(--wt-text-2)',
+  faint:      'var(--wt-text-3)',
+  surface:    'var(--wt-surface)',
+  canvas:     'var(--wt-canvas)',
+  line:       'var(--wt-line)',
+  lineSoft:   'var(--wt-surface-3)',
 
   primary:      '#3654ff',
   primaryDeep:  '#2440d6',
-  primarySoft:  '#eaefff',
+  primarySoft:  'var(--wt-tint-primary)',
 
   success:     '#17b26a',
-  successSoft: '#e8f9f0',
+  successSoft: 'var(--wt-tint-success)',
   warning:     '#f59e0b',
-  warningSoft: '#fef3e2',
+  warningSoft: 'var(--wt-tint-warning)',
   danger:      '#e5384d',
-  dangerSoft:  '#fdeaec',
+  dangerSoft:  'var(--wt-tint-danger)',
   violet:      '#8b5cf6',
-  violetSoft:  '#f2ecfe',
+  violetSoft:  'var(--wt-tint-violet)',
   gold:        '#f1c40f',
 
-  panelDark:  '#0f1729',
+  panelDark:  'var(--wt-ink)',
   panelDark2: '#1a2540',
 };
 
@@ -43,7 +44,7 @@ const RANKS = [
   { icon: '🥉', cls: 'bronze' },
 ];
 
-const RANK_COLOR = { gold: '#f1c40f', silver: '#9aa3b2', bronze: '#cd7f32' };
+const RANK_COLOR = { gold: '#f1c40f', silver: 'var(--wt-text-3)', bronze: '#cd7f32' };
 
 function Chip({ color = C.primary, name = '?', size = 38, ring=false }) {
   const ini = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
@@ -52,13 +53,15 @@ function Chip({ color = C.primary, name = '?', size = 38, ring=false }) {
       background: `linear-gradient(135deg, ${color}, ${color}cc)`, width: size, height: size, borderRadius: '50%', flexShrink: 0,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       color: '#fff', fontSize: size > 30 ? 13 : 9, fontWeight: 700, fontFamily: FONT_SANS,
-      boxShadow: ring ? `0 0 0 2px #fff, 0 0 0 3.5px ${color}55` : '0 1px 3px rgba(15,23,41,.18)',
+      boxShadow: ring ? `0 0 0 2px var(--wt-surface), 0 0 0 3.5px ${color}55` : '0 1px 3px rgba(15,23,41,.18)',
     }}>{ini}</div>
   );
 }
 
 export default function DashboardPage() {
   const { t, i18n } = useTranslation();
+  // Export Excel / Lock & Reset chỉ dành cho admin/manager
+  const canManage = ['admin', 'manager'].includes(useAuthStore(s => s.user?.role));
   const [data,      setData]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [view,      setView]      = useState('week');
@@ -197,8 +200,8 @@ export default function DashboardPage() {
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .dash-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .dash-root ::-webkit-scrollbar-track { background: transparent; }
-        .dash-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
-        .dash-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
+        .dash-root ::-webkit-scrollbar-thumb { background: var(--wt-scroll); border-radius: 8px; }
+        .dash-root ::-webkit-scrollbar-thumb:hover { background: var(--wt-line-strong); }
 
         /* ── Hiệu ứng mở nhẹ cho modal ── */
         @keyframes dashFadeIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -212,7 +215,7 @@ export default function DashboardPage() {
         @media (max-width: 900px) {
           .dash-root .dash-body { flex-direction: column !important; overflow: auto !important; }
           .dash-root .dash-ranking-panel { position: relative; width: 100% !important; border-right: none !important; border-bottom: 1px solid ${C.line} !important; max-height: 48vh !important; }
-          .dash-root .dash-ranking-panel::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 24px; background: linear-gradient(to top, rgba(255,255,255,0.95), rgba(255,255,255,0)); pointer-events: none; }
+          .dash-root .dash-ranking-panel::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 24px; background: linear-gradient(to top, var(--wt-surface), transparent); pointer-events: none; }
           .dash-root .dash-stats-panel { flex: none !important; }
         }
 
@@ -265,14 +268,16 @@ export default function DashboardPage() {
           <span style={{ width:32, height:32, borderRadius:9, background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, boxShadow:`0 3px 10px ${C.primary}4d` }}>📊</span>
           {t('dash_title')}
         </div>
+        {canManage && (<>
         <button onClick={openExportList} className="dash-btn-primary"
-          style={{ padding: '7px 15px', borderRadius: 9, border: `1.5px solid ${C.line}`, background: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
+          style={{ padding: '7px 15px', borderRadius: 9, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
           📤 {t('dash_export_excel')}
         </button>
         <button onClick={() => setShowLock(true)} className="dash-btn-danger"
           style={{ padding: '7px 15px', borderRadius: 9, border: 'none', background: `linear-gradient(135deg, ${C.danger}, #c72d3f)`, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow:`0 3px 10px ${C.danger}44` }}>
           🔒 {t('dash_lock_reset')}
         </button>
+        </>)}
       </div>
 
       {/* ── Filter bar ── */}
@@ -283,7 +288,7 @@ export default function DashboardPage() {
 
         {/* Group filter */}
         <select className="dash-group-select" value={groupId} onChange={e => setGroupId(e.target.value)}
-          style={{ padding: '6px 11px', borderRadius: 9, border: `1.5px solid ${C.line}`, fontSize: 12, color: C.sub, outline: 'none', background: '#fff', fontFamily: FONT_SANS }}>
+          style={{ padding: '6px 11px', borderRadius: 9, border: `1.5px solid ${C.line}`, fontSize: 12, color: C.sub, outline: 'none', background: 'var(--wt-surface)', fontFamily: FONT_SANS }}>
           <option value="">{t('dash_all_groups')}</option>
           {groups.map(g => <option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
         </select>
@@ -311,7 +316,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Period banner ── */}
-      <div className="dash-periodbanner" style={{ padding: '9px 20px', background: C.primarySoft, borderBottom: `1px solid #c8d8f0`, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+      <div className="dash-periodbanner" style={{ padding: '9px 20px', background: C.primarySoft, borderBottom: `1px solid var(--wt-tint-primary-bd)`, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <span>📅</span>
         <div style={{ flex: 1, fontSize: 12, color: C.primaryDeep, fontWeight: 700 }}>
           {t('dash_period_prefix')} <strong style={{fontFamily:FONT_MONO}}>{periodStart}</strong> {t('dash_period_suffix')}
@@ -326,7 +331,7 @@ export default function DashboardPage() {
 
         {/* LEFT: Ranking */}
         <div className="dash-ranking-panel" style={{ width: 460, flexShrink: 0, borderRight: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
-          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, background: '#fff', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, background: 'var(--wt-surface)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, flex: 1 }}>👥 {t('dash_ranking_header')}</div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -337,7 +342,7 @@ export default function DashboardPage() {
                 className="dash-ranking-row"
                 onClick={() => setSelected(s)}
                 style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: `1px solid ${C.lineSoft}`, cursor: 'pointer' }}
-                onMouseEnter={e => e.currentTarget.style.background = '#f7f9ff'}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--wt-surface-2)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               >
                 {/* Rank */}
@@ -376,7 +381,7 @@ export default function DashboardPage() {
 
                 {/* View btn */}
                 <button className="dash-view-btn" onClick={e => { e.stopPropagation(); setSelected(s); }}
-                  style={{ padding: '5px 11px', borderRadius: 8, border: `1.5px solid ${C.line}`, background: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: C.primary, whiteSpace: 'nowrap' }}>
+                  style={{ padding: '5px 11px', borderRadius: 8, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: C.primary, whiteSpace: 'nowrap' }}>
                   👁 {t('view')}
                 </button>
               </div>
@@ -384,7 +389,7 @@ export default function DashboardPage() {
 
             {/* Legend */}
             {!loading && (
-              <div style={{ padding: '12px 16px', display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${C.lineSoft}`, background: '#fafbfc' }}>
+              <div style={{ padding: '12px 16px', display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${C.lineSoft}`, background: 'var(--wt-surface-2)' }}>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 8, background: C.successSoft, color: C.success }}>{t('dash_legend_daily')}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 8, background: C.primarySoft, color: C.primary }}>{t('dash_legend_request')}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 8, background: C.warningSoft, color: C.warning }}>{t('dash_legend_support')}</span>
@@ -395,7 +400,7 @@ export default function DashboardPage() {
 
         {/* RIGHT: Stats */}
         <div className="dash-stats-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.canvas, minWidth: 0 }}>
-          <div style={{ padding: '12px 18px', borderBottom: `1px solid ${C.line}`, background: '#fff', flexShrink: 0 }}>
+          <div style={{ padding: '12px 18px', borderBottom: `1px solid ${C.line}`, background: 'var(--wt-surface)', flexShrink: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>📨 {t('dash_requests_stats_header')}</div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: 15, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -409,10 +414,10 @@ export default function DashboardPage() {
                 { num: totalScore.toFixed(0), lbl: `⭐ ${t('dash_stat_total_score')}`, icon:'⭐', cls: 'gold' },
               ].map(s => {
                 const styles = {
-                  blue:  { border: '#c8d8f0', bg: C.primarySoft,  color: C.primary },
-                  green: { border: '#b8e8c8', bg: C.successSoft,  color: C.success },
-                  red:   { border: '#f5c0c0', bg: C.dangerSoft,   color: C.danger  },
-                  gold:  { border: '#f5d8a0', bg: C.warningSoft,  color: C.warning },
+                  blue:  { border: 'var(--wt-tint-primary-bd)', bg: C.primarySoft,  color: C.primary },
+                  green: { border: 'var(--wt-tint-success-bd)', bg: C.successSoft,  color: C.success },
+                  red:   { border: 'var(--wt-tint-danger-bd)', bg: C.dangerSoft,   color: C.danger  },
+                  gold:  { border: 'var(--wt-tint-warning-bd)', bg: C.warningSoft,  color: C.warning },
                 }[s.cls];
                 return (
                   <div key={s.lbl} className="dash-stat-card" style={{ background: styles.bg, border: `1.5px solid ${styles.border}`, borderRadius: 14, padding: '14px 15px', minWidth: 0 }}>
@@ -447,7 +452,7 @@ export default function DashboardPage() {
                       <tr key={s.user.id}
                         onClick={() => setSelected(s)}
                         style={{ cursor: 'pointer', borderBottom: `1px solid ${C.lineSoft}` }}
-                        onMouseEnter={e => e.currentTarget.style.background = '#f7f9ff'}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--wt-surface-2)'}
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       >
                         <td style={{ padding: '10px 14px', fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -500,7 +505,7 @@ export default function DashboardPage() {
               <div style={{ width:36, height:36, borderRadius:10, background:C.primarySoft, color:C.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17 }}>📤</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, flex: 1 }}>{t('dash_export_list_title', { defaultValue: 'Chọn kỳ để tải Excel' })}</div>
               <button onClick={() => setShowExportList(false)}
-                style={{ width: 32, height: 32, borderRadius: 9, border: `1px solid ${C.line}`, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 16, color: C.faint, flexShrink: 0 }}>
+                style={{ width: 32, height: 32, borderRadius: 9, border: `1px solid ${C.line}`, background: 'var(--wt-surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 16, color: C.faint, flexShrink: 0 }}>
                 ×
               </button>
             </div>
@@ -570,7 +575,7 @@ export default function DashboardPage() {
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
               <button onClick={() => setShowLock(false)}
-                style={{ padding: '9px 20px', borderRadius: 10, border: `1.5px solid ${C.line}`, background: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: C.sub }}>
+                style={{ padding: '9px 20px', borderRadius: 10, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: C.sub }}>
                 {t('dash_cancel')}
               </button>
               <button onClick={doLock} disabled={locking} className="dash-btn-danger"
@@ -608,10 +613,10 @@ function DetailModal({ s, onClose }) {
   const ensureLoaded = () => {
     if (myRequests !== null || loadingReq) return; // đã tải rồi hoặc đang tải dở
     setLoadingReq(true);
-    api.get('/requests').then(r => {
-      const all = r.data.data || [];
-      const mine = all.filter(t2 => (t2.assignees||[]).some(a => a.user_id === s.user.id));
-      setMyRequests(mine);
+    // Lọc ở server (assigned_to) thay vì tải toàn bộ CV công ty rồi lọc ở trình
+    // duyệt; include_archived=1 để thấy cả CV đã lưu trữ (vẫn được tính điểm).
+    api.get('/requests', { params: { assigned_to: s.user.id, include_archived: 1 } }).then(r => {
+      setMyRequests(r.data.data || []);
     }).catch(() => setMyRequests([])).finally(() => setLoadingReq(false));
   };
 
@@ -622,7 +627,7 @@ function DetailModal({ s, onClose }) {
   const mainList    = (myRequests||[]).filter(t2 => myRole(t2) !== 'support');
   const supportList = (myRequests||[]).filter(t2 => myRole(t2) === 'support');
 
-  const STATUS_ICON = { pending:'⏳', assigned:'⏳', in_progress:'🔄', scoring:'🏆', reviewing:'📋', done:'✅', cancelled:'❌' };
+  const STATUS_ICON = { pending:'⏳', assigned:'⏳', in_progress:'🔄', scoring:'🏆', reviewing:'📋', done:'✅', archived:'✅', cancelled:'❌' };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,41,.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
@@ -634,7 +639,7 @@ function DetailModal({ s, onClose }) {
           <Chip color={s.user.avatar_color} name={s.user.full_name} size={44} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.user.full_name} — {t('dash_detail_title_suffix')}</div>
-            <div style={{ fontSize: 11, color: '#8fa8c9', marginTop: 2, textTransform: 'capitalize' }}>{s.user.role}</div>
+            <div style={{ fontSize: 11, color: 'var(--wt-text-3)', marginTop: 2, textTransform: 'capitalize' }}>{s.user.role}</div>
           </div>
           <button onClick={onClose}
             style={{ marginLeft: 'auto', width: 32, height: 32, borderRadius: 9, border: '1px solid #2d3f52', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 16, color: '#9db8d2', flexShrink: 0 }}>
@@ -656,7 +661,7 @@ function DetailModal({ s, onClose }) {
               background: d.highlight ? `linear-gradient(160deg, ${C.panelDark}, ${C.panelDark2})` : C.canvas,
             }}>
               <div style={{ fontSize: 22, fontWeight: 900, color: d.highlight ? '#2ecc71' : (d.color || C.ink), fontFamily: FONT_MONO }}>{d.val}</div>
-              <div style={{ fontSize: 10, color: d.highlight ? '#8fa8c9' : C.faint, marginTop: 4, fontWeight: 600 }}>{d.lbl}</div>
+              <div style={{ fontSize: 10, color: d.highlight ? 'var(--wt-text-3)' : C.faint, marginTop: 4, fontWeight: 600 }}>{d.lbl}</div>
             </div>
           ))}
         </div>
@@ -692,7 +697,7 @@ function DetailModal({ s, onClose }) {
               {loadingReq && <div style={{fontSize:11,color:C.faint,padding:'4px 8px'}}>⏳</div>}
               {!loadingReq && !mainList.length && <div style={{fontSize:11,color:C.faint,padding:'4px 8px'}}>{t('req_no_tasks')}</div>}
               {mainList.slice(0, mainShown).map(t2=>(
-                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 11px',borderRadius:9,background:'#fff',border:`1px solid ${C.lineSoft}`,fontSize:11}}>
+                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 11px',borderRadius:9,background:'var(--wt-surface)',border:`1px solid ${C.lineSoft}`,fontSize:11}}>
                   <span>{STATUS_ICON[t2.status]||'⏳'}</span>
                   <span style={{flex:1,color:C.ink,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t2.title}</span>
                   {t2.score!=null&&<span style={{fontWeight:700,color:C.primary,whiteSpace:'nowrap',fontFamily:FONT_MONO}}>{t2.score}đ</span>}
@@ -722,7 +727,7 @@ function DetailModal({ s, onClose }) {
               {loadingReq && <div style={{fontSize:11,color:C.faint,padding:'4px 8px'}}>⏳</div>}
               {!loadingReq && !supportList.length && <div style={{fontSize:11,color:C.faint,padding:'4px 8px'}}>{t('req_no_tasks')}</div>}
               {supportList.slice(0, supportShown).map(t2=>(
-                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 11px',borderRadius:9,background:'#fff',border:`1px solid ${C.lineSoft}`,fontSize:11}}>
+                <div key={t2.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 11px',borderRadius:9,background:'var(--wt-surface)',border:`1px solid ${C.lineSoft}`,fontSize:11}}>
                   <span>{STATUS_ICON[t2.status]||'⏳'}</span>
                   <span style={{flex:1,color:C.ink,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t2.title}</span>
                   <span style={{fontWeight:700,color:C.warning,whiteSpace:'nowrap'}}>🤝 {t('dash_badge_support')}</span>

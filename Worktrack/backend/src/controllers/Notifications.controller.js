@@ -9,6 +9,8 @@ const db = require('../config/db');
 const ENTITY_LINK = {
   request: (id) => `/requests?id=${id}`,
   daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
+  // Công việc hằng ngày: mở đúng người + đúng tuần của ngày được chấm
+  worklog: (id, payload = {}) => `/daily?user_id=${id}&date=${payload.workDate || ''}`,
 };
 
 // GET /api/notifications?limit=20&before=123

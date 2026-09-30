@@ -18,8 +18,7 @@ const NAV = [
   { to: '/requests',  icon: '📨',  tkey: 'requests',      color: '#f59e0b' },
   { to: '/completed', icon: '✅',  tkey: 'nav_completed', color: '#17b26a' },
   { divider: true },
-  // Leader KHÔNG được xem Dashboard — chỉ admin/manager
-  { to: '/dashboard', icon: '📊',  tkey: 'dash_title', roles: ['admin','manager'], color: '#8b5cf6' },
+  { to: '/dashboard', icon: '📊',  tkey: 'dash_title', color: '#8b5cf6' },
   // Leader vào đây để tạo tài khoản user
   { to: '/users',     icon: '👥',  tkey: 'nav_users',  roles: ['admin','manager','leader'], color: '#ec4899' },
   { to: '/settings',  icon: '⚙️', tkey: 'settings', color: '#6b7280' },

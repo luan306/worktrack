@@ -45,6 +45,7 @@ services:
             JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
             JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN}
             FRONTEND_URL: ${FRONTEND_URL}
+            TRUST_PROXY: 1 # backend chỉ nhận request qua nginx → lấy IP thật cho rate-limit
         volumes:
             # Bind mount thư mục uploads ra ngoài host — sống sót qua mọi lần
             # rebuild/xóa container, và dễ backup riêng (ảnh, file đính kèm, Excel

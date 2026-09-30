@@ -15,7 +15,32 @@ const TYPE_ICON = {
   request_assigned: '📨', request_status_changed: '🔄',
   request_commented: '💬', request_scored: '⭐', request_claimed: '🙋',
   daily_scored: '📅', daily_score_edited: '✏️',
+  request_activity: '📋',
+  worklog_scored: '🗓', worklog_score_edited: '✏️',
 };
+
+// Thông báo cho Admin về mọi thao tác giao việc / chỉnh sửa CV (request_activity)
+const FIELD_LABEL = {
+  title: 'tiêu đề', description: 'mô tả', priority: 'độ ưu tiên',
+  deadline: 'deadline', started_at: 'giờ bắt đầu', completed_at: 'giờ hoàn thành',
+};
+function activityText(p, actor, title, t) {
+  const q = `"${title}"`;
+  switch (p.action) {
+    case 'created':    return t('notif_act_created', { actor, title, target: p.target, defaultValue: `${actor} đã tạo CV ${q}${p.target ? ` và giao cho ${p.target}` : ''}` });
+    case 'assigned':   return t('notif_act_assigned', { actor, title, target: p.target, defaultValue: `${actor} đã giao CV ${q} cho ${p.target}${p.role === 'support' ? ' (hỗ trợ)' : ''}` });
+    case 'unassigned': return t('notif_act_unassigned', { actor, title, target: p.target, defaultValue: `${actor} đã gỡ ${p.target} khỏi CV ${q}` });
+    case 'claimed':    return t('notif_act_claimed', { actor, title, defaultValue: `${actor} đã tự nhận CV ${q}` });
+    case 'deleted':    return t('notif_act_deleted', { actor, title, defaultValue: `${actor} đã xóa CV ${q}` });
+    default: {
+      const parts = [];
+      if (p.status) parts.push(`trạng thái → ${t(STATUS_TKEY[p.status] || p.status)}`);
+      if (p.score !== undefined && p.score !== null) parts.push(`điểm ${p.score}đ`);
+      if (p.fields?.length) parts.push(`sửa ${p.fields.map(f => FIELD_LABEL[f] || f).join(', ')}`);
+      return t('notif_act_edited', { actor, title, changes: parts.join('; '), defaultValue: `${actor} đã cập nhật CV ${q}${parts.length ? `: ${parts.join('; ')}` : ''}` });
+    }
+  }
+}
 
 function NotificationText({ n, t }) {
   const p = n.payload || {};
@@ -35,6 +60,12 @@ function NotificationText({ n, t }) {
       return t('notif_daily_scored', { actor, task: p.taskName, score: p.score, defaultValue: `${actor} đã chấm điểm công việc "${p.taskName}": ${p.score}đ` });
     case 'daily_score_edited':
       return t('notif_daily_score_edited', { actor, task: p.taskName, old: p.oldScore, new: p.newScore, defaultValue: `${actor} đã sửa điểm công việc "${p.taskName}": ${p.oldScore}đ → ${p.newScore}đ` });
+    case 'request_activity':       return activityText(p, actor, title, t);
+    // Công việc hằng ngày: chấm điểm cả ngày / sửa điểm đã chấm
+    case 'worklog_scored':
+      return t('notif_worklog_scored', { actor, date: p.workDate, score: p.score, defaultValue: `${actor} đã chấm điểm ngày ${p.workDate} của bạn: ${p.score}đ${p.comment ? ` — ${p.comment}` : ''}` });
+    case 'worklog_score_edited':
+      return t('notif_worklog_score_edited', { actor, date: p.workDate, old: p.oldScore, new: p.score, name: p.targetName, defaultValue: `${actor} đã sửa điểm ngày ${p.workDate} của ${p.targetName}: ${+p.oldScore}đ → ${p.score}đ` });
     default:                       return title;
   }
 }
@@ -124,9 +155,9 @@ export default function NotificationBell() {
       </button>
 
       {open && pos && createPortal(
-        <div ref={panelRef} style={{ position: 'fixed', top: pos.top, left: pos.left, width: 320, maxWidth: 'calc(100vw - 16px)', background: '#fff', borderRadius: 12, border: '1.5px solid #e8eaed', boxShadow: '0 10px 32px rgba(0,0,0,.18)', zIndex: 1000, overflow: 'hidden' }}>
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid #e8eaed', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: '#1e2a3a', flex: 1 }}>{t('notif_title')}</div>
+        <div ref={panelRef} style={{ position: 'fixed', top: pos.top, left: pos.left, width: 320, maxWidth: 'calc(100vw - 16px)', background: 'var(--wt-surface)', borderRadius: 12, border: '1.5px solid var(--wt-line)', boxShadow: '0 10px 32px rgba(0,0,0,.18)', zIndex: 1000, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--wt-line)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--wt-ink)', flex: 1 }}>{t('notif_title')}</div>
             {unreadCount > 0 && (
               <button onClick={markAllRead} style={{ fontSize: 11, color: '#3a7bd5', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
                 {t('notif_mark_all_read')}
@@ -135,17 +166,17 @@ export default function NotificationBell() {
           </div>
           <div style={{ maxHeight: 360, overflowY: 'auto' }}>
             {!items.length && (
-              <div style={{ padding: 28, textAlign: 'center', color: '#bbb', fontSize: 12 }}>{t('notif_empty')}</div>
+              <div style={{ padding: 28, textAlign: 'center', color: 'var(--wt-text-4)', fontSize: 12 }}>{t('notif_empty')}</div>
             )}
             {items.map((n) => (
               <div key={n.id} onClick={() => handleClick(n)}
-                style={{ padding: '10px 14px', display: 'flex', gap: 10, cursor: 'pointer', borderBottom: '1px solid #f5f6f8', background: n.is_read ? 'transparent' : '#eef3ff' }}
-                onMouseEnter={e => e.currentTarget.style.background = n.is_read ? '#f7f8fb' : '#e5edff'}
-                onMouseLeave={e => e.currentTarget.style.background = n.is_read ? 'transparent' : '#eef3ff'}>
+                style={{ padding: '10px 14px', display: 'flex', gap: 10, cursor: 'pointer', borderBottom: '1px solid var(--wt-surface-2)', background: n.is_read ? 'transparent' : 'var(--wt-tint-primary)' }}
+                onMouseEnter={e => e.currentTarget.style.background = n.is_read ? 'var(--wt-surface-2)' : 'var(--wt-tint-primary)'}
+                onMouseLeave={e => e.currentTarget.style.background = n.is_read ? 'transparent' : 'var(--wt-tint-primary)'}>
                 <span style={{ fontSize: 16, flexShrink: 0 }}>{TYPE_ICON[n.type] || '🔔'}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: '#333', lineHeight: 1.4 }}><NotificationText n={n} t={t} /></div>
-                  <div style={{ fontSize: 10, color: '#aaa', marginTop: 3 }}>{fmtAgo(n.created_at, i18n.language)}</div>
+                  <div style={{ fontSize: 12, color: 'var(--wt-ink)', lineHeight: 1.4 }}><NotificationText n={n} t={t} /></div>
+                  <div style={{ fontSize: 10, color: 'var(--wt-text-4)', marginTop: 3 }}>{fmtAgo(n.created_at, i18n.language)}</div>
                 </div>
                 {!n.is_read && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#3a7bd5', flexShrink: 0, marginTop: 4 }} />}
               </div>

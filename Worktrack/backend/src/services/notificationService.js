@@ -8,6 +8,8 @@ const ENTITY_LINK = {
   // trang Daily chung chung — cần groupId/logDate được gửi kèm trong payload
   // lúc gọi notify() (xem daily.controller.js).
   daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
+  // Công việc hằng ngày: mở đúng người + đúng tuần của ngày được chấm
+  worklog: (id, payload = {}) => `/daily?user_id=${id}&date=${payload.workDate || ''}`,
 };
 
 /**
@@ -43,9 +45,27 @@ async function notify(io, { userId, actorId, type, entityType = 'request', entit
 }
 
 /** Gửi cùng 1 thông báo cho nhiều user, tự loại trùng và tự bỏ qua actor. */
-async function notifyMany(io, userIds, opts) {
-  const unique = [...new Set(userIds)].filter(Boolean);
-  return Promise.all(unique.map((userId) => notify(io, { ...opts, userId })));
+async function notifyMany(io, userIds, { actorId, type, entityType = 'request', entityId, payload = {} }) {
+  const unique = [...new Set(userIds.map(Number))].filter(id => id && id !== actorId);
+  if (!unique.length) return [];
+  if (unique.length === 1) return [await notify(io, { userId: unique[0], actorId, type, entityType, entityId, payload })];
+
+  // 1 câu INSERT nhiều dòng — MySQL cấp id liên tiếp cho các dòng của 1 câu INSERT
+  const json = JSON.stringify(payload);
+  const [result] = await db.query(
+    'INSERT INTO notifications (user_id, actor_id, type, entity_type, entity_id, payload) VALUES ?',
+    [unique.map(userId => [userId, actorId || null, type, entityType, entityId, json])]
+  );
+  const createdAt = new Date().toISOString();
+  const link = (ENTITY_LINK[entityType] || (() => null))(entityId, payload);
+  return unique.map((userId, i) => {
+    const notification = {
+      id: result.insertId + i, user_id: userId, actor_id: actorId || null, type,
+      entity_type: entityType, entity_id: entityId, payload, is_read: 0, created_at: createdAt, link,
+    };
+    io?.to(`user:${userId}`).emit('notification:new', notification);
+    return notification;
+  });
 }
 
 module.exports = { notify, notifyMany };

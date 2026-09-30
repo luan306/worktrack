@@ -5,6 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Worktrack - SMC</title>
+    <!-- Chọn chế độ sáng/tối TRƯỚC khi vẽ trang → không bị chớp trắng khi đang dùng chế độ tối -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('wt_theme');
+          if (t !== 'light' && t !== 'dark') t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -18,3 +18,78 @@
   .badge-orange{ @apply bg-orange-50 text-orange-600; }
   .badge-gray  { @apply bg-gray-100 text-gray-500; }
 }
+
+/* ============================================================
+   CHẾ ĐỘ SÁNG / TỐI — bộ màu dùng chung cho mọi trang.
+   Màu nhấn (xanh, đỏ, cam...) giữ nguyên ở cả 2 chế độ; chỉ nền,
+   chữ, viền và các nền nhạt đổi theo <html data-theme="dark">.
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --wt-canvas:      #eef1f8;
+  --wt-surface:     #ffffff;
+  --wt-surface-2:   #f7f8fb;
+  --wt-surface-3:   #f0f2f8;
+  --wt-line:        #e6e9f2;
+  --wt-line-strong: #d5dbe8;
+  --wt-ink:         #0f1729;
+  --wt-text-2:      #555e70;
+  --wt-text-3:      #888fa0;
+  --wt-text-4:      #aab1bf;
+  --wt-disabled:    #d9dee8;
+
+  --wt-tint-primary:    #eef3ff;
+  --wt-tint-primary-bd: #c8d8f0;
+  --wt-tint-success:    #e8f8ee;
+  --wt-tint-success-bd: #b8e8c8;
+  --wt-tint-danger:     #fde8e8;
+  --wt-tint-danger-bd:  #f5c0c0;
+  --wt-tint-warning:    #fff4e8;
+  --wt-tint-warning-bd: #f5d8a0;
+  --wt-tint-violet:     #f2ecfe;
+  --wt-tint-teal:       #e6f6f4;
+  --wt-tint-teal-bd:    #bfe6e1;
+  --wt-warn-text:       #8a5a00;
+
+  --wt-scroll: #c8d4e6;
+  --wt-shadow: 0 10px 32px rgba(15, 23, 41, .12);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --wt-canvas:      #0b1220;
+  --wt-surface:     #131c2e;
+  --wt-surface-2:   #18233a;
+  --wt-surface-3:   #1d2944;
+  --wt-line:        #26324b;
+  --wt-line-strong: #33415f;
+  --wt-ink:         #e8edf7;
+  --wt-text-2:      #b4c0d6;
+  --wt-text-3:      #8796b3;
+  --wt-text-4:      #62728f;
+  --wt-disabled:    #2c3854;
+
+  --wt-tint-primary:    #1b2a55;
+  --wt-tint-primary-bd: #2e4380;
+  --wt-tint-success:    #10322a;
+  --wt-tint-success-bd: #1c5a45;
+  --wt-tint-danger:     #3a1a24;
+  --wt-tint-danger-bd:  #6b2a3a;
+  --wt-tint-warning:    #362914;
+  --wt-tint-warning-bd: #6b4f1f;
+  --wt-tint-violet:     #2a2150;
+  --wt-tint-teal:       #0f3332;
+  --wt-tint-teal-bd:    #1d5e5a;
+  --wt-warn-text:       #f5c46b;
+
+  --wt-scroll: #33415f;
+  --wt-shadow: 0 10px 32px rgba(0, 0, 0, .45);
+}
+
+html, body { background: var(--wt-canvas); color: var(--wt-ink); }
+/* Đổi chế độ: trình duyệt chụp màn hình cũ rồi mờ dần sang mới (1 hiệu ứng GPU duy nhất,
+   KHÔNG chạy hiệu ứng trên từng phần tử — trang nhiều phần tử vẫn mượt) */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; animation-timing-function: ease-out; }
+@media (prefers-reduced-motion: reduce) { ::view-transition-old(root), ::view-transition-new(root) { animation: none; } }
+/* Tối: ảnh / avatar ảnh không bị lóa */
+:root[data-theme="dark"] img { filter: brightness(.92); }

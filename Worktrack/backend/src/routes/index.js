@@ -1,14 +1,18 @@
 const router = require('express').Router();
 const auth   = require('../middleware/auth');
+const cache  = require('../config/cache');
 const upload = require('../middleware/upload');
 const aC  = require('../controllers/auth.controller');
 const uC  = require('../controllers/users.controller');
+// File Excel nhập tài khoản chỉ cần đọc trong bộ nhớ, không lưu xuống đĩa
+const memUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const gC  = require('../controllers/groups.controller');
 const dC  = require('../controllers/daily.controller');
 const rC  = require('../controllers/requests.controller');
 const dbC = require('../controllers/dashboard.controller');
 const nC  = require('../controllers/notifications.controller');
 const alC = require('../controllers/activityLog.controller');
+const wlC = require('../controllers/worklog.controller');
 
 // ── Auth ──
 router.post('/auth/login',   aC.login);
@@ -17,10 +21,22 @@ router.post('/auth/logout',  aC.logout);
 router.get ('/auth/me',      auth(), aC.me);
 router.post('/auth/change-password', auth(), aC.changePassword);
 
+// Mọi thao tác ghi vào nhóm / người dùng làm danh sách nhóm (có kèm thành viên)
+// đang cache bị cũ → xóa cache trước khi xử lý và sau khi xử lý xong.
+const clearGroupCache = (req, res, next) => {
+  if (req.method === 'GET') return next();
+  cache.clear('grp:');
+  res.on('finish', () => cache.clear('grp:'));
+  next();
+};
+router.use(['/users', '/groups'], clearGroupCache);
+
 // ── Users — static routes TRƯỚC dynamic :id ──
 router.get   ('/users',                    auth(),                              uC.list);
 router.post  ('/users',                    auth(['admin','manager','leader']), uC.create);
 router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
+router.get   ('/users/import/template',    auth(['admin']),                    uC.importTemplate);
+router.post  ('/users/import/parse',       auth(['admin']), memUpload.single('file'), uC.parseImportFile);
 router.put   ('/users/:id',                auth(),                              uC.update);
 router.delete('/users/:id',                auth(['admin','manager','leader']), uC.remove);
 router.post  ('/users/:id/reset-password', auth(['admin','manager','leader']),  uC.resetPassword);
@@ -52,6 +68,20 @@ router.post  ('/daily/task-groups/:groupId/tasks', auth(['admin','manager','lead
 router.put   ('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.updateTask);
 router.delete('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.deleteTask);
 
+// ── Công việc hằng ngày (user tự ghi việc, Leader chấm cả ngày) ──
+// Phân quyền chi tiết (xem ai / chấm ai) kiểm tra trong controller
+router.get   ('/worklog/members',       auth(), wlC.members);
+router.get   ('/worklog',               auth(), wlC.week);
+router.post  ('/worklog/entries',       auth(), wlC.createEntry);
+router.put   ('/worklog/entries/:id',   auth(), wlC.updateEntry);
+router.delete('/worklog/entries/:id',   auth(), wlC.deleteEntry);
+router.put   ('/worklog/scores',        auth(['admin','manager','leader']), wlC.scoreDay);
+router.get   ('/worklog/history',       auth(), wlC.history);
+router.put   ('/worklog/offs',          auth(), wlC.setDayOff);
+router.delete('/worklog/offs',          auth(), wlC.removeDayOff);
+router.get   ('/worklog/export',        auth(), wlC.exportReport);
+router.get   ('/worklog/overview',      auth(), wlC.overview);
+
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);
 router.get   ('/requests/:id',                auth(), rC.getOne);
@@ -60,23 +90,28 @@ router.post  ('/requests',                    auth(['admin','manager','leader'])
 router.put   ('/requests/:id',                auth(), rC.update);
 router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
 router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);
+router.put   ('/requests/:id/assign/:userId/role', auth(), rC.setAssigneeRole);
 router.post  ('/requests/:id/claim',          auth(), rC.claim);
 // ⚠️ Thêm upload.single('file') để đọc được multipart/form-data khi frontend gửi kèm tệp đính kèm.
 // Không có middleware này thì req.file/req.body luôn rỗng với request dạng multipart → lỗi 400 "content required".
 router.post  ('/requests/:id/comments',       auth(), upload.single('file'), rC.addComment);
-router.post  ('/requests/:id/score',          auth(['admin','manager','leader']), rC.score);
+// Chấm điểm trực tiếp, bỏ qua luồng scoring → reviewing → done (frontend không dùng)
+// → chỉ Manager/Admin, tránh Leader tự chấm điểm cho CV của mình qua API
+router.post  ('/requests/:id/score',          auth(['admin','manager']), rC.score);
 router.delete('/requests/:id',                auth(), rC.remove);
 
 // File upload
 router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
 router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
 
-// ── Dashboard ── Leader KHÔNG được xem — chỉ admin/manager
+// ── Dashboard ── ai đăng nhập cũng xem được bảng điểm;
+// Export Excel / Lock & Reset chỉ admin/manager
 router.get ('/dashboard/debug',              auth(['admin','manager']), dbC.debug);
-router.get ('/dashboard/scores',             auth(['admin','manager']), dbC.getScores);
+router.get ('/dashboard/scores',             auth(), dbC.getScores);
 router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);
 router.get ('/dashboard/excel/:filename',    auth(['admin','manager']), dbC.downloadExcel);
 router.get ('/dashboard/last-export',        auth(['admin','manager']), dbC.getLastExport);
+router.get ('/dashboard/exports',            auth(['admin','manager']), dbC.getExportList);
 
 // ── Notifications — static routes TRƯỚC dynamic :id ──
 router.get ('/notifications/unread-count', auth(), nC.unreadCount);

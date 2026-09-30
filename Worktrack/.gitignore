@@ -1,0 +1,6 @@
+
+# Bí mật & dữ liệu — KHÔNG commit
+.env
+backend/.env
+backend/src/uploads/
+backend/uploads/

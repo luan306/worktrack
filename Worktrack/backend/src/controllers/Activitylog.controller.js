@@ -18,16 +18,20 @@ exports.list = async (req, res) => {
     if (from)        { where += ' AND al.created_at>=?'; params.push(`${from} 00:00:00`); }
     if (to)          { where += ' AND al.created_at<=?'; params.push(`${to} 23:59:59`); }
 
-    const [[{ cnt }]] = await db.query(`SELECT COUNT(*) as cnt FROM activity_logs al ${where}`, params);
-    const [rows] = await db.query(
-      `SELECT al.*, u.full_name as actor_name, u.avatar_color as actor_color
-       FROM activity_logs al
-       LEFT JOIN users u ON u.id=al.actor_id
-       ${where}
-       ORDER BY al.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, l, offset]
-    );
+    // COUNT(*) trên bảng log hàng triệu dòng tốn thời gian → cache 30s theo bộ lọc
+    // (lật trang không phải đếm lại; tổng số trễ tối đa 30s là chấp nhận được)
+    const [cnt, [rows]] = await Promise.all([
+      cache.wrap('al:count:' + JSON.stringify(params) + where, 30000,
+        async () => (await db.query(`SELECT COUNT(*) as cnt FROM activity_logs al ${where}`, params))[0][0].cnt),
+      db.query(
+        `SELECT al.*, u.full_name as actor_name, u.avatar_color as actor_color
+         FROM activity_logs al
+         LEFT JOIN users u ON u.id=al.actor_id
+         ${where}
+         ORDER BY al.created_at DESC
+         LIMIT ? OFFSET ?`,
+        [...params, l, offset]),
+    ]);
 
     res.json({ success: true, data: { items: rows, total: cnt, page: p, limit: l, totalPages: Math.ceil(cnt / l) || 1 } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }

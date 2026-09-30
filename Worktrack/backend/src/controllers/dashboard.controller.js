@@ -3,293 +3,257 @@ const ExcelJS = require('exceljs');
 const path    = require('path');
 const fs      = require('fs');
 
+const { localDate, parseLocalDate } = require('../utils/date');
+const cache = require('../config/cache');
+const { sendCachedJson } = require('../utils/cachedJson');
+const { logActivity } = require('../services/activityLogService');
+
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+
+// CV được tính điểm = đã duyệt hoàn thành. Sau 6 ngày CV 'done' bị tự chuyển
+// sang 'archived' (xem requests.controller.js) nhưng VẪN phải giữ điểm — trước
+// đây chỉ lọc status='done' nên điểm YC biến mất khỏi Dashboard sau 6 ngày.
+const SCORED = "rt.status IN ('done','archived')";
+
+const EPOCH = '2000-01-01 00:00:00'; // dự phòng khi chưa có kỳ nào đang mở
+
+// Kỳ đang mở + mốc bắt đầu dạng chuỗi 'YYYY-MM-DD HH:MM:SS' (lấy thẳng từ
+// MySQL để không bị lệch múi giờ khi Node chuyển Date qua lại).
+async function getOpenPeriod(q = db, forUpdate = false) {
+  const [[period]] = await q.query(
+    `SELECT *, DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at_str
+       FROM score_periods WHERE is_locked=0 ORDER BY id DESC LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`
+  );
+  return period;
+}
+
+// ⚠️ LEFT JOIN group_members (không phải JOIN): user chưa được xếp nhóm vẫn
+// hiện khi xem "Tất cả"; khi có group_id thì gm.group_id=NULL tự bị loại.
+// Admin/Manager là người chấm & duyệt, không phải người được chấm → không xếp hạng.
+async function getMembers(groupId, q = db) {
+  let sql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.role
+               FROM users u
+               LEFT JOIN group_members gm ON gm.user_id = u.id
+              WHERE u.is_active = 1 AND u.role NOT IN ('admin','manager')`;
+  const p = [];
+  if (groupId) { sql += ' AND gm.group_id = ?'; p.push(groupId); }
+  const [rows] = await q.query(sql, p);
+  return rows;
+}
+
+// Toàn bộ số liệu điểm của nhiều nhân viên trong 2 câu SQL chạy song song:
+// điểm trong khoảng xem (range) + cộng dồn từ đầu kỳ (period) + số CV.
+// Tốc độ không phụ thuộc số nhân viên. Trả về hàm tra cứu theo user_id.
+async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart, groupId }) {
+  // Cùng định dạng 'YYYY-MM-DD HH:MM:SS' nên so sánh chuỗi = so sánh thời gian
+  const lower = rangeStart < periodStart ? rangeStart : periodStart;
+  const periodDay = periodStart.slice(0, 10);
+
+  // Điểm Daily = điểm Leader chấm CẢ NGÀY trong Công việc hằng ngày (daily_day_scores)
+  //   + điểm Daily kiểu cũ (daily_task_logs) còn lại trong kỳ lúc đổi giao diện.
+  // "CV hằng ngày" = số việc đã ghi trong Công việc hằng ngày + việc Daily cũ đã làm.
+  const lowerDay = lower.slice(0, 10);
+  let oldDaily = `
+        SELECT dtl.user_id, dtl.log_date AS d, dtl.score, dtl.is_done AS n
+          FROM daily_task_logs dtl
+          JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
+          JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
+         WHERE dtl.user_id IN (?) AND dtl.log_date >= ?`;
+  const od = [memberIds, lowerDay];
+  if (groupId) { oldDaily += ' AND dtg.group_id = ?'; od.push(groupId); }
+  const dailySql = `
+    SELECT x.user_id,
+           SUM(CASE WHEN x.d BETWEEN ? AND ? THEN x.score ELSE 0 END) AS range_score,
+           SUM(CASE WHEN x.d >= ?            THEN x.score ELSE 0 END) AS period_score,
+           SUM(CASE WHEN x.d >= ?            THEN x.n     ELSE 0 END) AS cv_done
+      FROM (${oldDaily}
+        UNION ALL
+        SELECT ds.user_id, ds.work_date, ds.score, 0 FROM daily_day_scores ds WHERE ds.user_id IN (?) AND ds.work_date >= ?
+        UNION ALL
+        SELECT de.user_id, de.work_date, 0, 1 FROM daily_entries de WHERE de.user_id IN (?) AND de.work_date >= ?
+      ) x
+     GROUP BY x.user_id`;
+  const dp = [rangeStart.slice(0, 10), rangeEnd.slice(0, 10), periodDay, periodDay, ...od, memberIds, lowerDay, memberIds, lowerDay];
+
+  let reqSql = `
+    SELECT rta.user_id,
+           SUM(CASE WHEN rt.completed_at BETWEEN ? AND ? AND rta.role = 'main'    THEN COALESCE(rta.score, rt.score) ELSE 0 END) AS range_main,
+           SUM(CASE WHEN rt.completed_at BETWEEN ? AND ? AND rta.role = 'support' THEN COALESCE(rta.score, rt.score) ELSE 0 END) AS range_support,
+           SUM(CASE WHEN rt.completed_at >= ? THEN COALESCE(rta.score, rt.score) ELSE 0 END) AS period_score,
+           SUM(rt.completed_at >= ? AND rta.role = 'main')    AS cv_main,
+           SUM(rt.completed_at >= ? AND rta.role = 'support') AS cv_support,
+           SUM(rt.completed_at >= ? AND rt.is_late = 0)       AS cv_ontime,
+           SUM(rt.completed_at >= ? AND rt.is_late = 1)       AS cv_late
+      FROM request_tasks rt
+      JOIN request_task_assignees rta ON rta.task_id = rt.id
+     WHERE rta.user_id IN (?) AND ${SCORED} AND rt.completed_at >= ?`;
+  const rp = [rangeStart, rangeEnd, rangeStart, rangeEnd,
+              periodStart, periodStart, periodStart, periodStart, periodStart,
+              memberIds, lower];
+  if (groupId) { reqSql += ' AND rt.group_id = ?'; rp.push(groupId); }
+  reqSql += ' GROUP BY rta.user_id';
+
+  const [[dailyRows], [reqRows]] = await Promise.all([q.query(dailySql, dp), q.query(reqSql, rp)]);
+
+  const stats = {};
+  const get = (id) => (stats[id] ??= {
+    daily_range: 0, daily_period: 0, cv_daily: 0,
+    req_main_range: 0, req_support_range: 0, req_period: 0,
+    cv_main: 0, cv_support: 0, cv_ontime: 0, cv_late: 0,
+  });
+  for (const r of dailyRows) {
+    Object.assign(get(r.user_id), { daily_range: +r.range_score, daily_period: +r.period_score, cv_daily: +r.cv_done });
+  }
+  for (const r of reqRows) {
+    Object.assign(get(r.user_id), {
+      req_main_range: +r.range_main, req_support_range: +r.range_support, req_period: +r.period_score,
+      cv_main: +r.cv_main, cv_support: +r.cv_support, cv_ontime: +r.cv_ontime, cv_late: +r.cv_late,
+    });
+  }
+  return get;
+}
+
+// Khoảng ngày [start, end] theo view: day / week (T2→CN) / month
+function getRange(view, today) {
+  const d = parseLocalDate(today);
+  if (view === 'day') return [today, today];
+  if (view === 'week') {
+    const dow = (d.getDay() + 6) % 7; // T2=0 … CN=6
+    const s = new Date(d); s.setDate(d.getDate() - dow);
+    const e = new Date(s); e.setDate(s.getDate() + 6);
+    return [localDate(s), localDate(e)];
+  }
+  return [`${today.slice(0, 7)}-01`, localDate(new Date(d.getFullYear(), d.getMonth() + 1, 0))];
+}
+
 // GET /dashboard/scores
-// ⚠️ TỐI ƯU HIỆU NĂNG: bản cũ chạy ~10 câu SQL RIÊNG CHO MỖI NHÂN VIÊN (kiểu
-// N+1 query) — với 50 người là ~500 query/lần tải Dashboard, chậm rõ rệt khi
-// công ty đông người. Bản này gộp lại thành ~7 câu SQL CỐ ĐỊNH dùng GROUP BY,
-// lấy dữ liệu cho TẤT CẢ nhân viên cùng lúc rồi map vào từng người ở tầng JS —
-// tốc độ không còn phụ thuộc vào số lượng nhân viên.
 exports.getScores = async (req, res) => {
   try {
     const { group_id, view = 'week', date } = req.query;
-    const today = date || new Date().toISOString().slice(0, 10);
+    const [start, end] = getRange(view, date || localDate());
 
-    let start, end;
-    const d = new Date(today);
-    if (view === 'day') {
-      start = end = today;
-    } else if (view === 'week') {
-      const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
-      const s = new Date(d); s.setDate(d.getDate() - dow);
-      const e = new Date(s); e.setDate(s.getDate() + 6);
-      start = s.toISOString().slice(0, 10);
-      end   = e.toISOString().slice(0, 10);
-    } else {
-      start = `${today.slice(0, 7)}-01`;
-      const e2 = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      end = e2.toISOString().slice(0, 10);
-    }
+    // Bảng điểm giống nhau với mọi người xem → cache 30s + gộp request trùng.
+    // Bị xóa ngay khi có chấm điểm Daily / đổi trạng thái CV / chốt kỳ.
+    const cKey = 'dash:scores:' + JSON.stringify([group_id || '', view, start, end]);
+    await sendCachedJson(req, res, cKey, 30000, async () => {
+    const [openPeriod, members] = await Promise.all([getOpenPeriod(), getMembers(group_id)]);
+    const { started_at_str, ...period } = openPeriod || {};
+    if (!members.length) return { period: openPeriod && period, start, end, view, scores: [] };
 
-    // Kỳ hiện tại
-    const [[period]] = await db.query(
-      'SELECT * FROM score_periods WHERE is_locked=0 ORDER BY started_at DESC LIMIT 1'
-    );
-
-    // ⚠️ SỬA LỖI: đổi JOIN → LEFT JOIN group_members. Trước đây dùng JOIN
-    // thường (INNER JOIN), khiến user nào CHƯA được xếp vào nhóm nào sẽ biến
-    // mất khỏi Dashboard hoàn toàn, dù tài khoản vẫn active bình thường — đây
-    // chính là lý do "có nhiều user mà Dashboard chỉ hiện vài người". LEFT
-    // JOIN vẫn lọc đúng theo nhóm khi có chọn group_id (vì gm.group_id sẽ là
-    // NULL với user chưa có nhóm, không khớp điều kiện lọc), nhưng khi xem
-    // "Tất cả" (không truyền group_id) thì mọi user active đều hiện ra.
-    let memberSql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.role
-                     FROM users u
-                     LEFT JOIN group_members gm ON gm.user_id = u.id
-                     WHERE u.is_active = 1`;
-    const mp = [];
-    if (group_id) { memberSql += ' AND gm.group_id = ?'; mp.push(group_id); }
-    const [members] = await db.query(memberSql, mp);
-
-    if (!members.length) {
-      return res.json({ success: true, data: { period, start, end, view, scores: [] } });
-    }
-    const memberIds = members.map(m => m.id);
-    const periodStart = '2000-01-01'; // reset về 0 khi chốt kỳ
-
-    // ── 1) Điểm HN trong RANGE (day/week/month), gộp theo user_id ──
-    let dailyRangeSql = `SELECT dtl.user_id, COALESCE(SUM(dtl.score),0) as total
-                        FROM daily_task_logs dtl
-                        JOIN daily_tasks dt      ON dt.id  = dtl.daily_task_id
-                        JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
-                        WHERE dtl.user_id IN (?) AND dtl.log_date BETWEEN ? AND ?`;
-    const drp = [memberIds, start, end];
-    if (group_id) { dailyRangeSql += ' AND dtg.group_id = ?'; drp.push(group_id); }
-    dailyRangeSql += ' GROUP BY dtl.user_id';
-    const [dailyRangeRows] = await db.query(dailyRangeSql, drp);
-
-    // ── 2) Điểm YC trong RANGE — gộp cả main+support 1 query, tách theo role ──
-    let reqRangeSql = `SELECT rta.user_id, rta.role, COALESCE(SUM(rt.score), 0) as total
-                      FROM request_tasks rt
-                      JOIN request_task_assignees rta ON rta.task_id = rt.id
-                      WHERE rta.user_id IN (?) AND rt.status = 'done'
-                        AND rt.completed_at BETWEEN ? AND ?`;
-    const rrp = [memberIds, `${start} 00:00:00`, `${end} 23:59:59`];
-    if (group_id) { reqRangeSql += ' AND rt.group_id = ?'; rrp.push(group_id); }
-    reqRangeSql += ' GROUP BY rta.user_id, rta.role';
-    const [reqRangeRows] = await db.query(reqRangeSql, rrp);
-
-    // ── 3) Điểm HN cộng dồn cả kỳ ──
-    let dailyPeriodSql = `SELECT dtl.user_id, COALESCE(SUM(dtl.score),0) as total
-                          FROM daily_task_logs dtl
-                          JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
-                          JOIN daily_task_groups dtg  ON dtg.id = dt.task_group_id
-                          WHERE dtl.user_id IN (?) AND dtl.log_date >= ?`;
-    const dpp = [memberIds, periodStart];
-    if (group_id) { dailyPeriodSql += ' AND dtg.group_id = ?'; dpp.push(group_id); }
-    dailyPeriodSql += ' GROUP BY dtl.user_id';
-    const [dailyPeriodRows] = await db.query(dailyPeriodSql, dpp);
-
-    // ── 4) Điểm YC cộng dồn cả kỳ — KHÔNG lọc role (khớp đúng logic bản gốc) ──
-    let reqPeriodSql = `SELECT rta.user_id, COALESCE(SUM(rt.score), 0) as total
-                        FROM request_tasks rt
-                        JOIN request_task_assignees rta ON rta.task_id = rt.id
-                        WHERE rta.user_id IN (?) AND rt.status = 'done'
-                          AND rt.completed_at >= ?`;
-    const rpp = [memberIds, `${periodStart} 00:00:00`];
-    if (group_id) { reqPeriodSql += ' AND rt.group_id = ?'; rpp.push(group_id); }
-    reqPeriodSql += ' GROUP BY rta.user_id';
-    const [reqPeriodRows] = await db.query(reqPeriodSql, rpp);
-
-    // ── 5) CV hằng ngày đã làm (is_done=1) kể từ đầu kỳ ──
-    const [cvDailyRows] = await db.query(
-      `SELECT user_id, COUNT(*) as c FROM daily_task_logs
-       WHERE user_id IN (?) AND is_done = 1 AND log_date >= ?
-       GROUP BY user_id`,
-      [memberIds, periodStart]
-    );
-
-    // ── 6) CV chính/hỗ trợ/đúng hạn/trễ hạn — gộp 1 query dùng SUM(CASE...) ──
-    const [cvReqRows] = await db.query(
-      `SELECT rta.user_id,
-              SUM(CASE WHEN rta.role='main' THEN 1 ELSE 0 END) as cvMain,
-              SUM(CASE WHEN rta.role='support' THEN 1 ELSE 0 END) as cvSupport,
-              SUM(CASE WHEN rt.is_late=0 THEN 1 ELSE 0 END) as cvOntime,
-              SUM(CASE WHEN rt.is_late=1 THEN 1 ELSE 0 END) as cvLate
-       FROM request_task_assignees rta
-       JOIN request_tasks rt ON rt.id = rta.task_id
-       WHERE rta.user_id IN (?) AND rt.status = 'done' AND rt.completed_at >= ?
-       GROUP BY rta.user_id`,
-      [memberIds, `${periodStart} 00:00:00`]
-    );
-
-    // ── Gộp tất cả kết quả vào Map để lookup O(1) theo user_id ──
-    const toMap = (rows) => { const m = {}; rows.forEach(r => { m[r.user_id] = r; }); return m; };
-    const dailyRangeMap  = toMap(dailyRangeRows);
-    const dailyPeriodMap = toMap(dailyPeriodRows);
-    const reqPeriodMap   = toMap(reqPeriodRows);
-    const cvDailyMap     = toMap(cvDailyRows);
-    const cvReqMap       = toMap(cvReqRows);
-
-    // request-range cần gộp riêng vì có 2 dòng/user (main + support)
-    const reqRangeMap = {}; // { user_id: { main, support } }
-    reqRangeRows.forEach(r => {
-      if (!reqRangeMap[r.user_id]) reqRangeMap[r.user_id] = { main: 0, support: 0 };
-      reqRangeMap[r.user_id][r.role] = +r.total;
+    const statsOf = await getMemberStats(db, members.map(m => m.id), {
+      rangeStart: `${start} 00:00:00`, rangeEnd: `${end} 23:59:59`,
+      periodStart: started_at_str || EPOCH, groupId: group_id,
     });
 
     const scores = members.map(u => {
-      const dScore = +(dailyRangeMap[u.id]?.total || 0);
-      const rRange = reqRangeMap[u.id] || { main: 0, support: 0 };
-      const rScore = rRange.main;
-      const sScore = rRange.support;
-
-      const ptD = +(dailyPeriodMap[u.id]?.total || 0);
-      const ptR = +(reqPeriodMap[u.id]?.total || 0);
-
-      const cvD = cvDailyMap[u.id]?.c || 0;
-      const cvR = cvReqMap[u.id] || { cvMain: 0, cvSupport: 0, cvOntime: 0, cvLate: 0 };
-
+      const s = statsOf(u.id);
       return {
         user: u,
         range_score: {
-          daily:   dScore,
-          request: rScore,
-          support: sScore,
-          total:   +(dScore + rScore + sScore).toFixed(1),
+          daily:   s.daily_range,
+          request: s.req_main_range,
+          support: s.req_support_range,
+          total:   +(s.daily_range + s.req_main_range + s.req_support_range).toFixed(1),
         },
         period_score: {
-          daily:   ptD,
-          request: ptR,
-          total:   +(ptD + ptR).toFixed(1),
+          daily:   s.daily_period,
+          request: s.req_period,
+          total:   +(s.daily_period + s.req_period).toFixed(1),
         },
         cv_counts: {
-          daily:   cvD,
-          main:    +cvR.cvMain,
-          support: +cvR.cvSupport,
-          ontime:  +cvR.cvOntime,
-          late:    +cvR.cvLate,
+          daily: s.cv_daily, main: s.cv_main, support: s.cv_support, ontime: s.cv_ontime, late: s.cv_late,
         },
       };
     });
-
     scores.sort((a, b) => b.period_score.total - a.period_score.total);
 
-    res.json({ success: true, data: { period, start, end, view, scores } });
+    return { period: openPeriod && period, start, end, view, scores };
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message });
   }
 };
 
-// POST /dashboard/lock — chốt kỳ, xuất Excel, reset
-// (chưa tối ưu N+1 ở đây — hàm này chỉ chạy 2 lần/năm theo lịch tự động nên
-// độ ưu tiên thấp hơn nhiều so với getScores() chạy mỗi lần tải Dashboard;
-// có thể tối ưu thêm sau nếu cần)
+// Chốt kỳ, xuất Excel, reset — dùng chung cho nút bấm tay và cron tự động.
+// Toàn bộ chạy trong 1 transaction; SELECT ... FOR UPDATE để 2 lần bấm chốt
+// cùng lúc không tạo ra 2 kỳ mới / 2 file Excel.
 async function performLockAndReset(group_id, lockedByUserId) {
-  const [[period]] = await db.query(
-    'SELECT * FROM score_periods WHERE is_locked=0 ORDER BY id DESC LIMIT 1'
-  );
-  if (!period) {
-    const err = new Error('No active period');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  // ⚠️ Cùng bản sửa LEFT JOIN như getScores() — không loại bỏ user chưa có nhóm
-  let memberSql = `SELECT DISTINCT u.id, u.full_name, u.username, u.role
-                   FROM users u LEFT JOIN group_members gm ON gm.user_id = u.id
-                   WHERE u.is_active = 1`;
-  const mp = [];
-  if (group_id) { memberSql += ' AND gm.group_id = ?'; mp.push(group_id); }
-  const [members] = await db.query(memberSql, mp);
-
-  // Build Excel
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Score Summary');
-  ws.columns = [
-    { header: 'Rank',          key: 'rank',    width: 6  },
-    { header: 'Họ tên',        key: 'name',    width: 25 },
-    { header: 'Username',      key: 'uname',   width: 15 },
-    { header: 'Role',          key: 'role',    width: 10 },
-    { header: 'Điểm HN',      key: 'daily',   width: 12 },
-    { header: 'Điểm YC',      key: 'req',     width: 12 },
-    { header: 'Tổng điểm',    key: 'total',   width: 12 },
-    { header: 'CV hằng ngày', key: 'cvd',     width: 14 },
-    { header: 'CV chính',     key: 'cvm',     width: 10 },
-    { header: 'CV hỗ trợ',   key: 'cvs',     width: 10 },
-    { header: 'Đúng hạn',    key: 'ontime',  width: 10 },
-    { header: 'Quá hạn',     key: 'late',    width: 10 },
-  ];
-  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E2A3A' } };
-
-  const snapshots = [];
-  const periodStart = '2000-01-01';
-
-  // Sort by score desc
-  const memberScores = await Promise.all(members.map(async u => {
-    const [[dS]] = await db.query(
-      `SELECT COALESCE(SUM(score),0) as t FROM daily_task_logs WHERE user_id=? AND log_date>=?`,
-      [u.id, periodStart]
-    );
-    const [[rS]] = await db.query(
-      `SELECT COALESCE(SUM(rt.score),0) as t FROM request_tasks rt
-       JOIN request_task_assignees rta ON rta.task_id=rt.id
-       WHERE rta.user_id=? AND rt.status='done' AND rt.completed_at>=?`,
-      [u.id, `${periodStart} 00:00:00`]
-    );
-    return { ...u, dS: +dS.t, rS: +rS.t, total: +(+dS.t + +rS.t).toFixed(1) };
-  }));
-  memberScores.sort((a, b) => b.total - a.total);
-
-  let rank = 1;
-  for (const u of memberScores) {
-    const [[cvD]]   = await db.query(`SELECT COUNT(*) as c FROM daily_task_logs WHERE user_id=? AND is_done=1`, [u.id]);
-    const [[cvM]]   = await db.query(`SELECT COUNT(*) as c FROM request_task_assignees rta JOIN request_tasks rt ON rt.id=rta.task_id WHERE rta.user_id=? AND rta.role='main' AND rt.status='done'`, [u.id]);
-    const [[cvSup]] = await db.query(`SELECT COUNT(*) as c FROM request_task_assignees rta JOIN request_tasks rt ON rt.id=rta.task_id WHERE rta.user_id=? AND rta.role='support' AND rt.status='done'`, [u.id]);
-    const [[cvOT]]  = await db.query(`SELECT COUNT(*) as c FROM request_tasks rt JOIN request_task_assignees rta ON rta.task_id=rt.id WHERE rta.user_id=? AND rt.status='done' AND rt.is_late=0`, [u.id]);
-    const [[cvL]]   = await db.query(`SELECT COUNT(*) as c FROM request_tasks rt JOIN request_task_assignees rta ON rta.task_id=rt.id WHERE rta.user_id=? AND rt.status='done' AND rt.is_late=1`, [u.id]);
-
-    ws.addRow({
-      rank, name: u.full_name, uname: u.username, role: u.role,
-      daily: u.dS, req: u.rS, total: u.total,
-      cvd: cvD.c, cvm: cvM.c, cvs: cvSup.c, ontime: cvOT.c, late: cvL.c,
-    });
-
-    snapshots.push({
-      period_id: period.id, user_id: u.id,
-      score_daily: u.dS, score_request: u.rS, score_support: 0, score_total: u.total,
-      cv_daily_count: cvD.c, cv_request_main: cvM.c, cv_request_support: cvSup.c,
-      cv_ontime: cvOT.c, cv_late: cvL.c,
-    });
-    rank++;
-  }
-
-  // Lưu Excel
-  const uploadsDir = path.join(__dirname, '../uploads');
-  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-  const filename = `worktrack_period_${period.id}_${today}.xlsx`;
-  await wb.xlsx.writeFile(path.join(uploadsDir, filename));
-
-  // Lưu snapshots + lock + tạo kỳ mới + xóa logs cũ
   const conn = await db.getConnection();
-  await conn.beginTransaction();
+  let excelFile = null;
   try {
-    // Save snapshots
-    for (const snap of snapshots) {
+    await conn.beginTransaction();
+
+    const period = await getOpenPeriod(conn, true);
+    if (!period) {
+      const err = new Error('No active period');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const now = new Date();
+    const members = await getMembers(group_id, conn);
+    // Điểm tính trên toàn công ty (không lọc theo nhóm), giống bản gốc
+    const statsOf = members.length
+      ? await getMemberStats(conn, members.map(m => m.id), {
+          rangeStart: period.started_at_str, rangeEnd: `${localDate(now)} 23:59:59`,
+          periodStart: period.started_at_str,
+        })
+      : null;
+
+    const ranked = members
+      .map(u => {
+        const s = statsOf(u.id);
+        return { ...u, s, total: +(s.daily_period + s.req_period).toFixed(1) };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    // ── Excel ──
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Score Summary');
+    ws.columns = [
+      { header: 'Rank',          key: 'rank',    width: 6  },
+      { header: 'Họ tên',        key: 'name',    width: 25 },
+      { header: 'Username',      key: 'uname',   width: 15 },
+      { header: 'Role',          key: 'role',    width: 10 },
+      { header: 'Điểm HN',      key: 'daily',   width: 12 },
+      { header: 'Điểm YC',      key: 'req',     width: 12 },
+      { header: 'Tổng điểm',    key: 'total',   width: 12 },
+      { header: 'CV hằng ngày', key: 'cvd',     width: 14 },
+      { header: 'CV chính',     key: 'cvm',     width: 10 },
+      { header: 'CV hỗ trợ',   key: 'cvs',     width: 10 },
+      { header: 'Đúng hạn',    key: 'ontime',  width: 10 },
+      { header: 'Quá hạn',     key: 'late',    width: 10 },
+    ];
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E2A3A' } };
+    ranked.forEach(({ s, ...u }, i) => ws.addRow({
+      rank: i + 1, name: u.full_name, uname: u.username, role: u.role,
+      daily: s.daily_period, req: s.req_period, total: u.total,
+      cvd: s.cv_daily, cvm: s.cv_main, cvs: s.cv_support, ontime: s.cv_ontime, late: s.cv_late,
+    }));
+
+    await fs.promises.mkdir(UPLOADS_DIR, { recursive: true });
+    const filename = `worktrack_period_${period.id}_${localDate(now)}.xlsx`;
+    excelFile = path.join(UPLOADS_DIR, filename);
+    await wb.xlsx.writeFile(excelFile);
+
+    // ── Snapshots — 1 câu INSERT nhiều dòng ──
+    if (ranked.length) {
       await conn.query(
         `INSERT INTO score_snapshots
-          (period_id,user_id,score_daily,score_request,score_support,score_total,
-           cv_daily_count,cv_request_main,cv_request_support,cv_ontime,cv_late)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)
+           (period_id,user_id,score_daily,score_request,score_support,score_total,
+            cv_daily_count,cv_request_main,cv_request_support,cv_ontime,cv_late)
+         VALUES ?
          ON DUPLICATE KEY UPDATE
            score_daily=VALUES(score_daily), score_request=VALUES(score_request),
-           score_total=VALUES(score_total)`,
-        [snap.period_id,snap.user_id,snap.score_daily,snap.score_request,
-         snap.score_support,snap.score_total,snap.cv_daily_count,snap.cv_request_main,
-         snap.cv_request_support,snap.cv_ontime,snap.cv_late]
+           score_support=VALUES(score_support), score_total=VALUES(score_total),
+           cv_daily_count=VALUES(cv_daily_count), cv_request_main=VALUES(cv_request_main),
+           cv_request_support=VALUES(cv_request_support), cv_ontime=VALUES(cv_ontime), cv_late=VALUES(cv_late)`,
+        [ranked.map(({ id, s, total }) => [
+          period.id, id, s.daily_period, s.req_period, 0, total,
+          s.cv_daily, s.cv_main, s.cv_support, s.cv_ontime, s.cv_late,
+        ])]
       );
     }
 
@@ -299,11 +263,12 @@ async function performLockAndReset(group_id, lockedByUserId) {
       [lockedByUserId || null, filename, period.id]
     );
 
-    // Reset: xóa daily_task_logs
-    await conn.query('DELETE FROM daily_task_logs');
-
-    // Reset: xóa request scores
-    await conn.query('UPDATE request_tasks SET score=NULL, scored_by=NULL, scored_at=NULL WHERE status="done"');
+    // Reset: xóa daily_task_logs + điểm YC. Điểm YC của kỳ mới luôn tính từ
+    // started_at của kỳ, nên CV kỳ cũ (kể cả archived) không bị cộng lại.
+    const [delDaily] = await conn.query('DELETE FROM daily_task_logs');
+    await conn.query(`UPDATE request_task_assignees rta JOIN request_tasks rt ON rt.id=rta.task_id
+                         SET rta.score=NULL WHERE rt.status='done'`);
+    const [resetReq] = await conn.query('UPDATE request_tasks SET score=NULL, scored_by=NULL, scored_at=NULL WHERE status="done"');
 
     // Tạo kỳ mới
     await conn.query(
@@ -312,12 +277,30 @@ async function performLockAndReset(group_id, lockedByUserId) {
     );
 
     await conn.commit();
+    cache.clear('req:'); cache.clear('dash:'); // điểm vừa bị reset → cache đã cũ
+
+    // 📝 Lịch sử thay đổi — thao tác ảnh hưởng điểm của TẤT CẢ mọi người.
+    // Lưu kèm điểm từng người lúc chốt để tra lại được sau khi đã reset.
+    const [[actor]] = lockedByUserId
+      ? await db.query('SELECT full_name FROM users WHERE id=?', [lockedByUserId]) : [[null]];
+    await logActivity({
+      actorId: lockedByUserId || null, actionType: 'score_period_locked', entityType: 'score_period', entityId: period.id,
+      description: `${actor?.full_name || 'Hệ thống (tự động)'} đã chốt kỳ "${period.name}" `
+        + `(${period.started_at_str.slice(0, 10)} → ${localDate(now)}): lưu điểm ${ranked.length} nhân viên vào file ${filename}, `
+        + `rồi bắt đầu kỳ mới (điểm Daily & CV tính lại từ 0) — xóa ${delDaily.affectedRows} lượt chấm Daily kiểu cũ, xóa điểm ${resetReq.affectedRows} CV đã hoàn thành`,
+      metadata: {
+        filename, deleted_daily_logs: delDaily.affectedRows, reset_request_scores: resetReq.affectedRows,
+        scores: ranked.map(({ id, full_name, s, total }) => ({ user_id: id, name: full_name, daily: s.daily_period, request: s.req_period, total })),
+      },
+    });
+    return { filename, period_id: period.id, users_processed: members.length };
   } catch (e) {
     await conn.rollback();
+    if (excelFile) fs.promises.unlink(excelFile).catch(() => {}); // không để lại file mồ côi
     throw e;
-  } finally { conn.release(); }
-
-  return { filename, period_id: period.id, users_processed: members.length };
+  } finally {
+    conn.release();
+  }
 }
 
 // POST /dashboard/lock — chốt kỳ, xuất Excel, reset (bấm tay)
@@ -327,6 +310,10 @@ exports.lockPeriod = async (req, res) => {
     const result = await performLockAndReset(group_id, req.user?.id);
     res.json({ success: true, data: result });
   } catch (e) {
+    // Bấm chốt 2 lần cùng lúc: lần sau bị MySQL chặn (dữ liệu vẫn đúng)
+    if (e.code === 'ER_LOCK_DEADLOCK' || e.code === 'ER_LOCK_WAIT_TIMEOUT') {
+      return res.status(409).json({ success: false, message: 'Kỳ đang được chốt, vui lòng tải lại trang' });
+    }
     console.error(e);
     res.status(e.statusCode || 500).json({ success: false, message: e.message });
   }
@@ -343,7 +330,7 @@ exports.getLastExport = async (req, res) => {
     if (!period) {
       return res.status(404).json({ success: false, message: 'Chưa có kỳ nào được chốt để xuất Excel' });
     }
-    const filepath = path.join(__dirname, '../uploads', period.excel_path);
+    const filepath = path.join(UPLOADS_DIR, period.excel_path);
     if (!fs.existsSync(filepath)) {
       return res.status(404).json({ success: false, message: `File ${period.excel_path} không còn tồn tại trên server` });
     }
@@ -362,8 +349,7 @@ exports.getExportList = async (req, res) => {
         WHERE is_locked=1 AND excel_path IS NOT NULL
         ORDER BY locked_at DESC`
     );
-    const uploadsDir = path.join(__dirname, '../uploads');
-    const list = periods.filter(p => fs.existsSync(path.join(uploadsDir, p.excel_path)));
+    const list = periods.filter(p => fs.existsSync(path.join(UPLOADS_DIR, p.excel_path)));
     res.json({ success: true, data: list });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
@@ -373,7 +359,11 @@ exports.getExportList = async (req, res) => {
 // GET /dashboard/excel/:filename
 exports.downloadExcel = async (req, res) => {
   try {
-    const filepath = path.join(__dirname, '../uploads', req.params.filename);
+    // ⚠️ Chặn path traversal: "..%2F.env" sẽ lộ JWT_SECRET, mật khẩu DB...
+    const filename = path.basename(req.params.filename);
+    if (filename !== req.params.filename || !filename.endsWith('.xlsx'))
+      return res.status(400).json({ success: false, message: 'Invalid filename' });
+    const filepath = path.join(UPLOADS_DIR, filename);
     if (!fs.existsSync(filepath))
       return res.status(404).json({ success: false, message: 'File not found' });
     res.download(filepath);
@@ -385,10 +375,12 @@ exports.downloadExcel = async (req, res) => {
 // GET /dashboard/debug
 exports.debug = async (req, res) => {
   try {
-    const [[period]]   = await db.query('SELECT * FROM score_periods WHERE is_locked=0 ORDER BY started_at DESC LIMIT 1');
-    const [members]    = await db.query('SELECT id, full_name FROM users WHERE is_active=1 LIMIT 10');
-    const [logs]       = await db.query('SELECT dtl.user_id, dtl.score, dtl.log_date FROM daily_task_logs dtl LIMIT 10');
-    const [taskGroups] = await db.query('SELECT id, name, group_id FROM daily_task_groups LIMIT 10');
+    const [[[period]], [members], [logs], [taskGroups]] = await Promise.all([
+      db.query('SELECT * FROM score_periods WHERE is_locked=0 ORDER BY started_at DESC LIMIT 1'),
+      db.query('SELECT id, full_name FROM users WHERE is_active=1 LIMIT 10'),
+      db.query('SELECT dtl.user_id, dtl.score, dtl.log_date FROM daily_task_logs dtl LIMIT 10'),
+      db.query('SELECT id, name, group_id FROM daily_task_groups LIMIT 10'),
+    ]);
     res.json({ period, members, logs, taskGroups });
   } catch (e) {
     res.status(500).json({ error: e.message });

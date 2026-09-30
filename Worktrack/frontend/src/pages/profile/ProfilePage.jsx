@@ -4,12 +4,12 @@ import api from '../../api/client';
 import useAuth from '../../store/authStore';
 
 const C = {
-  primary:'#3a7bd5', dark:'#1e2a3a', success:'#27ae60',
-  danger:'#e74c3c', border:'#e8eaed', bg:'#f7f8fb',
+  primary:'#3a7bd5', dark:'var(--wt-ink)', success:'#27ae60',
+  danger:'#e74c3c', border:'var(--wt-line)', bg:'var(--wt-surface-2)',
 };
 
-const FI = { width:'100%', padding:'9px 12px', border:'1.5px solid #dde3f0', borderRadius:8, fontSize:13, color:'#1e2a3a', outline:'none', boxSizing:'border-box' };
-const FL = { display:'block', fontSize:11, fontWeight:700, color:'#777', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
+const FI = { width:'100%', padding:'9px 12px', border:'1.5px solid var(--wt-line)', borderRadius:8, fontSize:13, color:'var(--wt-ink)', outline:'none', boxSizing:'border-box' };
+const FL = { display:'block', fontSize:11, fontWeight:700, color:'var(--wt-text-2)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
 
 const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b','#d35400','#1abc9c'];
 const ROLE_KEY = { admin:'role_admin', manager:'role_manager', leader:'role_leader', user:'role_user' };
@@ -55,7 +55,7 @@ export default function ProfilePage() {
     const ok = msg==='success';
     return (
       <div style={{ padding:'10px 14px', borderRadius:8, fontSize:13, fontWeight:600,
-        background:ok?'#e8f8ee':'#fde8e8', color:ok?C.success:C.danger }}>
+        background:ok?'var(--wt-tint-success)':'var(--wt-tint-danger)', color:ok?C.success:C.danger }}>
         {ok ? `✅ ${t('profile_saved')}` : '❌ ' + msg.replace('error:','')}
       </div>
     );
@@ -64,7 +64,7 @@ export default function ProfilePage() {
   if (!user) return null;
 
   return (
-    <div className="prof-root" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#fff', minWidth:0 }}>
+    <div className="prof-root" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'var(--wt-surface)', minWidth:0 }}>
       <style>{`
         .prof-root { box-sizing: border-box; }
         .prof-root *, .prof-root *::before, .prof-root *::after { box-sizing: border-box; }
@@ -91,8 +91,8 @@ export default function ProfilePage() {
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .prof-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .prof-root ::-webkit-scrollbar-track { background: transparent; }
-        .prof-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
-        .prof-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
+        .prof-root ::-webkit-scrollbar-thumb { background: var(--wt-scroll); border-radius: 8px; }
+        .prof-root ::-webkit-scrollbar-thumb:hover { background: var(--wt-line-strong); }
 
         @keyframes profFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         .prof-root .prof-avatar-card { animation: profFadeIn .2s ease-out; }
@@ -112,26 +112,26 @@ export default function ProfilePage() {
         }
       `}</style>
 
-      <div className="prof-topbar" style={{ padding:'12px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', background:'#fff', flexShrink:0 }}>
+      <div className="prof-topbar" style={{ padding:'12px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', background:'var(--wt-surface)', flexShrink:0 }}>
         <div style={{ fontSize:15, fontWeight:800, color:C.dark }}>👤 {t('profile_title')}</div>
       </div>
 
       <div className="prof-body" style={{ flex:1, overflowY:'auto', padding:24, background:C.bg, display:'flex', gap:20, alignItems:'flex-start', flexWrap:'wrap' }}>
 
         {/* Avatar card */}
-        <div className="prof-avatar-card" style={{ width:220, flexShrink:0, background:'#fff', borderRadius:14, border:`1.5px solid ${C.border}`, overflow:'hidden' }}>
+        <div className="prof-avatar-card" style={{ width:220, flexShrink:0, background:'var(--wt-surface)', borderRadius:14, border:`1.5px solid ${C.border}`, overflow:'hidden' }}>
           <div className="prof-avatar-header" style={{ padding:28, display:'flex', flexDirection:'column', alignItems:'center', gap:12, background:C.dark }}>
             <div style={{ width:80, height:80, borderRadius:'50%', background:info.avatar_color, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:28, fontWeight:800, boxShadow:'0 0 0 4px rgba(255,255,255,0.2)' }}>
               {ini}
             </div>
             <div style={{ textAlign:'center' }}>
               <div style={{ fontSize:14, fontWeight:700, color:'#fff' }}>{user.full_name}</div>
-              <div style={{ fontSize:11, color:'#7a9bbf', marginTop:3 }}>{t(ROLE_KEY[user.role]) || user.role}</div>
+              <div style={{ fontSize:11, color:'var(--wt-text-3)', marginTop:3 }}>{t(ROLE_KEY[user.role]) || user.role}</div>
             </div>
           </div>
 
           <div style={{ padding:16 }}>
-            <div style={{ fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:8 }}>{t('profile_avatar_color')}</div>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--wt-text-3)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:8 }}>{t('profile_avatar_color')}</div>
             <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
               {COLORS.map(c=>(
                 <div key={c} className="prof-swatch" onClick={()=>setInfo(p=>({...p,avatar_color:c}))}
@@ -141,29 +141,29 @@ export default function ProfilePage() {
           </div>
 
           <div style={{ padding:'0 16px 16px', display:'flex', flexDirection:'column', gap:7 }}>
-            <div style={{ fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:2 }}>{t('profile_account')}</div>
-            <div style={{ fontSize:12, color:'#555' }}><span style={{ color:'#aaa' }}>{t('profile_username_label')} </span><strong>{user.username}</strong></div>
-            <div style={{ fontSize:12, color:'#555' }}>
-              <span style={{ color:'#aaa' }}>{t('profile_role_label')} </span>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--wt-text-3)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:2 }}>{t('profile_account')}</div>
+            <div style={{ fontSize:12, color:'var(--wt-text-2)' }}><span style={{ color:'var(--wt-text-4)' }}>{t('profile_username_label')} </span><strong>{user.username}</strong></div>
+            <div style={{ fontSize:12, color:'var(--wt-text-2)' }}>
+              <span style={{ color:'var(--wt-text-4)' }}>{t('profile_role_label')} </span>
               <span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:8, background:C.primary, color:'#fff' }}>{user.role}</span>
             </div>
             {user.groups?.length>0&&(
-              <div style={{ fontSize:12, color:'#555' }}>
-                <span style={{ color:'#aaa' }}>{t('group')}: </span>
-                {user.groups.map(g=><span key={g.id} style={{ fontSize:10, background:'#f0f2f8', padding:'2px 7px', borderRadius:6, marginRight:4 }}>{g.name}</span>)}
+              <div style={{ fontSize:12, color:'var(--wt-text-2)' }}>
+                <span style={{ color:'var(--wt-text-4)' }}>{t('group')}: </span>
+                {user.groups.map(g=><span key={g.id} style={{ fontSize:10, background:'var(--wt-surface-3)', padding:'2px 7px', borderRadius:6, marginRight:4 }}>{g.name}</span>)}
               </div>
             )}
           </div>
         </div>
 
         {/* Main card */}
-        <div className="prof-main-card" style={{ flex:1, minWidth:300, background:'#fff', borderRadius:14, border:`1.5px solid ${C.border}`, overflow:'hidden' }}>
+        <div className="prof-main-card" style={{ flex:1, minWidth:300, background:'var(--wt-surface)', borderRadius:14, border:`1.5px solid ${C.border}`, overflow:'hidden' }}>
           <div style={{ display:'flex', borderBottom:`2px solid ${C.border}`, padding:'0 20px' }}>
             {[{key:'info',label:`📝 ${t('profile_tab_info')}`},{key:'pwd',label:`🔑 ${t('profile_tab_password')}`}].map(tb=>(
               <div key={tb.key} className="prof-tab" onClick={()=>{ setInfoMsg(''); setPwdMsg(''); setTab(tb.key); }} style={{
                 padding:'12px 18px', fontSize:13, fontWeight:600, cursor:'pointer',
                 borderBottom:`2.5px solid ${tab===tb.key?C.primary:'transparent'}`,
-                marginBottom:-2, color:tab===tb.key?C.primary:'#888',
+                marginBottom:-2, color:tab===tb.key?C.primary:'var(--wt-text-3)',
               }}>{tb.label}</div>
             ))}
           </div>
@@ -179,7 +179,7 @@ export default function ProfilePage() {
               <Msg msg={infoMsg}/>
               <div style={{ display:'flex', justifyContent:'flex-end' }}>
                 <button onClick={saveInfo} disabled={savingInfo}
-                  style={{ padding:'9px 24px', borderRadius:8, border:'none', background:savingInfo?'#aaa':C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                  style={{ padding:'9px 24px', borderRadius:8, border:'none', background:savingInfo?'var(--wt-text-4)':C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>
                   {savingInfo?'...':`💾 ${t('profile_save_info')}`}
                 </button>
               </div>
@@ -193,14 +193,14 @@ export default function ProfilePage() {
               <div>
                 <label style={FL}>{t('profile_confirm_password')} *</label>
                 <input type="password"
-                  style={{...FI, borderColor:pwd.confirm&&pwd.new_password!==pwd.confirm?C.danger:'#dde3f0'}}
+                  style={{...FI, borderColor:pwd.confirm&&pwd.new_password!==pwd.confirm?C.danger:'var(--wt-line)'}}
                   value={pwd.confirm} onChange={e=>setPwd(p=>({...p,confirm:e.target.value}))} placeholder={t('profile_reenter_password')}/>
                 {pwd.confirm&&pwd.new_password!==pwd.confirm&&<div style={{ fontSize:11, color:C.danger, marginTop:4 }}>{t('profile_err_mismatch')}</div>}
               </div>
               <Msg msg={pwdMsg}/>
               <div style={{ display:'flex', justifyContent:'flex-end' }}>
                 <button onClick={savePwd} disabled={savingPwd}
-                  style={{ padding:'9px 24px', borderRadius:8, border:'none', background:savingPwd?'#aaa':C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                  style={{ padding:'9px 24px', borderRadius:8, border:'none', background:savingPwd?'var(--wt-text-4)':C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>
                   {savingPwd?'...':`🔑 ${t('profile_change_password')}`}
                 </button>
               </div>

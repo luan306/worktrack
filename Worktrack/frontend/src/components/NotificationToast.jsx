@@ -55,7 +55,7 @@ export default function NotificationToast() {
       style={{
         position: 'fixed', bottom: 20, right: 20, zIndex: 300,
         width: 320, maxWidth: 'calc(100vw - 32px)',
-        background: '#1e2a3a', color: '#fff', borderRadius: 12,
+        background: 'var(--wt-ink)', color: '#fff', borderRadius: 12,
         padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'flex-start',
         boxShadow: '0 10px 32px rgba(0,0,0,.28)', cursor: 'pointer',
         animation: 'ntToastIn .2s ease-out',
@@ -64,7 +64,7 @@ export default function NotificationToast() {
       <style>{`@keyframes ntToastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }`}</style>
       <span style={{ fontSize: 18, flexShrink: 0 }}>{TYPE_ICON[toast.type] || '🔔'}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#7a9bbf', marginBottom: 3 }}>{t('notif_title')}</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--wt-text-3)', marginBottom: 3 }}>{t('notif_title')}</div>
         <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{toastText(toast, t)}</div>
       </div>
       <button

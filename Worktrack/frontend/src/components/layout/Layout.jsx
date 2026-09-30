@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
-import { NavLink, useNavigate, Outlet, Navigate } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { NavLink, useNavigate, useLocation, Outlet, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
 import NotificationBell from '../NotificationBell';
 import NotificationToast from '../NotificationToast';
+import useMaxWidth from '../../lib/useMediaQuery';
+import ThemeToggle from '../ThemeToggle';
 
 /* ============================================================
    Ngôn ngữ thiết kế "control-panel": nền tối, mỗi mục nav có
@@ -17,7 +19,7 @@ const NAV = [
   { to: '/requests',     icon: '📨',  key: 'nav_requests',     color: '#f59e0b' },
   { to: '/completed',    icon: '✅',  key: 'nav_completed',    color: '#17b26a' },
   { divider: true },
-  { to: '/dashboard',    icon: '📊',  key: 'nav_dashboard',    roles: ['admin','manager'], color: '#8b5cf6' },
+  { to: '/dashboard',    icon: '📊',  key: 'nav_dashboard',    color: '#8b5cf6' },
   { to: '/activity-log', icon: '📜',  key: 'nav_activity_log', roles: ['admin','manager'], color: '#64748b' },
   { to: '/users',        icon: '👥',  key: 'nav_users',        roles: ['admin','manager','leader'], color: '#ec4899' },
   { to: '/profile',      icon: '⚙️', key: 'nav_settings',     color: '#6b7280' },
@@ -29,7 +31,7 @@ const MOBILE_NAV = [
   { to: '/daily',     icon: '📋',  key: 'nav_daily_short',     color: '#14b8c4' },
   { to: '/requests',  icon: '📨',  key: 'nav_requests_short',  color: '#f59e0b' },
   { to: '/completed', icon: '✅',  key: 'nav_completed_short', color: '#17b26a' },
-  { to: '/profile',   icon: '⚙️', key: 'nav_settings_short',  color: '#6b7280' },
+  { to: '/dashboard', icon: '📊',  key: 'nav_dashboard_short', color: '#8b5cf6' },
 ];
 
 const SIDEBAR_STORAGE_KEY = 'wt_sidebar_collapsed';
@@ -78,7 +80,8 @@ function NavIcon({ icon, color, active, size = 28 }) {
   );
 }
 
-export default function Sidebar({ collapsed, onToggle }) {
+export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = false, onNavigate }) {
+  const collapsed = drawer ? false : collapsedProp;
   const { t } = useTranslation();
   const { user, logout } = useAuthStore();
   const { disconnect } = useNotificationStore();
@@ -86,10 +89,10 @@ export default function Sidebar({ collapsed, onToggle }) {
   const initials = user?.full_name?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'U';
   const avatarColor = user?.avatar_color || '#3654ff';
 
-  return (
+  const aside = (
     <aside
-      className={`wt-sidebar relative hidden md:flex flex-shrink-0 flex-col h-full bg-[#0b1220] transition-[width] duration-300 ease-in-out overflow-hidden ${
-        collapsed ? 'w-[68px]' : 'w-[212px]'
+      className={`wt-sidebar relative flex flex-shrink-0 flex-col h-full bg-[#0b1220] transition-[width] duration-300 ease-in-out overflow-hidden ${
+        drawer ? 'w-[272px] max-w-[86vw] shadow-2xl shadow-black/40' : collapsed ? 'w-[68px]' : 'w-[212px]'
       }`}
     >
       <style>{`
@@ -110,15 +113,6 @@ export default function Sidebar({ collapsed, onToggle }) {
       {/* Dải sáng cạnh viền — điểm nhấn "đèn báo" của bảng điều khiển */}
       <div className="pointer-events-none absolute top-0 right-0 h-full w-px bg-gradient-to-b from-transparent via-[#3654ff]/50 to-transparent" />
 
-      {/* Nút thu gọn / mở rộng — nổi trên đường viền phải của sidebar */}
-      <button
-        onClick={onToggle}
-        title={collapsed ? t('sidebar_expand') : t('sidebar_collapse')}
-        aria-label={collapsed ? t('sidebar_expand') : t('sidebar_collapse')}
-        className="absolute -right-3 top-6 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#111b2e] text-[#8093b0] shadow-md transition-all duration-200 hover:border-[#3654ff]/60 hover:bg-[#3654ff] hover:text-white hover:shadow-[0_0_0_4px_rgba(54,84,255,0.22)] active:scale-90"
-      >
-        <ChevronIcon collapsed={collapsed} />
-      </button>
 
       {/* Logo */}
       <div className={`flex flex-shrink-0 items-center border-b border-white/[0.06] transition-all duration-300 ${collapsed ? 'justify-center px-2 py-4' : 'px-4 pt-5 pb-4'}`}>
@@ -134,6 +128,10 @@ export default function Sidebar({ collapsed, onToggle }) {
             <div className="wt-mono mt-1.5 truncate text-[9px] uppercase tracking-[0.14em] text-[#5c7091]">{t('sidebar_tagline')}</div>
           </div>
         )}
+        {drawer && (
+          <button onClick={onNavigate} aria-label={t('close', 'Đóng')}
+            className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-[18px] text-[#8093b0] transition-colors hover:bg-white/[0.06] hover:text-white">✕</button>
+        )}
       </div>
 
       {/* User — thẻ nhân viên, bấm vào để đổi mật khẩu / chỉnh hồ sơ */}
@@ -142,6 +140,7 @@ export default function Sidebar({ collapsed, onToggle }) {
           <div className="group relative min-w-0 flex-1">
             <NavLink
               to="/profile"
+              onClick={onNavigate}
               title={t('nav_settings')}
               className={`group/profile flex min-w-0 items-center gap-2.5 rounded-lg transition-colors hover:bg-white/[0.05] ${collapsed ? 'justify-center p-0.5' : 'p-0.5'}`}
             >
@@ -184,8 +183,9 @@ export default function Sidebar({ collapsed, onToggle }) {
             <div key={item.to} className="group relative mx-2.5 my-0.5">
               <NavLink
                 to={item.to}
+                onClick={onNavigate}
                 className={({ isActive }) =>
-                  `flex items-center gap-2.5 whitespace-nowrap rounded-lg py-2 text-[12.5px] font-medium transition-colors duration-150 ${
+                  `flex items-center gap-2.5 whitespace-nowrap rounded-lg ${drawer ? 'py-2.5 text-[14px]' : 'py-2 text-[12.5px]'} font-medium transition-colors duration-150 ${
                     collapsed ? 'justify-center px-0' : 'pl-2.5 pr-3'
                   } ${isActive ? 'text-white' : 'text-[#8093b0] hover:bg-white/[0.05] hover:text-white'}`
                 }
@@ -211,8 +211,12 @@ export default function Sidebar({ collapsed, onToggle }) {
         })}
       </nav>
 
-      {/* Logout */}
+      {/* Chế độ sáng/tối + Logout */}
       <div className={`flex-shrink-0 border-t border-white/[0.06] transition-all duration-300 ${collapsed ? 'p-2' : 'p-2.5'}`}>
+        <div className={`group relative mb-1 ${collapsed ? 'flex justify-center' : ''}`}>
+          <ThemeToggle compact={collapsed} />
+          {collapsed && <CollapsedTooltip accent="#f59e0b">{t('theme_toggle', 'Sáng / Tối')}</CollapsedTooltip>}
+        </div>
         <div className="group relative">
           <button
             onClick={() => { disconnect(); logout().then(() => navigate('/login')); }}
@@ -227,6 +231,66 @@ export default function Sidebar({ collapsed, onToggle }) {
         </div>
       </div>
     </aside>
+  );
+
+  if (drawer) return aside;
+  // Nút thu gọn / mở rộng nằm NGOÀI <aside> (aside có overflow-hidden nên trước đây
+  // nửa nút lòi ra ngoài mép bị cắt mất) — nổi trên đường viền phải của sidebar
+  return (
+    <div className="relative z-40 hidden h-full flex-shrink-0 md:flex">
+      {aside}
+      <button
+        onClick={onToggle}
+        title={collapsed ? t('sidebar_expand') : t('sidebar_collapse')}
+        aria-label={collapsed ? t('sidebar_expand') : t('sidebar_collapse')}
+        className="absolute -right-3.5 top-[22px] flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-[#111b2e] text-[#9fb0cc] shadow-[0_2px_8px_rgba(0,0,0,.35)] ring-2 ring-[var(--wt-canvas)] transition-all duration-200 hover:border-[#3654ff]/60 hover:bg-[#3654ff] hover:text-white hover:shadow-[0_0_0_4px_rgba(54,84,255,0.22)] active:scale-90"
+      >
+        <ChevronIcon collapsed={collapsed} />
+      </button>
+    </div>
+  );
+}
+
+// Thanh trên cùng — chỉ trên điện thoại (< md): nút ☰ mở menu, tên trang, chuông thông báo
+function MobileTopBar({ onMenu }) {
+  const { t } = useTranslation();
+  const { pathname } = useLocation();
+  const current = NAV.find(n => n.to && pathname.startsWith(n.to));
+  return (
+    <header className="flex flex-shrink-0 items-center gap-2 border-b border-white/[0.06] bg-[#0b1220] px-2 md:hidden"
+      style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(52px + env(safe-area-inset-top))', fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif" }}>
+      <button onClick={onMenu} aria-label={t('menu', 'Menu')}
+        className="flex h-10 w-10 items-center justify-center rounded-xl text-white transition-colors active:bg-white/10">
+        <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+      </button>
+      {current ? <NavIcon icon={current.icon} color={current.color} active size={28} /> : null}
+      <div className="min-w-0 flex-1 truncate text-[15px] font-bold text-white">{current ? t(current.key) : 'WorkTrack'}</div>
+      <ThemeToggle compact />
+      <NotificationBell />
+    </header>
+  );
+}
+
+// Menu trượt từ trái — dùng lại đúng Sidebar (đủ mục, hồ sơ, đăng xuất)
+function MobileDrawer({ open, onClose }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [open, onClose]);
+  return (
+    <div className={`fixed inset-0 z-[400] md:hidden ${open ? '' : 'pointer-events-none'}`} aria-hidden={!open}>
+      <div onClick={onClose} className={`absolute inset-0 bg-[#0b1220]/55 backdrop-blur-[2px] transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0'}`} />
+      <div className={`absolute inset-y-0 left-0 transition-transform duration-250 ease-out ${open ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{ paddingTop: 'env(safe-area-inset-top)', background: INK }}>
+        <Sidebar drawer onNavigate={onClose} />
+      </div>
+    </div>
   );
 }
 
@@ -263,22 +327,35 @@ function MobileNav() {
 
 function LoadingScreen({ label }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-[#eef1f8] px-4">
-      <div className="flex max-w-[92vw] flex-col items-center gap-3 rounded-2xl border border-[#e6e9f2] bg-white p-8 shadow-[0_20px_50px_rgba(15,23,41,.12)]">
+    <div className="flex h-screen items-center justify-center bg-[var(--wt-canvas)] px-4">
+      <div className="flex max-w-[92vw] flex-col items-center gap-3 rounded-2xl border border-[var(--wt-line)] bg-[var(--wt-surface)] p-8 shadow-[var(--wt-shadow)]">
         <div className="flex h-10 w-10 animate-spin items-center justify-center rounded-xl text-lg" style={{ background: 'linear-gradient(135deg, #3654ff, #2440d6)' }}>
           <span className="text-white">⚙️</span>
         </div>
-        <div className="text-[12.5px] font-medium text-[#6b7280]">{label}</div>
+        <div className="text-[12.5px] font-medium text-[var(--wt-text-3)]">{label}</div>
       </div>
     </div>
   );
 }
 
 export function MainLayout() {
+  // Chưa chọn lần nào → màn hình tablet (< 1280px) tự thu gọn sidebar cho rộng chỗ
   const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'; }
-    catch { return false; }
+    try {
+      const v = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      return v == null ? window.innerWidth < 1280 : v === '1';
+    } catch { return false; }
   });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerUsed, setDrawerUsed] = useState(false); // chỉ dựng menu trượt sau lần mở đầu tiên
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+  // Lần đầu: dựng menu ở trạng thái đóng rồi mới mở → vẫn có hiệu ứng trượt ra
+  const openDrawer = () => {
+    if (drawerUsed) return setDrawerOpen(true);
+    setDrawerUsed(true);
+    setTimeout(() => setDrawerOpen(true), 20);
+  };
+  const isPhone = useMaxWidth(767); // < md: thanh trên + menu trượt (tránh 2 chuông thông báo cùng tải)
 
   const { user } = useAuthStore();
   const { connect, disconnect } = useNotificationStore();
@@ -304,12 +381,14 @@ export function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden md:flex-row">
-      <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />
+    <div className="flex h-[100dvh] flex-col overflow-hidden md:flex-row">
+      {!isPhone && <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />}
+      {isPhone && <MobileTopBar onMenu={openDrawer} />}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Outlet />
       </main>
       <MobileNav />
+      {isPhone && drawerUsed && <MobileDrawer open={drawerOpen} onClose={closeDrawer} />}
       <NotificationToast />
     </div>
   );

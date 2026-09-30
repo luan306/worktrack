@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import api from '../../api/client';
+import api, { downloadFile } from '../../api/client';
 import useAuthStore from '../../store/authStore';
 
 /* ============================================================
@@ -10,26 +10,26 @@ import useAuthStore from '../../store/authStore';
    nút hành động dạng chip tròn màu theo ngữ nghĩa.
    ============================================================ */
 const C = {
-  ink:        '#0f1729',
-  sub:        '#6b7280',
-  faint:      '#9aa3b2',
-  surface:    '#ffffff',
-  canvas:     '#eef1f8',
-  line:       '#e6e9f2',
-  lineSoft:   '#f0f2f8',
+  ink:        'var(--wt-ink)',
+  sub:        'var(--wt-text-2)',
+  faint:      'var(--wt-text-3)',
+  surface:    'var(--wt-surface)',
+  canvas:     'var(--wt-canvas)',
+  line:       'var(--wt-line)',
+  lineSoft:   'var(--wt-surface-3)',
 
   primary:      '#3654ff',
   primaryDeep:  '#2440d6',
-  primarySoft:  '#eaefff',
+  primarySoft:  'var(--wt-tint-primary)',
 
   success:     '#17b26a',
-  successSoft: '#e8f9f0',
+  successSoft: 'var(--wt-tint-success)',
   warning:     '#f59e0b',
-  warningSoft: '#fef3e2',
+  warningSoft: 'var(--wt-tint-warning)',
   danger:      '#e5384d',
-  dangerSoft:  '#fdeaec',
+  dangerSoft:  'var(--wt-tint-danger)',
   violet:      '#8b5cf6',
-  violetSoft:  '#f2ecfe',
+  violetSoft:  'var(--wt-tint-violet)',
 };
 
 const FONT_SANS = "'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
@@ -61,12 +61,12 @@ const Chip = ({color=C.primary,name='?',size=28,ring=false})=>{
       width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
       background:`linear-gradient(135deg, ${color}, ${color}cc)`,color:'#fff',fontSize:size>24?12:9,fontWeight:700,
       fontFamily:FONT_SANS, letterSpacing:.2,
-      boxShadow: ring ? `0 0 0 2px #fff, 0 0 0 3.5px ${color}55` : '0 1px 2px rgba(15,23,41,.15)',
+      boxShadow: ring ? `0 0 0 2px var(--wt-surface), 0 0 0 3.5px ${color}55` : '0 1px 2px rgba(15,23,41,.15)',
     }}>{ini}</div>
   );
 };
 
-const FI = {width:'100%',padding:'8px 12px',border:`1.5px solid ${C.line}`,borderRadius:9,fontSize:13,color:C.ink,outline:'none',boxSizing:'border-box',fontFamily:FONT_SANS,background:'#fff',transition:'border-color .15s, box-shadow .15s'};
+const FI = {width:'100%',padding:'8px 12px',border:`1.5px solid ${C.line}`,borderRadius:9,fontSize:13,color:C.ink,outline:'none',boxSizing:'border-box',fontFamily:FONT_SANS,background:'var(--wt-surface)',transition:'border-color .15s, box-shadow .15s'};
 const FL = {display:'block',fontSize:10.5,fontWeight:800,color:C.faint,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6,fontFamily:FONT_SANS};
 
 function Modal({show,title,onClose,children,width=460}){
@@ -76,7 +76,7 @@ function Modal({show,title,onClose,children,width=460}){
       className="users-backdrop"
       onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="users-modal-box" style={{background:C.canvas,borderRadius:18,padding:0,width,maxWidth:'95vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 30px 70px rgba(15,23,41,.35)'}}>
-        <div style={{fontSize:15,fontWeight:800,color:C.ink,padding:'18px 22px',display:'flex',alignItems:'center',gap:10,background:'#fff',borderBottom:`1px solid ${C.line}`,fontFamily:FONT_SANS,position:'sticky',top:0}}>
+        <div style={{fontSize:15,fontWeight:800,color:C.ink,padding:'18px 22px',display:'flex',alignItems:'center',gap:10,background:'var(--wt-surface)',borderBottom:`1px solid ${C.line}`,fontFamily:FONT_SANS,position:'sticky',top:0}}>
           {title}
           <button onClick={onClose} aria-label="close" style={{marginLeft:'auto',width:30,height:30,borderRadius:9,background:C.lineSoft,border:'none',fontSize:16,cursor:'pointer',color:C.sub,lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>×</button>
         </div>
@@ -119,6 +119,31 @@ const IconBtn = ({ onClick, title, color, bg, children }) => (
   }}>{children}</button>
 );
 
+// ── Nhập tài khoản: đọc CSV ĐÚNG NHƯ CHỮ (không bao giờ đổi MSNV thành số) ──
+// Hiểu ô có dấu ngoặc kép ("a,b") và kiểu ="019123" mà Excel dùng để giữ số 0.
+function parseCsvLine(line) {
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (q) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ',' || ch === ';' || ch === '\t') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(v => v.trim().replace(/^="(.*)"$/, '$1').replace(/^=/, ''));
+}
+// Độ dài MSNV "chuẩn" = độ dài xuất hiện nhiều nhất trong các MSNV toàn chữ số
+function standardMsnvLength(values) {
+  const count = {};
+  values.filter(v => /^\d+$/.test(v)).forEach(v => { count[v.length] = (count[v.length] || 0) + 1; });
+  const best = Object.entries(count).sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
+  return best ? +best[0] : 0;
+}
+
 export default function UsersPage(){
   const { t, i18n } = useTranslation();
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
@@ -140,6 +165,7 @@ export default function UsersPage(){
   // Import
   const [importFile,    setImportFile]    = useState(null);
   const [importPreview, setImportPreview] = useState(null);
+  const [padZeros,      setPadZeros]      = useState(true);  // tự thêm số 0 đầu cho MSNV bị Excel cắt
   const [importing,     setImporting]     = useState(false);
   const fileRef = useRef();
 
@@ -222,73 +248,75 @@ export default function UsersPage(){
   // ── Import ──
   const handleFileChange = async(e)=>{
     const file = e.target.files[0];
+    e.target.value = ''; // chọn lại cùng file vẫn chạy
     if(!file) return;
     setImportFile(file);
-    // Đọc file — hỗ trợ UTF-8, UTF-8 BOM, Windows-1252 (Excel mặc định)
-    const readFile = (f, enc) => new Promise((res, rej) => {
-      const reader = new FileReader();
-      reader.onload  = e => res(e.target.result);
-      reader.onerror = rej;
-      reader.readAsText(f, enc);
-    });
-
-    const buffer = await file.arrayBuffer();
-    const bytes  = new Uint8Array(buffer);
-
-    // Detect BOM
-    let text = '';
-    if (bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF) {
-      // UTF-8 BOM
-      text = await readFile(file, 'utf-8');
-    } else if (bytes[0]===0xFF && bytes[1]===0xFE) {
-      // UTF-16 LE BOM
-      text = new TextDecoder('utf-16le').decode(buffer);
-    } else {
-      // Thử UTF-8 trước
-      const utf8 = new TextDecoder('utf-8').decode(buffer);
-      // Kiểm tra có ký tự lỗi không (dấu hiệu ANSI)
-      const hasGarbled = /[�Ãáà]/.test(utf8.slice(0,200));
-      if (hasGarbled) {
-        text = await readFile(file, 'windows-1252');
+    const lower = file.name.toLowerCase();
+    let table;
+    try {
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        // Excel: backend đọc đúng chữ đang HIỂN THỊ trong ô (giữ số 0 ở đầu)
+        const form = new FormData(); form.append('file', file);
+        const { data } = await api.post('/users/import/parse', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        table = data.data || [];
       } else {
-        text = utf8;
+        const buffer = await file.arrayBuffer();
+        const bytes  = new Uint8Array(buffer);
+        let text;
+        if (bytes[0]===0xFF && bytes[1]===0xFE) text = new TextDecoder('utf-16le').decode(buffer);
+        else {
+          text = new TextDecoder('utf-8').decode(buffer);
+          // Không phải UTF-8 (file ANSI của Excel cũ) → đọc bằng windows-1258/1252
+          if (text.includes('\uFFFD')) text = new TextDecoder('windows-1252').decode(buffer);
+        }
+        text = text.replace(/^\uFEFF/, '');
+        table = text.split(/\r?\n/).filter(l => l.trim()).slice(0, 501).map(parseCsvLine);
       }
-    }
-    text = text.replace(/^\uFEFF/, ''); // strip BOM
-    const lines = text.trim().split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0, 500);
+    } catch (err) { alert(errMsg(err)); setImportFile(null); return; }
 
-    // Bỏ qua dòng header
-    const isHeader = l => /^(h[oọ]\s*t[eê]n|full.?name|name|email|stt)/i.test(l.split(',')[0].trim());
-    const dataLines = lines.filter(l => !isHeader(l));
-
-    const rows = dataLines.map(line => {
-      const parts = line.split(',').map(s => s.trim());
-      const full_name = parts[0] || '';
-      const email     = parts[1] || '';
-      const role      = parts[2] || '';
-      const group     = parts[3] || '';
-      const msnv      = (parts[4] || '').replace(/\s+/g, '');
-      // Bắt buộc phải có MSNV — không còn tự sinh từ họ tên nữa, vì MSNV
-      // dùng để đăng nhập nên phải là mã thật do người dùng cung cấp.
-      let reason = '';
-      if (full_name.length <= 1) reason = t('users_empty_name');
-      else if (!msnv) reason = t('users_missing_msnv', 'Thiếu MSNV');
-      const valid = !reason;
-      return { full_name, email, role: role||'user', group, msnv, valid, reason };
-    });
+    // Bỏ dòng tiêu đề
+    const isHeader = cells => /^(h[oọ]\s*t[eê]n|full.?name|name|email|stt)/i.test((cells[0] || '').trim());
+    const rows = table.filter(c => !isHeader(c)).slice(0, 500).map(c => ({
+      full_name: (c[0] || '').trim(),
+      email:     (c[1] || '').trim(),
+      role:      (c[2] || '').trim().toLowerCase(),
+      group:     (c[3] || '').trim(),
+      msnvRaw:   (c[4] || '').replace(/\s+/g, ''),
+      msnvEdit:  null, // MSNV người dùng tự sửa trong bảng xem trước
+    }));
+    setPadZeros(true);
     setImportPreview(rows);
   };
+
+  // MSNV thực sự sẽ dùng cho từng dòng + kiểm tra hợp lệ — tính 1 lần mỗi lần render
+  const stdLen = importPreview ? standardMsnvLength(importPreview.map(r => r.msnvRaw)) : 0;
+  const needsPad = (r) => r.msnvEdit == null && stdLen && /^\d+$/.test(r.msnvRaw) && r.msnvRaw.length < stdLen;
+  const msnvOf = (r) => r.msnvEdit != null ? r.msnvEdit.replace(/\s+/g, '')
+    : padZeros && needsPad(r) ? r.msnvRaw.padStart(stdLen, '0') : r.msnvRaw;
+  const shortCount = importPreview ? importPreview.filter(needsPad).length : 0;
+  const msnvList = (importPreview || []).map(msnvOf);
+  const msnvCounts = {};
+  msnvList.forEach(m => { if (m) msnvCounts[m] = (msnvCounts[m] || 0) + 1; });
+  // checked[i] = { msnv, reason } ('' = hợp lệ)
+  const checked = (importPreview || []).map((r, i) => {
+    const m = msnvList[i];
+    const reason = r.full_name.length <= 1 ? t('users_empty_name')
+      : !m ? t('users_missing_msnv', 'Thiếu MSNV')
+      : msnvCounts[m] > 1 ? t('users_dup_msnv_in_file', 'MSNV bị trùng trong file') : '';
+    return { msnv: m, reason };
+  });
+  const editMsnv = (i, v) => setImportPreview(rows => rows.map((r, j) => j === i ? { ...r, msnvEdit: v } : r));
 
   const doImport = async()=>{
     if(!importPreview) return;
     setImporting(true);
     try {
-      const rows = importPreview.filter(r=>r.valid).map(r=>({
+      const rows = importPreview.map((r,i)=>[r,checked[i]]).filter(([,c])=>!c.reason).map(([r,c])=>({
         full_name:  r.full_name,
         email:      r.email||'',
         role:       r.role||'user',
         group_name: r.group||'',
-        username:   r.msnv,
+        username:   c.msnv,   // luôn là CHUỖI → giữ số 0 ở đầu
         password:   'Welcome00',
       }));
       const {data} = await api.post('/users/import',{users:rows});
@@ -304,8 +332,8 @@ export default function UsersPage(){
     finally{ setImporting(false); }
   };
 
-  const validCount   = importPreview?.filter(r=>r.valid).length||0;
-  const invalidCount = importPreview?.filter(r=>!r.valid).length||0;
+  const validCount   = checked.filter(c=>!c.reason).length;
+  const invalidCount = checked.length - validCount;
 
   return (
     <div className="users-root" style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:C.surface,minWidth:0,fontFamily:FONT_SANS}}>
@@ -329,8 +357,8 @@ export default function UsersPage(){
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .users-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .users-root ::-webkit-scrollbar-track { background: transparent; }
-        .users-root ::-webkit-scrollbar-thumb { background: #c8d4e6; border-radius: 8px; }
-        .users-root ::-webkit-scrollbar-thumb:hover { background: #aebedb; }
+        .users-root ::-webkit-scrollbar-thumb { background: var(--wt-scroll); border-radius: 8px; }
+        .users-root ::-webkit-scrollbar-thumb:hover { background: var(--wt-line-strong); }
 
         .users-root .users-icon-btn:hover { filter: brightness(0.95); transform: translateY(-1px); }
         .users-root .users-row { transition: background .12s ease; }
@@ -378,7 +406,7 @@ export default function UsersPage(){
         <div className="users-topbar-actions" style={{display:'flex',gap:8,flexShrink:0}}>
           {tab==='users'&&<>
             <button onClick={()=>setTab('import')}
-              style={{padding:'7px 15px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub,display:'flex',alignItems:'center',gap:6,fontFamily:FONT_SANS,whiteSpace:'nowrap'}}>
+              style={{padding:'7px 15px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub,display:'flex',alignItems:'center',gap:6,fontFamily:FONT_SANS,whiteSpace:'nowrap'}}>
               📥 {t('users_import_user')}
             </button>
             <button onClick={()=>setShowAddUser(true)}
@@ -437,7 +465,7 @@ export default function UsersPage(){
           {/* Table */}
           <div className="users-table-panel" style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.canvas}}>
             <div style={{overflowX:'auto',borderRadius:14,WebkitOverflowScrolling:'touch'}}>
-            <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:14,overflow:'hidden',border:`1px solid ${C.line}`,boxShadow:'0 2px 10px rgba(15,23,41,.05)',minWidth:680}}>
+            <table style={{width:'100%',borderCollapse:'collapse',background:'var(--wt-surface)',borderRadius:14,overflow:'hidden',border:`1px solid ${C.line}`,boxShadow:'0 2px 10px rgba(15,23,41,.05)',minWidth:680}}>
               <thead>
                 <tr>
                   {[t('users_th_employee'),t('users_th_role'),t('group'),t('status'),t('users_th_created_at'),''].map(h=>(
@@ -505,7 +533,7 @@ export default function UsersPage(){
       {tab==='groups'&&(
         <div style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.canvas,display:'flex',flexDirection:'column',gap:12}}>
           {groups.map(g=>(
-            <div key={g.id} className="users-group-card" style={{background:'#fff',borderRadius:14,border:`1px solid ${C.line}`,overflow:'hidden'}}>
+            <div key={g.id} className="users-group-card" style={{background:'var(--wt-surface)',borderRadius:14,border:`1px solid ${C.line}`,overflow:'hidden'}}>
               {/* Header */}
               <div className="users-group-header" style={{padding:'13px 18px',background:C.canvas,borderBottom:`1px solid ${C.line}`,display:'flex',alignItems:'center',gap:12}}>
                 <span style={{width:36,height:36,borderRadius:10,background:C.successSoft,display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,flexShrink:0}}>{g.icon||'🏭'}</span>
@@ -525,7 +553,7 @@ export default function UsersPage(){
                   ➕ {t('users_add_member')}
                 </button>
                 <button onClick={()=>setEditGroup({...g})}
-                  style={{padding:'6px 13px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:11,fontWeight:700,cursor:'pointer',color:C.sub,flexShrink:0,whiteSpace:'nowrap'}}>
+                  style={{padding:'6px 13px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:11,fontWeight:700,cursor:'pointer',color:C.sub,flexShrink:0,whiteSpace:'nowrap'}}>
                   ✏️ {t('edit')}
                 </button>
                 <button onClick={()=>deleteGroup(g.id)}
@@ -560,7 +588,7 @@ export default function UsersPage(){
               </div>
 
               {/* Footer */}
-              <div style={{padding:'10px 18px',borderTop:`1px solid ${C.lineSoft}`,display:'flex',gap:8,justifyContent:'flex-end',background:'#fafbfc'}}>
+              <div style={{padding:'10px 18px',borderTop:`1px solid ${C.lineSoft}`,display:'flex',gap:8,justifyContent:'flex-end',background:'var(--wt-surface-2)'}}>
                 <div style={{fontSize:11,color:C.primary,flex:1}}>
                   💡 {t('users_group_hint')}
                 </div>
@@ -570,9 +598,9 @@ export default function UsersPage(){
 
           {/* Add group card */}
           <div onClick={()=>setShowAddGroup(true)} className="users-dropzone"
-            style={{display:'flex',alignItems:'center',gap:10,padding:'16px 18px',background:'#fff',borderRadius:14,border:`2px dashed ${C.line}`,color:C.faint,fontSize:14,fontWeight:700,cursor:'pointer',justifyContent:'center'}}
+            style={{display:'flex',alignItems:'center',gap:10,padding:'16px 18px',background:'var(--wt-surface)',borderRadius:14,border:`2px dashed ${C.line}`,color:C.faint,fontSize:14,fontWeight:700,cursor:'pointer',justifyContent:'center'}}
             onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.color=C.primary; e.currentTarget.style.background=C.primarySoft; }}
-            onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.line; e.currentTarget.style.color=C.faint; e.currentTarget.style.background='#fff'; }}>
+            onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.line; e.currentTarget.style.color=C.faint; e.currentTarget.style.background='var(--wt-surface)'; }}>
             ➕ {t('users_create_new_group')}
           </div>
         </div>
@@ -581,7 +609,7 @@ export default function UsersPage(){
       {/* ═══ PANEL: Permissions ═══ */}
       {tab==='permissions'&&(
         <div style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.canvas}}>
-          <div style={{background:'#fff',borderRadius:14,border:`1px solid ${C.line}`,overflow:'hidden'}}>
+          <div style={{background:'var(--wt-surface)',borderRadius:14,border:`1px solid ${C.line}`,overflow:'hidden'}}>
             <div style={{padding:'13px 18px',borderBottom:`1px solid ${C.line}`,fontWeight:800,color:C.ink,fontSize:13,display:'flex',alignItems:'center',gap:8}}>
               🔐 {t('users_permissions_table')}
             </div>
@@ -618,7 +646,7 @@ export default function UsersPage(){
       {/* ═══ PANEL: Import ═══ */}
       {tab==='import'&&(
         <div style={{flex:1,overflowY:'auto',padding:20,background:C.canvas,display:'flex',flexDirection:'column',gap:14}}>
-          <div style={{background:'#fff',borderRadius:14,border:`1px solid ${C.line}`,padding:20}}>
+          <div style={{background:'var(--wt-surface)',borderRadius:14,border:`1px solid ${C.line}`,padding:20}}>
             <div style={{fontSize:14,fontWeight:800,color:C.ink,marginBottom:6,display:'flex',alignItems:'center',gap:8}}>
               📥 {t('users_import_from_csv')}
             </div>
@@ -642,25 +670,13 @@ export default function UsersPage(){
             </div>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{display:'none'}} onChange={handleFileChange}/>
 
-            <button onClick={()=>{
-                const csv = [
-                  `${t('users_csv_columns', 'Full name,Email,Role,Group')},MSNV`,
-                  'Nguyễn Văn A,nva@smc.com,user,MES,NV001',
-                  'Trần Thị B,,,,',
-                  'Lê Văn C,lvc@smc.com,leader,Bảo trì,NV003',
-                ].join('\n');
-                const BOM = '\uFEFF';
-                const blob = new Blob([BOM + csv], {type:'text/csv;charset=utf-8;'});
-                const url  = URL.createObjectURL(blob);
-                const a    = document.createElement('a');
-                a.href     = url;
-                a.download = 'mau_import_user.csv';
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-              style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,color:C.sub,cursor:'pointer',marginTop:12}}>
-              ⬇️ {t('users_download_sample')}
+            <button onClick={()=>downloadFile('/users/import/template', { fallbackName: 'mau_import_user.xlsx' }).catch(e=>alert(errMsg(e)))}
+              style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:12,fontWeight:700,color:C.sub,cursor:'pointer',marginTop:12}}>
+              ⬇️ {t('users_download_sample')} (.xlsx)
             </button>
+            <div style={{fontSize:11.5,color:C.faint,marginTop:8,lineHeight:1.6}}>
+              💡 {t('users_msnv_zero_hint', 'MSNV có số 0 ở đầu (VD: 019123): dùng file mẫu .xlsx — cột MSNV đã để dạng Chữ nên Excel không tự xóa số 0. Nếu file cũ đã bị mất số 0, bảng xem trước bên dưới sẽ tự thêm lại, hoặc bạn sửa trực tiếp ô MSNV.')}
+            </div>
 
             {/* Preview */}
             {importPreview&&(
@@ -670,6 +686,15 @@ export default function UsersPage(){
                   {validCount>0&&<span style={{fontSize:10.5,background:C.successSoft,color:C.success,fontWeight:800,padding:'2px 8px',borderRadius:8,fontFamily:FONT_MONO}}>{t('users_valid_count',{count:validCount})}</span>}
                   {invalidCount>0&&<span style={{fontSize:10.5,background:C.dangerSoft,color:C.danger,fontWeight:800,padding:'2px 8px',borderRadius:8,fontFamily:FONT_MONO}}>{t('users_invalid_count',{count:invalidCount})}</span>}
                 </div>
+                {shortCount>0&&(
+                  <label style={{display:'flex',alignItems:'flex-start',gap:9,padding:'10px 12px',borderRadius:10,background:'var(--wt-tint-warning)',border:'1px solid var(--wt-tint-warning-bd)',marginBottom:10,cursor:'pointer',fontSize:12,color:'var(--wt-warn-text)',lineHeight:1.5}}>
+                    <input type="checkbox" checked={padZeros} onChange={e=>setPadZeros(e.target.checked)} style={{marginTop:2,width:16,height:16,flexShrink:0}}/>
+                    <span>
+                      <b>{t('users_pad_title',{count:shortCount,len:stdLen,defaultValue:`${shortCount} MSNV ngắn hơn ${stdLen} số — có thể Excel đã xóa số 0 ở đầu.`})}</b><br/>
+                      {t('users_pad_desc',{len:stdLen,defaultValue:`Tự thêm số 0 ở đầu cho đủ ${stdLen} số (VD: 19123 → ${'19123'.padStart(stdLen,'0')}). Bỏ chọn nếu MSNV công ty bạn có độ dài khác nhau.`})}
+                    </span>
+                  </label>
+                )}
                 <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,minWidth:640}}>
                   <thead>
@@ -681,16 +706,24 @@ export default function UsersPage(){
                   </thead>
                   <tbody>
                     {importPreview.map((row,i)=>{
+                      const { reason, msnv } = checked[i], valid = !reason;
+                      const padded = row.msnvEdit==null && msnv!==row.msnvRaw;
                       return (
-                        <tr key={i} style={{borderBottom:`1px solid ${C.lineSoft}`,background:row.valid?'transparent':C.dangerSoft}}>
+                        <tr key={i} style={{borderBottom:`1px solid ${C.lineSoft}`,background:valid?'transparent':C.dangerSoft}}>
                           <td style={{padding:'6px 10px',color:C.faint,fontSize:11,fontFamily:FONT_MONO}}>{i+1}</td>
-                          <td style={{padding:'6px 10px',fontWeight:700,color:row.valid?C.ink:C.danger,fontSize:12}}>{row.full_name||'—'}</td>
+                          <td style={{padding:'6px 10px',fontWeight:700,color:valid?C.ink:C.danger,fontSize:12}}>{row.full_name||'—'}</td>
                           <td style={{padding:'6px 10px',color:C.sub,fontSize:11}}>{row.email||<span style={{color:C.faint}}>—</span>}</td>
                           <td style={{padding:'6px 10px'}}><RoleBadge role={row.role||'user'}/></td>
                           <td style={{padding:'6px 10px',color:C.sub,fontSize:11}}>{row.group||<span style={{color:C.faint}}>—</span>}</td>
-                          <td style={{padding:'6px 10px',color:row.msnv?C.ink:C.danger,fontSize:11,fontFamily:FONT_MONO}}>{row.msnv||'—'}</td>
-                          <td style={{padding:'6px 10px',color:row.valid?C.success:C.danger,fontWeight:800,fontSize:11}}>
-                            {row.valid?'✓':`✗ ${row.reason}`}
+                          <td style={{padding:'4px 8px'}}>
+                            <input value={msnv} onChange={e=>editMsnv(i,e.target.value)} inputMode="text" maxLength={50}
+                              title={padded?t('users_msnv_padded',{raw:row.msnvRaw,defaultValue:`Đã thêm số 0 (gốc trong file: ${row.msnvRaw})`}):''}
+                              style={{width:110,padding:'5px 8px',borderRadius:7,fontFamily:FONT_MONO,fontSize:12,fontWeight:700,outline:'none',
+                                border:`1.5px solid ${!msnv?C.danger:padded?'#f5b041':C.line}`,background:padded?'var(--wt-tint-warning)':'var(--wt-surface)',color:msnv?C.ink:C.danger}}/>
+                            {padded&&<div style={{fontSize:9.5,color:'var(--wt-warn-text)',marginTop:2,fontFamily:FONT_MONO}}>← {row.msnvRaw}</div>}
+                          </td>
+                          <td style={{padding:'6px 10px',color:valid?C.success:C.danger,fontWeight:800,fontSize:11}}>
+                            {valid?'✓':`✗ ${reason}`}
                           </td>
                         </tr>
                       );
@@ -700,7 +733,7 @@ export default function UsersPage(){
                 </div>
                 <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:12,flexWrap:'wrap'}}>
                   <button onClick={()=>{ setImportPreview(null); setImportFile(null); }}
-                    style={{padding:'7px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub}}>
+                    style={{padding:'7px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub}}>
                     ✕ {t('cancel')}
                   </button>
                   <button onClick={doImport} disabled={importing||validCount===0}
@@ -778,7 +811,7 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
           💡 {t('users_password_hint')}
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
+          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
           <button onClick={submit} style={{padding:'8px 16px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',boxShadow:`0 3px 10px ${C.primary}4d`}}>💾 {t('users_create_user_btn')}</button>
         </div>
       </div>
@@ -840,7 +873,7 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
           <input type="color" style={{...FI,height:38,cursor:'pointer',padding:4}} value={f.avatar_color||'#3654ff'} onChange={e=>s('avatar_color',e.target.value)}/>
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
+          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
           <button onClick={submit} style={{padding:'8px 16px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',boxShadow:`0 3px 10px ${C.primary}4d`}}>💾 {t('save')}</button>
         </div>
       </div>
@@ -871,7 +904,7 @@ function AddGroupModal({show,users,onClose,onSave}){
           💡 {t('users_group_leader_hint')}
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
+          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
           <button onClick={submit} style={{padding:'8px 16px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',boxShadow:`0 3px 10px ${C.primary}4d`}}>💾 {t('users_create_group_btn')}</button>
         </div>
       </div>
@@ -899,7 +932,7 @@ function EditGroupModal({show,group,users,onClose,onSave}){
           </select>
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
+          <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
           <button onClick={()=>onSave(f)} style={{padding:'8px 16px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',boxShadow:`0 3px 10px ${C.primary}4d`}}>💾 {t('save')}</button>
         </div>
       </div>
@@ -937,7 +970,7 @@ function AddMemberModal({show,group,users,onClose,onAdd}){
         </div>
         <div style={{display:'flex',justifyContent:'flex-end',paddingTop:8,borderTop:`1px solid ${C.line}`}}>
           <button onClick={()=>{ setSearch(''); onClose(); }}
-            style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>
+            style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>
             {t('users_close')}
           </button>
         </div>

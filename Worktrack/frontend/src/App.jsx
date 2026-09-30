@@ -65,10 +65,8 @@ export default function App() {
                 <Route path="completed" element={<CompletedPage />} />
                 <Route path="profile"   element={<ProfilePage />} />
 
-                {/* Dashboard — CHỈ admin/manager, leader gõ URL cũng bị chặn về 404 */}
-                <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
-                  <Route path="dashboard" element={<DashboardPage />} />
-                </Route>
+                {/* Dashboard — ai cũng xem được; nút Export/Lock ẩn với role khác admin/manager */}
+                <Route path="dashboard" element={<DashboardPage />} />
 
                 {/* Lịch sử thay đổi — CHỈ admin/manager, giống Dashboard */}
                 <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
