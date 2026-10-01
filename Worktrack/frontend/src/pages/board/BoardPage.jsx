@@ -580,7 +580,10 @@ export default function BoardPage() {
   const filteredCompleted = doneBase.filter(DONE_PRED[doneFilter]);
   const doneFilterBar = (
     <>
-      <ColSearch value={doneQ} onChange={setDoneQ} placeholder={t('board_search_ph', 'Tìm CV, người giao, người làm...')} />
+      {/* Phải nằm trong 1 hàng: ColSearch có flex-basis 140px, đặt thẳng vào FilterBar (xếp dọc) sẽ thành CAO 140px */}
+      <FilterRow>
+        <ColSearch value={doneQ} onChange={setDoneQ} placeholder={t('board_search_ph', 'Tìm CV, người giao, người làm...')} />
+      </FilterRow>
       <ChipRow value={doneFilter} onChange={setDoneFilter} color={C.success} items={[
         ['all',     t('board_filter_all', 'Tất cả'), null, doneCounts.all],
         ['on_time', t('on_time', 'Đúng hạn'),        '✓', doneCounts.on_time],
