@@ -379,6 +379,18 @@ export default function UsersPage(){
           .users-root, .users-root * { animation: none !important; transition: none !important; }
         }
 
+        /* Điện thoại: bảng người dùng → thẻ (không phải cuộn ngang) */
+        @media (max-width: 640px) {
+          .users-root .users-table { min-width: 0 !important; border: none !important; box-shadow: none !important; background: transparent !important; }
+          .users-root .users-table thead { display: none; }
+          .users-root .users-table tbody { display: flex; flex-direction: column; gap: 10px; }
+          .users-root .users-table tr.users-row { display: grid; grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "emp role" "grp status" "date actions";
+            align-items: center; background: var(--wt-surface) !important; border: 1px solid var(--wt-line) !important; border-radius: 14px; padding: 8px 6px; box-shadow: 0 1px 3px rgba(15,23,41,.05); }
+          .users-root .users-table td { padding: 5px 8px !important; }
+          .users-root .users-table .u-emp { grid-area: emp; } .users-root .users-table .u-role { grid-area: role; justify-self: end; }
+          .users-root .users-table .u-grp { grid-area: grp; } .users-root .users-table .u-status { grid-area: status; justify-self: end; }
+          .users-root .users-table .u-date { grid-area: date; } .users-root .users-table .u-actions { grid-area: actions; justify-self: end; }
+        }
         @media (max-width: 900px) {
           .users-root .users-topbar { flex-wrap: wrap !important; padding: 10px 14px !important; gap: 8px !important; }
           .users-root .users-title { flex-basis: 100% !important; }
@@ -465,7 +477,7 @@ export default function UsersPage(){
           {/* Table */}
           <div className="users-table-panel" style={{flex:1,overflowY:'auto',padding:'16px 20px',background:C.canvas}}>
             <div style={{overflowX:'auto',borderRadius:14,WebkitOverflowScrolling:'touch'}}>
-            <table style={{width:'100%',borderCollapse:'collapse',background:'var(--wt-surface)',borderRadius:14,overflow:'hidden',border:`1px solid ${C.line}`,boxShadow:'0 2px 10px rgba(15,23,41,.05)',minWidth:680}}>
+            <table className="users-table" style={{width:'100%',borderCollapse:'collapse',background:'var(--wt-surface)',borderRadius:14,overflow:'hidden',border:`1px solid ${C.line}`,boxShadow:'0 2px 10px rgba(15,23,41,.05)',minWidth:680}}>
               <thead>
                 <tr>
                   {[t('users_th_employee'),t('users_th_role'),t('group'),t('status'),t('users_th_created_at'),''].map(h=>(
@@ -480,17 +492,19 @@ export default function UsersPage(){
                   <tr key={u.id} className="users-row" style={{borderBottom:`1px solid ${C.canvas}`}}
                     onMouseEnter={e=>e.currentTarget.style.background=C.primarySoft}
                     onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-                    <td style={{padding:'11px 16px'}}>
+                    <td className="u-emp" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',alignItems:'center',gap:10}}>
                         <Chip color={u.avatar_color||C.primary} name={u.full_name} size={32} ring/>
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{u.full_name}</div>
-                          <div style={{fontSize:11,color:C.faint,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{u.email}</div>
+                          <div style={{fontSize:11,color:C.faint,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                            <span style={{fontFamily:FONT_MONO,fontWeight:700,color:C.sub}}>{u.username}</span>{u.email?` · ${u.email}`:''}
+                          </div>
                         </div>
                       </div>
                     </td>
-                    <td style={{padding:'11px 16px'}}><RoleBadge role={u.role}/></td>
-                    <td style={{padding:'11px 16px'}}>
+                    <td className="u-role" style={{padding:'11px 16px'}}><RoleBadge role={u.role}/></td>
+                    <td className="u-grp" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
                         {u.groups?.length
                           ? u.groups.map(g=><span key={g.id} style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:6,background:C.lineSoft,color:C.sub,border:`1px solid ${C.line}`,fontFamily:FONT_SANS}}>{g.name}</span>)
@@ -498,16 +512,16 @@ export default function UsersPage(){
                         }
                       </div>
                     </td>
-                    <td style={{padding:'11px 16px'}}>
+                    <td className="u-status" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',alignItems:'center',gap:6}}>
                         <div className={u.is_active?'users-live-dot':''} style={{width:7,height:7,borderRadius:'50%',background:u.is_active?C.success:C.danger,boxShadow:u.is_active?`0 0 5px ${C.success}88`:'none',flexShrink:0}}/>
                         <span style={{fontSize:11.5,fontWeight:700,color:u.is_active?C.success:C.danger}}>{u.is_active?t('users_active'):t('users_locked')}</span>
                       </div>
                     </td>
-                    <td style={{padding:'11px 16px',fontSize:11.5,color:C.faint,fontFamily:FONT_MONO,whiteSpace:'nowrap'}}>
+                    <td className="u-date" style={{padding:'11px 16px',fontSize:11.5,color:C.faint,fontFamily:FONT_MONO,whiteSpace:'nowrap'}}>
                       {u.created_at?new Date(u.created_at).toLocaleDateString(currentLocale):'—'}
                     </td>
-                    <td style={{padding:'11px 16px'}}>
+                    <td className="u-actions" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',gap:5}}>
                         <IconBtn onClick={()=>setEditUser({...u})} title={t('edit')} color={C.primary} bg={C.primarySoft}>✏️</IconBtn>
                         <IconBtn onClick={()=>resetPwd(u.id)} title={t('users_reset_password')} color={C.violet} bg={C.violetSoft}>🔑</IconBtn>

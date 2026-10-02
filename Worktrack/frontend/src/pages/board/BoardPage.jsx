@@ -372,7 +372,7 @@ const ChipRow = ({ items, value, onChange, color = C.primary }) => (
         <button key={key} className="brd-filter-chip" onClick={() => onChange(key)} style={{
           padding: '4px 10px', borderRadius: 16, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: FONT_SANS,
           flexShrink: 0, whiteSpace: 'nowrap', border: `1.5px solid ${on ? color : C.line}`,
-          background: on ? color : '#fff', color: on ? '#fff' : C.sub,
+          background: on ? color : 'var(--wt-surface)', color: on ? '#fff' : C.sub,
         }}>
           {icon && `${icon} `}{label}
           {count > 0 && <span style={{ marginLeft: 4, opacity: on ? .85 : .7, fontFamily: FONT_MONO }}>{count}</span>}

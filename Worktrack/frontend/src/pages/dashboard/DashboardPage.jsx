@@ -232,9 +232,9 @@ export default function DashboardPage() {
 
           .dash-root .dash-periodbanner { flex-wrap: wrap !important; padding: 8px 14px !important; font-size: 11px !important; }
 
-          .dash-root .dash-ranking-row { flex-wrap: wrap !important; row-gap: 6px !important; padding: 10px 12px !important; justify-content: space-between !important; }
-          .dash-root .dash-ranking-info { flex-basis: 100% !important; order: 5 !important; }
-          .dash-root .dash-score-block { order: 3 !important; min-width: 0 !important; }
+          /* Điện thoại: mỗi dòng xếp hạng gọn trên 1 hàng — hạng · avatar · tên · điểm */
+          .dash-root .dash-ranking-row { padding: 10px 12px !important; gap: 8px !important; }
+          .dash-root .dash-score-block { min-width: 0 !important; }
           .dash-root .dash-view-btn { display: none !important; }
 
           .dash-root .dash-stats-grid { grid-template-columns: repeat(2,1fr) !important; }
@@ -252,7 +252,7 @@ export default function DashboardPage() {
           .dash-root .dash-stat-card { padding: 10px 10px !important; }
           .dash-root .dash-stat-card .dash-stat-num { font-size: 19px !important; }
           .dash-root .dash-detail-card { flex: 1 1 100% !important; }
-          .dash-root .dash-score-block { min-width: 96px !important; }
+          .dash-root .dash-score-chips { display: none !important; } /* màn rất hẹp: chỉ giữ tổng điểm */
           .dash-root .dash-ranking-name { font-size: 12px !important; }
         }
 
@@ -358,7 +358,7 @@ export default function DashboardPage() {
 
                 {/* Info */}
                 <div className="dash-ranking-info" style={{ flex: 1, minWidth: 0 }}>
-                  <div className="dash-ranking-name" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{s.user.full_name}</div>
+                  <div className="dash-ranking-name" style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.user.full_name}</div>
                   <div style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
                     {t('dash_ranking_meta',{daily:s.cv_counts.daily, main:s.cv_counts.main, support:s.cv_counts.support})}
                   </div>
@@ -372,7 +372,7 @@ export default function DashboardPage() {
                     </span>
                     <span style={{ fontSize: 11, color: C.faint, fontWeight: 400 }}> {t('score')}</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <div className="dash-score-chips" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '1.5px 7px', borderRadius: 7, background: C.successSoft, color: C.success, fontFamily: FONT_MONO }}>HN {s.period_score.daily.toFixed(0)}</span>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '1.5px 7px', borderRadius: 7, background: C.primarySoft, color: C.primary, fontFamily: FONT_MONO }}>YC {s.period_score.request.toFixed(0)}</span>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '1.5px 7px', borderRadius: 7, background: C.warningSoft, color: C.warning, fontFamily: FONT_MONO }}>🤝 {s.cv_counts.support}</span>

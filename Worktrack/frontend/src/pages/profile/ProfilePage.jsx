@@ -4,14 +4,14 @@ import api from '../../api/client';
 import useAuth from '../../store/authStore';
 
 const C = {
-  primary:'#3a7bd5', dark:'var(--wt-ink)', success:'#27ae60',
-  danger:'#e74c3c', border:'var(--wt-line)', bg:'var(--wt-surface-2)',
+  primary:'#3654ff', dark:'var(--wt-ink)', success:'#17b26a',
+  danger:'#e5384d', border:'var(--wt-line)', bg:'var(--wt-surface-2)',
 };
 
 const FI = { width:'100%', padding:'9px 12px', border:'1.5px solid var(--wt-line)', borderRadius:8, fontSize:13, color:'var(--wt-ink)', outline:'none', boxSizing:'border-box' };
 const FL = { display:'block', fontSize:11, fontWeight:700, color:'var(--wt-text-2)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
 
-const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b','#d35400','#1abc9c'];
+const COLORS = ['#3654ff','#17b26a','#f59e0b','#e5384d','#8e44ad','#16a085','#2980b9','#c0392b','#d35400','#1abc9c'];
 const ROLE_KEY = { admin:'role_admin', manager:'role_manager', leader:'role_leader', user:'role_user' };
 
 export default function ProfilePage() {
@@ -20,7 +20,7 @@ export default function ProfilePage() {
   const ini = user?.full_name?.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase() || 'U';
 
   const [tab,       setTab]       = useState('info');
-  const [info,      setInfo]      = useState({ full_name:user?.full_name||'', email:user?.email||'', username:user?.username||'', avatar_color:user?.avatar_color||'#3a7bd5' });
+  const [info,      setInfo]      = useState({ full_name:user?.full_name||'', email:user?.email||'', username:user?.username||'', avatar_color:user?.avatar_color||'#3654ff' });
   const [savingInfo,setSavingInfo]= useState(false);
   const [infoMsg,   setInfoMsg]   = useState('');
   const [pwd,       setPwd]       = useState({ old_password:'', new_password:'', confirm:'' });

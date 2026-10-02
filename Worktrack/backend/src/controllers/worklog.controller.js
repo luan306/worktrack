@@ -59,8 +59,18 @@ exports.week = async (req, res) => {
     const ref = DATE_RE.test(req.query.week || '') ? req.query.week : localDate();
     if (!(await canView(req, userId))) return fail(res, 403, 'Bạn không có quyền xem công việc hằng ngày của người này');
 
-    const start = mondayOf(ref);
-    const end = addDays(start, 6);
+    // ?month=YYYY-MM → cả tháng (từ Thứ 2 của tuần đầu đến Chủ nhật của tuần cuối, để vẽ lưới lịch)
+    // ?week=YYYY-MM-DD → 1 tuần chứa ngày đó (giữ cho tương thích)
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
+    let start, end;
+    if (month) {
+      const [y, m] = month.split('-').map(Number);
+      start = mondayOf(`${month}-01`);
+      end = addDays(mondayOf(localDate(new Date(y, m, 0))), 6);
+    } else {
+      start = mondayOf(ref);
+      end = addDays(start, 6);
+    }
 
     const [[[user]], [entries], [scores], [offs]] = await Promise.all([
       db.query(
@@ -325,7 +335,8 @@ exports.exportReport = async (req, res) => {
     const bad = rangeError(req.query, MAX_EXPORT_DAYS);
     if (bad) return fail(res, 400, bad);
     const days = [];
-    for (let d = from; d <= to; d = addDays(d, 1)) if (!isWeekend(d)) days.push(d);
+    for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);   // gồm T7/CN để ghi nhận tăng ca
+    const workdays = days.filter(d => !isWeekend(d));
 
     let users;
     if (req.query.user_id === 'all') users = await viewableUsers(req);
@@ -366,6 +377,7 @@ exports.exportReport = async (req, res) => {
       { header: 'Bộ phận', key: 'group', width: 22 },
       { header: 'Ngày làm việc\n(T2–T6)', key: 'wd', width: 13 },
       { header: 'Nghỉ\n(ngày)', key: 'off', width: 9 },
+      { header: 'Tăng ca\n(ngày)', key: 'ot', width: 10 },
       { header: 'Ngày có\nghi việc', key: 'logged', width: 11 },
       { header: 'Chưa ghi\nviệc', key: 'missing', width: 10 },
       { header: 'Tổng số\nviệc', key: 'tasks', width: 10 },
@@ -391,15 +403,17 @@ exports.exportReport = async (req, res) => {
     styleHeader(det, { autoFilter: true, height: 32 });
 
     users.forEach((u, idx) => {
-      let off = 0, logged = 0, missing = 0, tasks = 0, scored = 0, unscored = 0;
+      let off = 0, ot = 0, logged = 0, missing = 0, tasks = 0, scored = 0, unscored = 0;
       days.forEach(d => {
         const k = key(u.id, d), list = entMap.get(k) || [], sc = scMap.get(k), o = offMap.get(k);
-        const past = d <= today, fullOff = o?.kind === 'full';
+        const past = d <= today, fullOff = o?.kind === 'full', weekend = isWeekend(d);
+        if (weekend && !list.length && !sc) return;   // T7/CN không tăng ca → ngày nghỉ, không ghi dòng
+        if (weekend) ot++;
         if (o) off += fullOff ? 1 : .5;
         if (list.length) logged++;
         tasks += list.length;
         if (sc) scored++;
-        let status = past ? 'Làm việc' : 'Chưa tới';
+        let status = weekend ? 'Tăng ca' : past ? 'Làm việc' : 'Chưa tới';
         if (o) status = OFF_LABEL[o.kind];
         else if (past && !list.length) { status = 'Chưa ghi việc'; missing++; }
         if (past && !fullOff && list.length && !sc) unscored++;
@@ -412,15 +426,16 @@ exports.exportReport = async (req, res) => {
         });
         row.alignment = { vertical: 'top', wrapText: true };
         if (o) row.getCell('status').fill = fillOf('FFDDF3F1');
+        else if (weekend) row.getCell('status').fill = fillOf('FFEDE5FD');
         else if (status === 'Chưa ghi việc') row.getCell('status').fill = fillOf('FFFBDDE1');
         if (sc) row.getCell('score').fill = scoreFill(+sc.score);
       });
       if (idx < users.length - 1) det.addRow({}); // dòng trống tách từng người
 
-      const r = sum.addRow({ i: idx + 1, name: u.full_name, msnv: u.username, group: u.group_names || '', wd: days.length, off, logged, missing, tasks, scored, unscored });
+      const r = sum.addRow({ i: idx + 1, name: u.full_name, msnv: u.username, group: u.group_names || '', wd: workdays.length, off, ot, logged, missing, tasks, scored, unscored });
       if (missing) r.getCell('missing').font = { color: { argb: 'FFE5384D' }, bold: true };
     });
-    ['i', 'wd', 'off', 'logged', 'missing', 'tasks', 'scored', 'unscored'].forEach(k => { sum.getColumn(k).alignment = { horizontal: 'center', vertical: 'middle' }; });
+    ['i', 'wd', 'off', 'ot', 'logged', 'missing', 'tasks', 'scored', 'unscored'].forEach(k => { sum.getColumn(k).alignment = { horizontal: 'center', vertical: 'middle' }; });
     sum.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; // getColumn().alignment ghi đè dòng tiêu đề
 
     const who = users.length === 1 ? (users[0].username || users[0].id) : 'nhom';

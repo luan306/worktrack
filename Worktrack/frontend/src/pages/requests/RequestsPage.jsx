@@ -7,8 +7,8 @@ import { getSocket, onRealtime } from '../../lib/socket';
 import { useNow } from '../../lib/useNow';
 
 const C = {
-  primary:'#3a7bd5', dark:'var(--wt-ink)', success:'#27ae60',
-  warning:'#e67e22', danger:'#e74c3c', border:'var(--wt-line)', bg:'var(--wt-surface-2)',
+  primary:'#3654ff', dark:'var(--wt-ink)', success:'#17b26a',
+  warning:'#f59e0b', danger:'#e5384d', border:'var(--wt-line)', bg:'var(--wt-surface-2)',
 };
 
 const STATUS = {
@@ -39,7 +39,7 @@ const STEPS = [
 // lọc riêng theo 1 CV và không giới hạn admin/manager.
 const ACTIVITY_META = {
   request_created:          { icon:'➕', color:C.primary, bg:'var(--wt-tint-primary)' },
-  request_assignee_added:   { icon:'🙋', color:'#27ae60', bg:'var(--wt-tint-success)' },
+  request_assignee_added:   { icon:'🙋', color:'#17b26a', bg:'var(--wt-tint-success)' },
   request_assignee_removed: { icon:'↩️', color:C.warning, bg:'var(--wt-tint-warning)' },
   request_scored:           { icon:'⭐', color:'#8e44ad', bg:'var(--wt-tint-violet)' },
   request_completed:        { icon:'✅', color:C.success, bg:'var(--wt-tint-success)' },
@@ -380,6 +380,7 @@ export default function RequestsPage() {
         @media (max-width: 1180px) {
           .req-root .req-list-selected { display: none !important; }
           .req-root .req-list-panel { width: 100% !important; flex: 1 1 auto !important; }
+          .req-root .req-empty-detail { display: none !important; } /* chưa chọn CV → danh sách chiếm hết chiều ngang */
           .req-root .req-back { display: inline-flex; }
           .req-root .req-chat-panel { width: 320px !important; }
         }
@@ -473,7 +474,7 @@ export default function RequestsPage() {
       }}/>}
       {selected&&selected!=='new'&&<DetailPanel key={selected.id} taskId={selected.id} users={users} isLeader={isLeader} user={user} onClose={()=>setSelected(null)} onSaved={async updated=>{await reload();setSelected(updated||null);}}/>}
       {!selected&&(
-        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg,flexDirection:'column',gap:10}}>
+        <div className="req-empty-detail" style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg,flexDirection:'column',gap:10}}>
           <div style={{fontSize:40}}>📨</div>
           <div style={{fontSize:14,color:'var(--wt-text-4)'}}>{t('req_no_task_selected')}</div>
           {isLeader&&<button onClick={()=>setSelected('new')} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:4}}>➕ {t('req_create_new')}</button>}
@@ -1146,11 +1147,11 @@ function FileSection({ taskId, files, user, onReload }) {
           </div>
           <a href={f.url||(BASE+'/uploads/'+(f.stored_name||f.filename))}
             target="_blank" rel="noreferrer"
-            style={{ fontSize:11, color:'#3a7bd5', textDecoration:'none', fontWeight:600, padding:'3px 8px', borderRadius:5, border:'1px solid var(--wt-tint-primary-bd)', background:'var(--wt-tint-primary)' }}>
+            style={{ fontSize:11, color:'#3654ff', textDecoration:'none', fontWeight:600, padding:'3px 8px', borderRadius:5, border:'1px solid var(--wt-tint-primary-bd)', background:'var(--wt-tint-primary)' }}>
             ⬇ {t('req_download')}
           </a>
           <button onClick={()=>handleDelete(f.id)}
-            style={{ width:24, height:24, borderRadius:5, border:'1px solid var(--wt-tint-danger)', background:'var(--wt-tint-danger)', color:'#e74c3c', cursor:'pointer', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            style={{ width:24, height:24, borderRadius:5, border:'1px solid var(--wt-tint-danger)', background:'var(--wt-tint-danger)', color:'#e5384d', cursor:'pointer', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
             ×
           </button>
         </div>
@@ -1161,7 +1162,7 @@ function FileSection({ taskId, files, user, onReload }) {
 
       <div onClick={()=>!uploading&&fileRef.current.click()}
         style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'10px 14px', borderRadius:8, border:'2px dashed var(--wt-line-strong)', color:uploading?'var(--wt-text-4)':'var(--wt-text-3)', fontSize:12, fontWeight:600, cursor:uploading?'not-allowed':'pointer', background:uploading?'var(--wt-surface-2)':'transparent' }}
-        onMouseEnter={e=>{ if(!uploading){e.currentTarget.style.borderColor='#3a7bd5';e.currentTarget.style.color='#3a7bd5';e.currentTarget.style.background='var(--wt-tint-primary)';}}}
+        onMouseEnter={e=>{ if(!uploading){e.currentTarget.style.borderColor='#3654ff';e.currentTarget.style.color='#3654ff';e.currentTarget.style.background='var(--wt-tint-primary)';}}}
         onMouseLeave={e=>{ if(!uploading){e.currentTarget.style.borderColor='var(--wt-line-strong)';e.currentTarget.style.color='var(--wt-text-3)';e.currentTarget.style.background='transparent';}}}>
         {uploading ? `⏳ ${t('req_uploading')}` : `📎 ${t('req_attach_file')}`}
       </div>

@@ -205,7 +205,7 @@ export default function CompletedPage() {
         {/* On time section */}
         {!loading && filter !== 'late' && pageOntime.length > 0 && (
           <>
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-[var(--wt-surface)] rounded-xl border border-[var(--wt-line)] shadow-sm">
+            <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 bg-[var(--wt-surface)] rounded-xl border border-[var(--wt-line)] shadow-sm">
               <span className="w-6 h-6 rounded-lg bg-[var(--wt-tint-success)] flex items-center justify-center text-[13px]">✅</span>
               <span className="font-bold text-[#17b26a] flex-1 text-sm">{t('on_time')}</span>
               <span className="text-[11px] font-bold bg-[var(--wt-tint-success)] text-[#17b26a] px-2.5 py-0.5 rounded-full font-mono">{t('completed_task_count',{count:tasks.filter(t=>!t.is_late).length})}</span>
@@ -222,7 +222,7 @@ export default function CompletedPage() {
         {/* Late section */}
         {!loading && filter !== 'ontime' && pageLate.length > 0 && (
           <>
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-[var(--wt-tint-danger)]/50 rounded-xl border border-[var(--wt-tint-danger-bd)] shadow-sm">
+            <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 bg-[var(--wt-tint-danger)]/50 rounded-xl border border-[var(--wt-tint-danger-bd)] shadow-sm">
               <span className="w-6 h-6 rounded-lg bg-[var(--wt-tint-danger)] flex items-center justify-center text-[13px]">⚠️</span>
               <span className="font-bold text-[#e5384d] flex-1 text-sm">{t('late')}</span>
               <span className="text-[11px] font-bold bg-[var(--wt-tint-danger)] text-[#e5384d] px-2.5 py-0.5 rounded-full font-mono">{t('completed_task_count',{count:tasks.filter(t=>t.is_late).length})}</span>
@@ -269,7 +269,7 @@ function TaskCard({ task, fmtDate, late=false, expanded, onToggle, detail, detai
   );
 
   return (
-    <div className={`relative bg-[var(--wt-surface)] rounded-2xl border border-[var(--wt-line)] p-3 sm:p-4 pl-4 sm:pl-5 cursor-pointer overflow-hidden transition-all hover:shadow-[0_10px_24px_rgba(15,23,41,.09)] hover:-translate-y-0.5 ${late ? 'bg-[var(--wt-tint-danger)]/10' : ''}`}
+    <div className={`relative shrink-0 bg-[var(--wt-surface)] rounded-2xl border border-[var(--wt-line)] p-3 sm:p-4 pl-4 sm:pl-5 cursor-pointer overflow-hidden transition-all hover:shadow-[0_10px_24px_rgba(15,23,41,.09)] hover:-translate-y-0.5 ${late ? 'bg-[var(--wt-tint-danger)]/10' : ''}`}
       style={{ animation:'cpRise .2s ease both' }}
       onClick={onToggle}>
       {/* Sọc trái — vạch cảnh báo chéo (hazard stripe) cho trễ hạn, đồng bộ với

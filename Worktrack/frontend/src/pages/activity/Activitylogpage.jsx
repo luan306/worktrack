@@ -3,19 +3,19 @@ import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 
 const C = {
-  primary: '#3a7bd5', dark: 'var(--wt-ink)', success: '#27ae60',
-  warning: '#e67e22', danger: '#e74c3c', border: 'var(--wt-line)', bg: 'var(--wt-surface-2)',
+  primary: '#3654ff', dark: 'var(--wt-ink)', success: '#17b26a',
+  warning: '#f59e0b', danger: '#e5384d', border: 'var(--wt-line)', bg: 'var(--wt-surface-2)',
 };
 
 // Icon + màu theo loại hành động — dễ quét mắt khi danh sách dài
 const ACTION_META = {
   request_created:          { icon: '➕', color: C.primary, bg: 'var(--wt-tint-primary)' },
   request_deleted:          { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
-  request_assignee_added:   { icon: '👤', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  request_assignee_added:   { icon: '👤', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   request_assignee_removed: { icon: '👤', color: C.warning, bg: 'var(--wt-tint-warning)' },
   request_scored:           { icon: '⭐', color: '#8e44ad', bg: 'var(--wt-tint-violet)' },
   request_completed:        { icon: '✅', color: C.success, bg: 'var(--wt-tint-success)' },
-  daily_scored:             { icon: '📅', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  daily_scored:             { icon: '📅', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   daily_score_edited:       { icon: '✏️', color: C.warning, bg: 'var(--wt-tint-warning)' },
   daily_task_created:       { icon: '🆕', color: C.primary, bg: 'var(--wt-tint-primary)' },
   daily_group_created:      { icon: '🏭', color: C.primary, bg: 'var(--wt-tint-primary)' },
@@ -25,11 +25,11 @@ const ACTION_META = {
   daily_group_updated:      { icon: '✏️', color: C.warning, bg: 'var(--wt-tint-warning)' },
   daily_group_deleted:      { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
   score_period_locked:      { icon: '🔒', color: C.danger,  bg: 'var(--wt-tint-danger)' },
-  user_created:             { icon: '👤', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  user_created:             { icon: '👤', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   user_updated:             { icon: '👤', color: C.primary, bg: 'var(--wt-tint-primary)' },
   user_role_changed:        { icon: '🛡', color: '#8e44ad', bg: 'var(--wt-tint-violet)' },
   user_locked:              { icon: '🔒', color: C.danger,  bg: 'var(--wt-tint-danger)' },
-  user_unlocked:            { icon: '🔓', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  user_unlocked:            { icon: '🔓', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   user_deleted:             { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
   user_imported:            { icon: '📥', color: C.primary, bg: 'var(--wt-tint-primary)' },
   user_password_reset:      { icon: '🔑', color: C.warning, bg: 'var(--wt-tint-warning)' },
@@ -37,9 +37,9 @@ const ACTION_META = {
   group_created:            { icon: '🏭', color: C.primary, bg: 'var(--wt-tint-primary)' },
   group_updated:            { icon: '🏭', color: C.warning, bg: 'var(--wt-tint-warning)' },
   group_deleted:            { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
-  group_member_added:       { icon: '👥', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  group_member_added:       { icon: '👥', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   group_member_removed:     { icon: '👥', color: C.warning, bg: 'var(--wt-tint-warning)' },
-  worklog_scored:           { icon: '🗓', color: '#27ae60', bg: 'var(--wt-tint-success)' },
+  worklog_scored:           { icon: '🗓', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   worklog_score_edited:     { icon: '✏️', color: C.warning, bg: 'var(--wt-tint-warning)' },
   worklog_day_off:          { icon: '🌴', color: '#0d9488', bg: 'var(--wt-tint-teal)' },
 };
