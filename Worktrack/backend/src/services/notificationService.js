@@ -10,6 +10,12 @@ const ENTITY_LINK = {
   daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
   // Công việc hằng ngày: mở đúng người + đúng tuần của ngày được chấm
   worklog: (id, payload = {}) => `/daily?user_id=${id}&date=${payload.workDate || ''}`,
+  // Nhắc nhân viên ghi việc: mở lịch của CHÍNH MÌNH đúng ngày còn thiếu
+  worklog_self: (_id, payload = {}) => `/daily?date=${payload.workDate || ''}`,
+  // Nhắc leader chấm điểm: mở thẳng hộp "Chờ chấm" (ai · ngày nào)
+  worklog_team: () => '/daily?view=pending',
+  // Nhắc Manager: mở Board (cột "Chờ Manager duyệt")
+  request_review: () => '/board',
 };
 
 /**
@@ -68,4 +74,4 @@ async function notifyMany(io, userIds, { actorId, type, entityType = 'request', 
   });
 }
 
-module.exports = { notify, notifyMany };
+module.exports = { notify, notifyMany, ENTITY_LINK };

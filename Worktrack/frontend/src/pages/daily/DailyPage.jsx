@@ -18,6 +18,8 @@ import { DetailDock, Btn } from './ui';
 import NotePanel from './NotePanel';
 import ExportDialog from './ExportDialog';
 import OverviewBoard from './OverviewBoard';
+import PendingBoard from './PendingBoard';
+import usePendingScoreCount from '../../lib/usePendingScoreCount';
 
 /* ============================================================
    TRANG
@@ -37,9 +39,18 @@ export default function DailyPage() {
   const [tick, setTick] = useState(0);    // tăng → tải lại
   const [history, setHistory] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [view, setView] = useState(() => (params.get('view') === 'team' ? 'team' : 'me')); // 'me' | 'team' (bảng tổng hợp)
+  // 'me' = lịch cá nhân · 'pending' = hộp chờ chấm · 'team' = bảng tổng hợp
+  const [view, setView] = useState(() => (['team', 'pending'].includes(params.get('view')) ? params.get('view') : 'me'));
+  // Mở từ thông báo "còn ngày chưa chấm": ?view=team&from=YYYY-MM-DD&to=YYYY-MM-DD
+  const [teamRange] = useState(() => {
+    const f = params.get('from'), t2 = params.get('to'), ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
+    return ok(f) && ok(t2) && f <= t2 ? [f, t2] : null;
+  });
 
   const viewUserId = userId || user?.id;
+  // Chấm được người khác (leader/manager/admin có thành viên) → có tab "Chờ chấm" + "Bảng tổng hợp"
+  const canScoreOthers = user?.role !== 'user' && members.length > 1;
+  const pendingCount = usePendingScoreCount(canScoreOthers);
 
   useEffect(() => { api.get('/worklog/members').then(r => setMembers(r.data.data || [])).catch(() => {}); }, []);
 
@@ -93,8 +104,8 @@ export default function DailyPage() {
 
   // Giữ người + ngày đang xem trên URL (F5 / gửi link vẫn mở đúng chỗ)
   useEffect(() => {
-    const next = view === 'team' ? { view: 'team' } : { date: currentDate || `${month}-01` };
-    if (view !== 'team' && userId && userId !== user?.id) next.user_id = String(userId);
+    const next = view !== 'me' ? { view } : { date: currentDate || `${month}-01` };
+    if (view === 'me' && userId && userId !== user?.id) next.user_id = String(userId);
     setParams(next, { replace: true });
   }, [view, userId, month, currentDate, user?.id, setParams]);
 
@@ -315,6 +326,7 @@ export default function DailyPage() {
         @keyframes wlSlide { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
         .wl-fade { animation: wlFade .2s ease both; }
         @keyframes wlFade { from { opacity: 0; } to { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .wl-root .wl-sheet, .wl-root .wl-fade, .wl-root .wl-skel { animation: none !important; } .wl-root * { transition: none !important; } }
         @media (max-width: 900px) {
           .wl-top { padding: 10px 12px !important; gap: 8px !important; }
           .wl-stats { display: none !important; }
@@ -346,14 +358,17 @@ export default function DailyPage() {
           <span style={{ width: 38, height: 38, borderRadius: 11, background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, boxShadow: `0 4px 12px ${C.primary}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, flexShrink: 0 }}>📝</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, letterSpacing: -.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t('wl_title', 'Ghi chú công việc hằng ngày')}</div>
-            <div style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{view === 'team' ? t('wl_sub_team', 'Tổng hợp theo nhân viên · bấm 1 ô để xem / chấm') : member ? `${member.full_name}${idLine(member) ? ` · ${idLine(member)}` : ''}` : ''}</div>
+            <div style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{view === 'pending' ? t('wl_sub_pending', 'Ai · ngày nào đã ghi việc mà chưa được chấm') : view === 'team' ? t('wl_sub_team', 'Tổng hợp theo nhân viên · bấm 1 ô để xem / chấm') : member ? `${member.full_name}${idLine(member) ? ` · ${idLine(member)}` : ''}` : ''}</div>
           </div>
         </div>
 
-        {members.length > 1 && (
+        {canScoreOthers && (
           <div className="wl-viewtoggle" style={{ display: 'flex', gap: 2, padding: 3, borderRadius: 11, background: C.canvas, border: `1px solid ${C.line}` }}>
-            {[['me', `📅 ${t('wl_view_me', 'Lịch cá nhân')}`], ['team', `👥 ${t('wl_view_team', 'Bảng tổng hợp')}`]].map(([k, label]) => (
-              <button key={k} className="wl-seg" onClick={() => { setView(k); setPanelOpen(false); }} style={view === k ? { background: 'var(--wt-surface)', color: C.primary, boxShadow: '0 1px 3px rgba(15,23,41,.12)' } : undefined}>{label}</button>
+            {[['me', `📅 ${t('wl_view_me', 'Lịch cá nhân')}`], ['pending', `⏳ ${t('wl_view_pending', 'Chờ chấm')}`], ['team', `👥 ${t('wl_view_team', 'Bảng tổng hợp')}`]].map(([k, label]) => (
+              <button key={k} className="wl-seg" onClick={() => { setView(k); setPanelOpen(false); }} style={view === k ? { background: 'var(--wt-surface)', color: C.primary, boxShadow: '0 1px 3px rgba(15,23,41,.12)' } : undefined}>
+                {label}
+                {k === 'pending' && pendingCount > 0 && <span style={{ marginLeft: 6, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: C.danger, color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT_MONO }}>{pendingCount > 99 ? '99+' : pendingCount}</span>}
+              </button>
             ))}
           </div>
         )}
@@ -410,10 +425,12 @@ export default function DailyPage() {
         </div>
       )}
 
-      {showExport && <ExportDialog onClose={() => setShowExport(false)} refDate={current?.date || `${month}-01`} defaultRange="month" member={viewing} members={members} viewUserId={viewUserId} defaultWho={view === 'team' ? 'all' : 'one'} />}
+      {showExport && <ExportDialog onClose={() => setShowExport(false)} refDate={current?.date || `${month}-01`} defaultRange="month" member={viewing} members={members} viewUserId={viewUserId} defaultWho={view === 'me' ? 'one' : 'all'} />}
 
-      {view === 'team' ? (
-        <OverviewBoard isMobile={isMobile} isNarrow={isNarrow} onOpenPerson={(id) => { setView('me'); switchUser(id); }} />
+      {view === 'pending' ? (
+        <PendingBoard isMobile={isMobile} isNarrow={isNarrow} onOpenPerson={(id, date) => { setView('me'); switchUser(id); goMonth(date.slice(0, 7)); setSelected(date); }} />
+      ) : view === 'team' ? (
+        <OverviewBoard isMobile={isMobile} isNarrow={isNarrow} initialRange={teamRange} onOpenPerson={(id) => { setView('me'); switchUser(id); }} />
       ) : error ? (
         <div style={{ margin: 20, padding: 16, borderRadius: 12, background: C.dangerSoft, color: C.danger, fontSize: 13 }}>⚠ {error}</div>
       ) : (

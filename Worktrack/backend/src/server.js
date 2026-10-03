@@ -192,6 +192,8 @@ require('./cron/scoreAutoLock.cron');
 // ── Bảo trì DB: index cần thiết + dọn token hết hạn / thông báo cũ ──
 require('./config/indexes').ensureIndexes();
 require('./cron/maintenance.cron');
+// ── Nhắc chấm điểm (leader) + nhắc ghi việc (nhân viên) — 08:00 sáng T2–T6 ──
+require('./cron/worklogReminder.cron')(io);
 
 // ── Chống sập ──
 // 1 lỗi async không được catch ở bất kỳ đâu (Node 15+) sẽ làm TẮT CẢ server →

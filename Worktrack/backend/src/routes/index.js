@@ -81,6 +81,7 @@ router.put   ('/worklog/offs',          auth(), wlC.setDayOff);
 router.delete('/worklog/offs',          auth(), wlC.removeDayOff);
 router.get   ('/worklog/export',        auth(), wlC.exportReport);
 router.get   ('/worklog/overview',      auth(), wlC.overview);
+router.get   ('/worklog/pending',       auth(), wlC.pending);
 
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);

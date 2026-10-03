@@ -1,17 +1,6 @@
 const db = require('../config/db');
-
-// Map entity_type -> đường dẫn frontend — dùng để tính `link` khi trả về danh sách
-// ⚠️ File này có map RIÊNG, TÁCH BIỆT với services/notificationService.js —
-// trước đây chỉ có 'request' nên mọi thông báo Daily (daily_scored/
-// daily_score_edited) đều ra link=null, bấm vào không nhảy đi đâu cả. Giờ
-// thêm 'daily_task' khớp với bên đó, dùng payload.groupId/logDate để build
-// đúng link nhảy tới đúng nhóm + đúng ngày.
-const ENTITY_LINK = {
-  request: (id) => `/requests?id=${id}`,
-  daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
-  // Công việc hằng ngày: mở đúng người + đúng tuần của ngày được chấm
-  worklog: (id, payload = {}) => `/daily?user_id=${id}&date=${payload.workDate || ''}`,
-};
+// Đường dẫn khi bấm vào thông báo — dùng CHUNG 1 bảng với lúc gửi realtime (không giữ 2 bản)
+const { ENTITY_LINK } = require('../services/notificationService');
 
 // GET /api/notifications?limit=20&before=123
 exports.list = async (req, res) => {

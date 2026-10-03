@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 import { onRealtime } from '../../lib/socket';
 import { C, FONT_SANS, FONT_MONO, ymd, addDays, dmy, scoreColor, initialsOf, offLabel, weekdayNames, wdOf, mondayOf, monthRange, daysBetween, isWeekendDate, CELL, cellState, inputStyle } from './shared';
-import { DetailDock, ErrBox } from './ui';
-import NotePanel from './NotePanel';
+import { ErrBox } from './ui';
+import DayDetail from './DayDetail';
 
 /* ============================================================
    BẢNG TỔNG HỢP: mỗi dòng 1 nhân viên (Tên · MSNV · Bộ phận),
@@ -12,17 +12,16 @@ import NotePanel from './NotePanel';
    Trắng: chưa tới · Đỏ: chưa ghi việc · Vàng: đã ghi, chờ chấm ·
    Có số: điểm đã chấm · 🌴: nghỉ. Bấm 1 ô → mở ngày đó bên phải.
    ============================================================ */
-export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson }) {
+export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initialRange }) {
   const { t } = useTranslation();
   const todayStr = ymd(new Date());
-  const [from, setFrom] = useState(() => mondayOf(todayStr));
-  const [to, setTo] = useState(() => addDays(mondayOf(todayStr), 6));
+  const [from, setFrom] = useState(() => initialRange?.[0] || mondayOf(todayStr));
+  const [to, setTo] = useState(() => initialRange?.[1] || addDays(mondayOf(todayStr), 6));
   const [q, setQ] = useState('');
   const [group, setGroup] = useState('');
   const [tick, setTick] = useState(0);
   const [ov, setOv] = useState(null);         // { key, users, cells, today, max_score } | { key, err }
-  const [sel, setSel] = useState(null);       // { userId, date }
-  const [detail, setDetail] = useState(null); // { key, data, history } | { key, err }
+  const [sel, setSel] = useState(null);       // { userId, date } — ô đang mở panel
 
   const key = `${from}|${to}`;
   useEffect(() => {
@@ -33,18 +32,6 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson }) {
       .catch(e => { if (alive) setOv({ key, err: e.response?.data?.message || e.message }); });
     return () => { alive = false; };
   }, [from, to, key, tick]);
-
-  const selKey = sel ? `${sel.userId}|${sel.date}` : '';
-  useEffect(() => {
-    if (!sel) return;
-    let alive = true;
-    Promise.all([
-      api.get('/worklog', { params: { user_id: sel.userId, week: sel.date } }),
-      api.get('/worklog/history', { params: { user_id: sel.userId, date: sel.date } }),
-    ]).then(([w, h]) => { if (alive) setDetail({ key: selKey, data: w.data.data, history: h.data.data || [] }); })
-      .catch(e => { if (alive) setDetail({ key: selKey, err: e.response?.data?.message || e.message }); });
-    return () => { alive = false; };
-  }, [sel, selKey, tick]);
 
   const refresh = useCallback(() => setTick(n => n + 1), []);
   // 📡 Chỉ tải lại khi có thay đổi nằm trong khoảng ngày đang xem
@@ -86,21 +73,6 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson }) {
     [t('wl_this_month', 'Tháng này'), monthRange(todayStr)],
     [t('wl_prev_month', 'Tháng trước'), monthRange(todayStr, -1)],
   ];
-
-  // Panel chi tiết của ô đang chọn
-  const d = detail?.key === selKey ? detail : null;
-  let panel = null;
-  if (sel) {
-    const inner = d?.err ? <div style={{ margin: 18 }}><ErrBox>{d.err}</ErrBox></div>
-      : !d?.data ? <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>{[0, 1, 2].map(i => <div key={i} className="wl-skel" style={{ height: i ? 90 : 50, borderRadius: 12 }} />)}</div>
-      : (
-        <NotePanel key={`${sel.userId}-${sel.date}`} day={{ date: sel.date, full: WDF[wdOf(sel.date)] }} member={d.data.user}
-          entries={d.data.entries.filter(e => e.work_date === sel.date)} score={d.data.scores.find(s => s.work_date === sel.date)}
-          off={(d.data.offs || []).find(o => o.work_date === sel.date)} data={d.data} history={d.history}
-          onChanged={refresh} onClose={() => setSel(null)} isMobile={isMobile} isSelf={d.data.can_edit} />
-      );
-    panel = <DetailDock isMobile={isMobile} isNarrow={isNarrow} width={440} onClose={() => setSel(null)}>{inner}</DetailDock>;
-  }
 
   const stickyL = (left, w, extra = {}) => ({ position: 'sticky', left, minWidth: w, maxWidth: w, width: w, zIndex: 2, ...extra });
   const W = isMobile ? { name: 140, msnv: 0, dept: 0 } : { name: 190, msnv: 84, dept: 130 };
@@ -226,7 +198,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson }) {
           )}
         </div>
       </div>
-      {panel}
+      <DayDetail sel={sel} refreshKey={tick} onChanged={refresh} onClose={() => setSel(null)} isMobile={isMobile} isNarrow={isNarrow} />
     </div>
   );
 }

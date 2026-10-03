@@ -11,6 +11,7 @@ const { logActivity, fmtScore } = require('../services/activityLogService');
 const { notifyMany } = require('../services/notificationService');
 const { localDate, parseLocalDate, addDays, mondayOf } = require('../utils/date');
 const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
+const { pendingScoreDays } = require('../services/worklogService');
 
 const MAX_SCORE = 10;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -471,6 +472,42 @@ exports.overview = async (req, res) => {
     res.json({ success: true, data: {
       from, to, today: localDate(), max_score: MAX_SCORE,
       users, cells,
+    } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// GET /worklog/pending?count=1 — HỘP "CHỜ CHẤM": các ngày người mình chấm được đã ghi việc
+// nhưng chưa có điểm (30 ngày gần nhất, tới hôm nay). count=1 → chỉ trả số lượng (badge menu).
+const PENDING_DAYS = 30;
+exports.pending = async (req, res) => {
+  try {
+    if (req.user.role === 'user') return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
+    const people = (await viewableUsers(req)).filter(u => scoresVisible(req, u.id));
+    const today = localDate();
+    const days = await pendingScoreDays({ from: addDays(today, -PENDING_DAYS), to: today, userIds: people.map(u => u.id) });
+    if (req.query.count) return res.json({ success: true, data: { total: days.length } });
+
+    // 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở
+    const titles = new Map();
+    if (days.length) {
+      const [entries] = await db.query(
+        `SELECT user_id, DATE_FORMAT(work_date,'%Y-%m-%d') AS d, title FROM daily_entries
+          WHERE user_id IN (?) AND work_date BETWEEN ? AND ? ORDER BY work_date, id`,
+        [[...new Set(days.map(d => d.user_id))], days[0].work_date, today]);
+      for (const e of entries) {
+        const k = `${e.user_id}|${e.d}`;
+        if (!titles.has(k)) titles.set(k, []);
+        if (titles.get(k).length < 2) titles.get(k).push(e.title);
+      }
+    }
+    const byId = new Map(people.map(u => [u.id, u]));
+    res.json({ success: true, data: {
+      total: days.length, today,
+      items: days.map(d => {
+        const u = byId.get(d.user_id);
+        return { user: { id: u.id, full_name: u.full_name, username: u.username, avatar_color: u.avatar_color, group_names: u.group_names },
+                 work_date: d.work_date, n: d.n, titles: titles.get(`${d.user_id}|${d.work_date}`) || [] };
+      }),
     } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

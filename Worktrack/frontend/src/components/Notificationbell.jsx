@@ -17,6 +17,8 @@ const TYPE_ICON = {
   daily_scored: '📅', daily_score_edited: '✏️',
   request_activity: '📋',
   worklog_scored: '🗓', worklog_score_edited: '✏️',
+  worklog_unscored_reminder: '⏳', worklog_missing_reminder: '📝',
+  request_review_reminder: '🧾',
 };
 
 // Thông báo cho Admin về mọi thao tác giao việc / chỉnh sửa CV (request_activity)
@@ -66,6 +68,17 @@ function NotificationText({ n, t }) {
       return t('notif_worklog_scored', { actor, date: p.workDate, score: p.score, defaultValue: `${actor} đã chấm điểm ngày ${p.workDate} của bạn: ${p.score}đ${p.comment ? ` — ${p.comment}` : ''}` });
     case 'worklog_score_edited':
       return t('notif_worklog_score_edited', { actor, date: p.workDate, old: p.oldScore, new: p.score, name: p.targetName, defaultValue: `${actor} đã sửa điểm ngày ${p.workDate} của ${p.targetName}: ${+p.oldScore}đ → ${p.score}đ` });
+    // Nhắc việc tự động mỗi sáng (cron 08:00 T2–T6)
+    case 'worklog_unscored_reminder': {
+      const people = (p.people || []).map(x => `${x.name} (${x.days})`).join(', ') + (p.more ? ` +${p.more}` : '');
+      return t('notif_worklog_unscored_reminder', { total: p.total, people, defaultValue: `⏳ Còn ${p.total} ngày công việc chưa chấm điểm: ${people}` });
+    }
+    case 'request_review_reminder': {
+      const titles = (p.titles || []).map(x => `"${x}"`).join(', ') + (p.more ? ` +${p.more}` : '');
+      return t('notif_request_review_reminder', { total: p.total, titles, defaultValue: `🧾 Còn ${p.total} CV chờ Manager duyệt: ${titles}` });
+    }
+    case 'worklog_missing_reminder':
+      return t('notif_worklog_missing_reminder', { date: (p.workDate || '').split('-').reverse().join('/'), defaultValue: `📝 Bạn chưa ghi công việc ngày ${(p.workDate || '').split('-').reverse().join('/')} — bấm để ghi bù` });
     default:                       return title;
   }
 }

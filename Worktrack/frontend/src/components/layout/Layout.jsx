@@ -7,6 +7,7 @@ import NotificationBell from '../NotificationBell';
 import NotificationToast from '../NotificationToast';
 import useMaxWidth from '../../lib/useMediaQuery';
 import ThemeToggle from '../ThemeToggle';
+import usePendingScoreCount from '../../lib/usePendingScoreCount';
 
 /* ============================================================
    Ngôn ngữ thiết kế "control-panel": nền tối, mỗi mục nav có
@@ -65,10 +66,10 @@ function CollapsedTooltip({ children, accent = '#3654ff' }) {
 }
 
 // Chip icon màu — giống "đèn trạng thái" trên bảng điều khiển, sáng lên khi active
-function NavIcon({ icon, color, active, size = 28 }) {
+function NavIcon({ icon, color, active, size = 28, badge = 0 }) {
   return (
     <span
-      className="flex flex-shrink-0 items-center justify-center rounded-[8px] text-[13px] transition-all duration-200"
+      className="relative flex flex-shrink-0 items-center justify-center rounded-[8px] text-[13px] transition-all duration-200"
       style={{
         width: size, height: size,
         background: active ? `linear-gradient(135deg, ${color}, ${color}cc)` : `${color}1f`,
@@ -76,11 +77,16 @@ function NavIcon({ icon, color, active, size = 28 }) {
       }}
     >
       <span style={{ filter: active ? 'none' : 'saturate(0.7) opacity(0.85)' }}>{icon}</span>
+      {badge > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-[#e5384d] px-1 text-[9px] font-bold leading-none text-white ring-2 ring-[#0b1220]">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </span>
   );
 }
 
-export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = false, onNavigate }) {
+export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = false, onNavigate, badges = {} }) {
   const collapsed = drawer ? false : collapsedProp;
   const { t } = useTranslation();
   const { user, logout } = useAuthStore();
@@ -197,7 +203,7 @@ export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = f
               >
                 {({ isActive }) => (
                   <>
-                    <NavIcon icon={item.icon} color={item.color} active={isActive} />
+                    <NavIcon icon={item.icon} color={item.color} active={isActive} badge={badges[item.to]} />
                     {!collapsed && <span className="truncate">{t(item.key)}</span>}
                     {!collapsed && isActive && (
                       <span className="ml-auto h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: item.color, boxShadow: `0 0 6px ${item.color}` }} />
@@ -274,7 +280,7 @@ function MobileTopBar({ onMenu }) {
 }
 
 // Menu trượt từ trái — dùng lại đúng Sidebar (đủ mục, hồ sơ, đăng xuất)
-function MobileDrawer({ open, onClose }) {
+function MobileDrawer({ open, onClose, badges }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -288,14 +294,14 @@ function MobileDrawer({ open, onClose }) {
       <div onClick={onClose} className={`absolute inset-0 bg-[#0b1220]/55 backdrop-blur-[2px] transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0'}`} />
       <div className={`absolute inset-y-0 left-0 transition-transform duration-250 ease-out ${open ? 'translate-x-0' : '-translate-x-full'}`}
         style={{ paddingTop: 'env(safe-area-inset-top)', background: INK }}>
-        <Sidebar drawer onNavigate={onClose} />
+        <Sidebar drawer onNavigate={onClose} badges={badges} />
       </div>
     </div>
   );
 }
 
 // Thanh điều hướng dưới cùng — chỉ hiện trên mobile/tablet nhỏ (< md)
-function MobileNav() {
+function MobileNav({ badges = {} }) {
   const { t } = useTranslation();
   return (
     <nav
@@ -315,7 +321,7 @@ function MobileNav() {
         >
           {({ isActive }) => (
             <>
-              <NavIcon icon={item.icon} color={item.color} active={isActive} size={24} />
+              <NavIcon icon={item.icon} color={item.color} active={isActive} size={24} badge={badges[item.to]} />
               <span className="max-w-full truncate px-0.5 text-[9px] font-medium">{t(item.key)}</span>
             </>
           )}
@@ -358,6 +364,9 @@ export function MainLayout() {
   const isPhone = useMaxWidth(767); // < md: thanh trên + menu trượt (tránh 2 chuông thông báo cùng tải)
 
   const { user } = useAuthStore();
+  // Leader: số ngày nhân viên đã ghi việc mà chưa được chấm → chấm đỏ trên menu "CV Hằng ngày"
+  const pendingScore = usePendingScoreCount(user?.role === 'leader');
+  const badges = { '/daily': pendingScore };
   const { connect, disconnect } = useNotificationStore();
 
   // ⚠️ KHÔNG disconnect() trong cleanup của effect này — socket dùng CHUNG
@@ -382,13 +391,13 @@ export function MainLayout() {
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden md:flex-row">
-      {!isPhone && <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />}
+      {!isPhone && <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} badges={badges} />}
       {isPhone && <MobileTopBar onMenu={openDrawer} />}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Outlet />
       </main>
-      <MobileNav />
-      {isPhone && drawerUsed && <MobileDrawer open={drawerOpen} onClose={closeDrawer} />}
+      <MobileNav badges={badges} />
+      {isPhone && drawerUsed && <MobileDrawer open={drawerOpen} onClose={closeDrawer} badges={badges} />}
       <NotificationToast />
     </div>
   );
