@@ -22,8 +22,7 @@ exports.list = async (req, res) => {
 
     res.json({
       success: true,
-      // ⚠️ mysql2 tự parse cột JSON thành object JS sẵn (không phải string nữa),
-      // nên chỉ JSON.parse khi nó thực sự còn là string — tránh lỗi 500 ở đây.
+      // ⚠️ mysql2 tự parse cột JSON thành object JS sẵn
       data: rows.map(r => {
         const payload = typeof r.payload === 'string' ? JSON.parse(r.payload) : (r.payload || {});
         return {

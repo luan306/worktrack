@@ -34,9 +34,7 @@ const STEPS = [
   { key:'done',        tkey:'req_step_done' },
 ];
 
-// Icon + màu cho từng loại hành động trong Timeline "Tiến trình" — cùng bộ
-// action_type với trang Lịch sử thay đổi (/activity-log), chỉ khác là ở đây
-// lọc riêng theo 1 CV và không giới hạn admin/manager.
+// Icon + màu cho từng loại hành động trong Timeline "Tiến trình"
 const ACTIVITY_META = {
   request_created:          { icon:'➕', color:C.primary, bg:'var(--wt-tint-primary)' },
   request_assignee_added:   { icon:'🙋', color:'#17b26a', bg:'var(--wt-tint-success)' },
@@ -54,8 +52,7 @@ const Chip = ({color=C.primary,name='?',size=28})=>{
   return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:color,color:'#fff',fontSize:size>24?12:9,fontWeight:700}}>{ini}</div>;
 };
 
-// Badge nhỏ hiển thị vai trò Chính/Hỗ trợ trên chip người thực hiện.
-// clickable=true khi cho phép bấm để đổi vai trò tại chỗ.
+// Badge nhỏ hiển thị vai trò Chính/Hỗ trợ trên chip người thực hiện
 const RoleBadge = ({role, clickable, onClick}) => {
   const isSupport = role==='support';
   return (
@@ -92,14 +89,10 @@ function Countdown({deadline, status}) {
   return <span style={{fontSize:11,fontWeight:700,color,background:bg,padding:'3px 8px',borderRadius:6}}>⏱ {label}</span>;
 }
 
-// Giờ công tự động: đếm lên liên tục kể từ started_at trong lúc đang làm,
-// và đứng yên = khoảng thời gian thực (started_at → completed_at) khi task đã "done".
-// ⚠️ Khi vượt quá 24h thì tính thành "X ngày Y giờ Z phút" — cứ đủ 24h thì
-// ghi nhận 1 ngày rồi tiếp tục đếm phần lẻ còn lại, thay vì hiện 1 con số
-// giờ dồn rất dài (VD: "26h 30p" → "1 ngày 2h 30p").
+// Giờ công tự động: đếm lên liên tục kể từ started_at trong lúc đang làm, và đứng yên = khoảng thời gian thực
 function WorkDuration({startedAt, completedAt, status}) {
   const { t } = useTranslation();
-  const finished = status==='done' && !!completedAt;
+  const finished = ['scoring','reviewing','done','archived'].includes(status) && !!completedAt;
   const now = useNow(1000, !!startedAt && !finished);
 
   if (!startedAt) return <span style={{fontSize:12,color:'var(--wt-text-4)'}}>{t('req_not_started')}</span>;
@@ -151,10 +144,7 @@ function Section({id,icon,title,extra,children,defaultOpen=true}){
   );
 }
 
-// ── Chấm điểm RIÊNG từng người trong CV ──
-// Hiện danh sách người thực hiện (chính / hỗ trợ), mỗi người 1 ô điểm. Có ô
-// "chấm nhanh cho tất cả" để điền cùng 1 điểm rồi chỉnh riêng từng người.
-// CV chưa có ai thực hiện → 1 ô "điểm công việc" chung (được để trống như trước).
+// Chấm điểm RIÊNG từng người trong CV
 const TASK_ROW = 'task';
 function AssigneeScoring({ task, hint, tone = C.primary, bg = 'var(--wt-tint-primary)', border = 'var(--wt-tint-primary-bd)', actions }) {
   const { t } = useTranslation();
@@ -200,7 +190,7 @@ function AssigneeScoring({ task, hint, tone = C.primary, bg = 'var(--wt-tint-pri
             {perPerson ? <Chip color={a.avatar_color || C.primary} name={a.full_name} size={28} /> : <span style={{ fontSize: 20 }}>🏆</span>}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.dark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.full_name}</div>
-              {perPerson && <div style={{ marginTop: 2 }}><RoleBadge role={a.role} clickable={false} /></div>}
+              {perPerson && <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}><RoleBadge role={a.role} clickable={false} />{!!a.added_late && <span title={t('req_late_added_tip', 'Người này được thêm vào SAU KHI công việc đã nộp')} style={{display:'inline-flex',alignItems:'center',gap:3,padding:'1px 7px',borderRadius:20,background:'var(--wt-tint-danger)',border:'1px solid var(--wt-tint-danger-bd)',color:C.danger,fontSize:10,fontWeight:800,whiteSpace:'nowrap'}}>⚠️ {t('req_late_added', 'Thêm sau khi nộp')}</span>}</div>}
             </div>
             <input type="number" min="0" max="10" step="0.5" value={vals[a.user_id] ?? ''} onChange={e => setOne(a.user_id, e.target.value)} placeholder="–"
               style={{ width: 62, textAlign: 'center', border: `2px solid ${valid(vals[a.user_id]) ? tone : 'var(--wt-line-strong)'}`, borderRadius: 9, padding: 5,
@@ -224,10 +214,7 @@ function AssigneeScoring({ task, hint, tone = C.primary, bg = 'var(--wt-tint-pri
   );
 }
 
-// ── Timeline "Tiến trình" — ai tạo → ai nhận → nếu đổi người thì ai nhận
-// tiếp theo → chấm điểm → duyệt hoàn thành. Lấy từ activity_logs qua endpoint
-// riêng /requests/:id/activity (không giới hạn admin/manager như trang audit
-// toàn hệ thống /activity-log).
+// Timeline "Tiến trình" — ai tạo
 function ActivityTimeline({ taskId }) {
   const { t, i18n } = useTranslation();
   const fmtDt = makeFmtDt(LOCALE_MAP[i18n.language] || 'vi-VN');
@@ -245,17 +232,30 @@ function ActivityTimeline({ taskId }) {
   if (loading) return <div style={{fontSize:12,color:'var(--wt-text-4)',padding:'4px 0'}}>⏳</div>;
   if (!items.length) return <div style={{fontSize:12,color:'var(--wt-text-4)',padding:'4px 0'}}>{t('req_activity_empty', { defaultValue: 'Chưa có hoạt động nào được ghi lại.' })}</div>;
 
-  // Hàng ngang, cuộn được nếu dài — mỗi bước là 1 icon + mô tả rút gọn (tối đa
-  // 2 dòng, hover để xem đầy đủ), nối nhau bằng mũi tên "→".
+  // Hàng ngang, cuộn được nếu dài — mỗi bước là 1 icon + mô tả rút gọn
   return (
     <div style={{display:'flex',alignItems:'flex-start',gap:6,overflowX:'auto',padding:'4px 2px 8px'}}>
       {items.map((item,i)=>{
-        const meta = ACTIVITY_META[item.action_type] || ACTIVITY_DEFAULT_META;
+        const baseMeta = ACTIVITY_META[item.action_type] || ACTIVITY_DEFAULT_META;
         const isLast = i===items.length-1;
+        // Thêm người thực hiện: ghi rõ TỰ NHẬN (người đó tự bấm nhận) hay ĐƯỢC CHỈ ĐỊNH (người khác giao)
+        let how = null;
+        if (item.action_type==='request_assignee_added') {
+          let md = item.metadata;
+          if (typeof md==='string') { try { md = JSON.parse(md); } catch { md = null; } }
+          const self = !!md?.self_assigned || (md?.added_user_id!=null && +md.added_user_id===item.actor_id);
+          how = md?.late
+            ? { label:`⚠️ ${t('req_late_added','Thêm sau khi nộp')}`, color:C.danger, bg:'var(--wt-tint-danger)', icon:'⚠️' }
+            : self
+            ? { label:`🙋 ${t('req_act_self','Tự nhận')}`, color:'#17b26a', bg:'var(--wt-tint-success)' }
+            : { label:`👉 ${t('req_act_direct','Được chỉ định')}`, color:C.primary, bg:'var(--wt-tint-primary)', icon:'👉' };
+        }
+        const meta = how?.icon ? { ...baseMeta, icon:how.icon, bg:how.bg } : baseMeta;
         return (
           <div key={item.id} style={{display:'flex',alignItems:'flex-start',gap:6,flexShrink:0}}>
             <div title={item.description} style={{display:'flex',flexDirection:'column',alignItems:'center',width:96,flexShrink:0}}>
               <div style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,background:meta.bg,flexShrink:0}}>{meta.icon}</div>
+              {how && <span style={{marginTop:5,padding:'1px 7px',borderRadius:20,background:how.bg,color:how.color,fontSize:9.5,fontWeight:800,whiteSpace:'nowrap'}}>{how.label}</span>}
               <div style={{fontSize:10,color:C.dark,textAlign:'center',marginTop:5,lineHeight:1.35,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{item.description}</div>
               <div style={{fontSize:9,color:'var(--wt-text-4)',marginTop:3,whiteSpace:'nowrap'}}>{fmtDt(item.created_at)}</div>
             </div>
@@ -299,9 +299,7 @@ export default function RequestsPage() {
     setTasks(data.data||[]);
   };
 
-  // 📡 Realtime — tự cập nhật danh sách khi có CV mới/đổi trạng thái/gán
-  // người... ở bất kỳ đâu, không cần F5. Dùng chung 1 socket đã kết nối sẵn
-  // (từ notificationStore) — chỉ gắn thêm listener, không tạo kết nối mới.
+  // 📡 Realtime — tự cập nhật danh sách khi có CV mới/đổi trạng thái/gán người..
   useEffect(()=>{
     if (!user?.id) return;
     return onRealtime('requests:updated', () => { clearApiCache(); reload(); });
@@ -319,10 +317,7 @@ export default function RequestsPage() {
     });
   }
 
-  // CV "đang mở, chưa ai nhận" (status='pending', chưa có assignee) phải hiện
-  // cho MỌI người liên quan để họ còn bấm "Nhận việc" được — trước đây bộ lọc
-  // chỉ cho xem CV do chính mình tạo/được gán, nên CV chưa gán ai bị "vô hình"
-  // với tất cả user thường, kể cả F5 cũng không thấy.
+  // CV "đang mở, chưa ai nhận" (status='pending'
   const isUnclaimedOpen = (t2) => t2.status === 'pending' && !(t2.assignees||[]).length;
 
   const visibleTasks = isAdminOrManager
@@ -498,19 +493,14 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
   const chatFileRef = useRef();
-  // Đếm mỗi lần loadTask() chạy — dùng làm key ép ActivityTimeline tự tải lại,
-  // vì taskId không đổi khi nhận việc/thêm người/chấm điểm... nên bản thân
-  // Timeline (chỉ fetch 1 lần lúc mount theo taskId) sẽ không tự biết cần
-  // refetch nếu không có tín hiệu này.
+  // Đếm mỗi lần loadTask() chạy — dùng làm key ép ActivityTimeline tự tải lại
   const [activityTick, setActivityTick] = useState(0);
 
   const isAdmin = ['admin','manager'].includes(user?.role);
 
   useEffect(()=>{ loadTask(); },[taskId]);
 
-  // 📡 Realtime — nếu CV đang mở bị người khác đổi (gán/xóa người, chấm điểm,
-  // đổi trạng thái...), tự tải lại chi tiết + Timeline ngay, không cần đóng mở
-  // lại. Nếu CV bị XÓA, tự đóng panel thay vì cố tải 1 CV không còn tồn tại.
+  // 📡 Realtime — nếu CV đang mở bị người khác đổi
   useEffect(()=>{
     if (!user?.id) return;
     const socket = getSocket(user.id);
@@ -613,10 +603,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     catch(e){alert(e.response?.data?.message||e.message);}
   };
 
-  // ⚠️ Nếu CV do chính MANAGER tạo (yêu cầu công việc), khi nộp bài đi thẳng
-  // lên Manager duyệt 1 lần duy nhất — bỏ qua bước Leader chấm điểm sơ bộ.
-  // (Chỉ áp dụng khi creator_role==='manager', không tính admin — theo đúng
-  // yêu cầu "nếu manager yêu cầu công việc".)
+  // ⚠️ Nếu CV do chính MANAGER tạo
   const markDone = async()=>{
     const skipLeaderStep = task.creator_role === 'manager';
     await save({status: skipLeaderStep ? 'reviewing' : 'scoring'});
@@ -813,6 +800,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </div>
                     {a.full_name}
                     <RoleBadge role={a.role} clickable={canManageAssignees} onClick={()=>toggleAssigneeRole(a)}/>
+                    {!!a.added_late && <span title={t('req_late_added_tip', 'Người này được thêm vào SAU KHI công việc đã nộp')} style={{display:'inline-flex',alignItems:'center',gap:3,padding:'1px 7px',borderRadius:20,background:'var(--wt-tint-danger)',border:'1px solid var(--wt-tint-danger-bd)',color:C.danger,fontSize:10,fontWeight:800,whiteSpace:'nowrap'}}>⚠️ {t('req_late_added', 'Thêm sau khi nộp')}</span>}
                     {canManageAssignees&&<span onClick={()=>removeAssignee(a.user_id)} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:15,lineHeight:1}} onMouseEnter={e=>e.target.style.color=C.danger} onMouseLeave={e=>e.target.style.color='var(--wt-text-4)'}>×</span>}
                   </div>
                 ))}

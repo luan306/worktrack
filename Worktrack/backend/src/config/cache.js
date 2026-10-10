@@ -22,9 +22,7 @@ const cache = {
       if (k.includes(pattern)) inflight.delete(k);
     }
   },
-  // Lấy từ cache, nếu chưa có thì chạy fn() rồi lưu lại. Nhiều request cùng
-  // lúc hỏi CÙNG 1 key (VD: 100 người cùng tải lại danh sách sau 1 thông báo
-  // realtime) chỉ chạy fn() ĐÚNG 1 LẦN, các request còn lại chờ chung kết quả.
+  // Lấy từ cache, nếu chưa có thì chạy fn() rồi lưu lại
   async wrap(key, ttlMs, fn) {
     const hit = cache.get(key);
     if (hit !== null) return hit;
@@ -43,9 +41,7 @@ const cache = {
   },
 };
 
-// Dọn key hết hạn định kỳ — trước đây key chỉ bị xóa khi có người đọc lại
-// đúng key đó, nên các key theo ngày/tuần (board:<nhóm>:<ngày>...) tích tụ mãi
-// trong RAM của server.
+// Dọn key hết hạn định kỳ — trước đây key chỉ bị xóa khi có người đọc lại đúng key đó
 setInterval(() => {
   const now = Date.now();
   for (const [k, item] of store) if (now > item.exp) store.delete(k);

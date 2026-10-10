@@ -1,5 +1,4 @@
-// Số ngày "CHỜ CHẤM" (đã ghi việc, chưa có điểm) của những người mình chấm được.
-// Dùng cho số đỏ trên menu "CV Hằng ngày" và tab "Chờ chấm". Tự cập nhật khi có ai ghi việc / chấm điểm.
+// Số ngày "CHỜ CHẤM" (đã ghi việc, chưa có điểm) của những người mình chấm được
 import { useState, useEffect } from 'react';
 import api from '../api/client';
 import { onRealtime } from './socket';
@@ -15,6 +14,7 @@ export default function usePendingScoreCount(enabled) {
       .catch(() => {});
     return () => { alive = false; };
   }, [enabled, tick]);
-  useEffect(() => (enabled ? onRealtime('worklog:updated', () => setTick(n => n + 1)) : undefined), [enabled]);
+  // Con số trên menu không cần tức thì
+  useEffect(() => (enabled ? onRealtime('worklog:updated', () => setTick(n => n + 1), { wait: 3000, jitter: 4000 }) : undefined), [enabled]);
   return enabled ? count : 0;
 }

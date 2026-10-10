@@ -74,8 +74,7 @@ export default function CompletedPage() {
   const [search, setSearch]   = useState('');
   const [page, setPage]       = useState(1);
 
-  // Chi tiết mở rộng ngay tại chỗ khi bấm vào 1 thẻ — cache theo id để không
-  // gọi lại API mỗi lần đóng/mở cùng 1 CV.
+  // Chi tiết mở rộng ngay tại chỗ khi bấm vào 1 thẻ
   const [expandedId, setExpandedId] = useState(null);
   const [detailCache, setDetailCache] = useState({});
   const [detailLoading, setDetailLoading] = useState(false);
@@ -84,10 +83,7 @@ export default function CompletedPage() {
   // Đổi filter/tìm kiếm/ngày → về lại trang 1, tránh đứng ở trang trống
   useEffect(() => { setPage(1); }, [filter, dateFrom, dateTo, search]);
 
-  // 📡 Realtime — CV vừa được duyệt hoàn thành ở nơi khác thì tự hiện lên
-  // đây ngay, không cần F5. Xóa cache client trước khi fetch lại (cache GET
-  // chỉ tự xóa khi CHÍNH tab này gọi POST/PUT/DELETE, không biết gì về thay
-  // đổi từ tab/người khác).
+  // 📡 Realtime — CV vừa được duyệt hoàn thành ở nơi khác thì tự hiện lên đây ngay, không cần F5
   useEffect(() => {
     if (!user?.id) return;
     return onRealtime('requests:updated', () => { clearApiCache(); fetchCompleted(); });
@@ -129,8 +125,7 @@ export default function CompletedPage() {
   const currentLocale = localeMap[i18n.language] || 'vi-VN';
   const fmtDate = d => d ? new Date(d).toLocaleString(currentLocale, { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
 
-  // Phân trang trên toàn bộ danh sách đã lọc (giữ nguyên 2 nhóm đúng hạn/trễ
-  // bên trong trang hiện tại, thay vì tách trang riêng cho từng nhóm)
+  // Phân trang trên toàn bộ danh sách đã lọc
   const totalPages = Math.max(1, Math.ceil(tasks.length / PAGE_SIZE));
   const pageTasks = tasks.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
   const pageOntime = pageTasks.filter(t=>!t.is_late);

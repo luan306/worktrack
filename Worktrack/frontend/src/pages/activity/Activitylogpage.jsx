@@ -42,6 +42,8 @@ const ACTION_META = {
   worklog_scored:           { icon: '🗓', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   worklog_score_edited:     { icon: '✏️', color: C.warning, bg: 'var(--wt-tint-warning)' },
   worklog_day_off:          { icon: '🌴', color: '#0d9488', bg: 'var(--wt-tint-teal)' },
+  holiday_set:              { icon: '🎉', color: '#e5384d', bg: 'var(--wt-tint-danger)' },
+  holiday_removed:          { icon: '🗑', color: 'var(--wt-text-3)', bg: 'var(--wt-surface-3)' },
 };
 const defaultMeta = { icon: '📝', color: 'var(--wt-text-3)', bg: 'var(--wt-surface-3)' };
 
@@ -79,6 +81,8 @@ const ACTION_LABELS = {
   worklog_scored:           'Chấm điểm công việc hằng ngày',
   worklog_score_edited:     'Sửa điểm công việc hằng ngày',
   worklog_day_off:          'Ngày nghỉ (công việc hằng ngày)',
+  holiday_set:              'Đặt ngày nghỉ lễ công ty',
+  holiday_removed:          'Xóa ngày nghỉ lễ công ty',
 };
 
 // Thao tác do hệ thống tự chạy (VD: tự động chốt kỳ) không có người thực hiện
@@ -93,9 +97,7 @@ const Chip = ({ color = C.primary, name = '?', size = 22 }) => {
   );
 };
 
-// Xuất CSV cho toàn bộ danh sách ĐANG LỌC (không giới hạn theo trang hiện
-// tại) — gọi API riêng với limit cao để lấy hết, không phụ thuộc phân trang
-// đang hiển thị trên màn hình.
+// Xuất CSV cho toàn bộ danh sách ĐANG LỌC
 const exportCsv = async (filters) => {
   const p = new URLSearchParams({ page: 1, limit: 1000 });
   if (filters.type)  p.append('action_type', filters.type);

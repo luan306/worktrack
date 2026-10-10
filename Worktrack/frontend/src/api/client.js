@@ -35,8 +35,7 @@ api.interceptors.response.use(
   },
   async err => {
     const orig = err.config;
-    // 401 của chính API đăng nhập = sai mật khẩu, không phải token hết hạn →
-    // trả lỗi về cho LoginPage hiển thị, không refresh + tải lại trang
+    // 401 của chính API đăng nhập = sai mật khẩu, không phải token hết hạn
     if (/\/auth\/(login|refresh)$/.test(orig?.url || '')) return Promise.reject(err);
     if (err.response?.status !== 401 || orig._retry) return Promise.reject(err);
     if (refreshing) {

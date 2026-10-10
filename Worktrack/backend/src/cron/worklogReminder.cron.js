@@ -1,25 +1,16 @@
-// src/cron/worklogReminder.cron.js
-//
-// Nhắc việc "Công việc hằng ngày" — 08:00 mỗi sáng T2–T6 (giờ VN):
-//   1) Leader: các ngày ĐÃ GHI VIỆC nhưng CHƯA CHẤM của người cùng nhóm
-//      (30 ngày gần nhất, bỏ ngày nghỉ cả ngày) → 1 thông báo GỘP cho mỗi leader.
-//   2) Nhân viên / Leader: CHƯA GHI VIỆC ngày làm việc trước đó (không nghỉ cả ngày)
-//      → nhắc ghi bù.
-//   3) Manager: CHỈ nhắc các CV yêu cầu đang "Chờ Manager duyệt" (status='reviewing')
-//      → 1 thông báo gộp, bấm vào mở Board.
-// Mỗi loại nhắc tối đa 1 lần / người / ngày (chạy lại hay khởi động lại server không gửi trùng).
+// src/cron/worklogReminder.cron.js Nhắc việc "Công việc hằng ngày"
 
 const cron = require('node-cron');
 const db   = require('../config/db');
 const { notify, notifyMany } = require('../services/notificationService');
-const { pendingScoreDays } = require('../services/worklogService');
-const { localDate, parseLocalDate, addDays } = require('../utils/date');
+const { pendingScoreDays, holidayMap, isRestDay } = require('../services/worklogService');
+const { localDate, addDays } = require('../utils/date');
 
 const LOOKBACK_DAYS = 30;
 const TOP_PEOPLE = 5; // số người liệt kê trong 1 thông báo gộp
 
-const isWeekend = (d) => [0, 6].includes(parseLocalDate(d).getDay());
-const prevWorkday = (d) => { let x = addDays(d, -1); while (isWeekend(x)) x = addDays(x, -1); return x; };
+// Ngày làm việc liền trước — bỏ cuối tuần và ngày lễ công ty (hol = Map ngày lễ)
+const prevWorkday = (d, hol) => { let x = addDays(d, -1); while (isRestDay(x, hol)) x = addDays(x, -1); return x; };
 
 // Những ai đã nhận loại nhắc này hôm nay (chống gửi trùng)
 async function alreadyReminded(type) {
@@ -78,8 +69,8 @@ async function remindUnscored(io, today) {
 }
 
 // 2) Nhân viên / Leader: chưa ghi việc ngày làm việc trước đó
-async function remindMissing(io, today) {
-  const day = prevWorkday(today);
+async function remindMissing(io, today, hol) {
+  const day = prevWorkday(today, hol);
   const [rows] = await db.query(
     `SELECT u.id FROM users u
       WHERE u.is_active=1 AND u.role IN ('user','leader') AND DATE(u.created_at) <= ?
@@ -114,9 +105,10 @@ async function remindReviewing(io) {
 
 async function runReminders(io) {
   const today = localDate();
-  if (isWeekend(today)) return;
   try {
-    const [leaders, staff, managers] = await Promise.all([remindUnscored(io, today), remindMissing(io, today), remindReviewing(io)]);
+    const hol = await holidayMap();
+    if (isRestDay(today, hol)) return; // cuối tuần / công ty nghỉ lễ → không nhắc ai
+    const [leaders, staff, managers] = await Promise.all([remindUnscored(io, today), remindMissing(io, today, hol), remindReviewing(io)]);
     if (leaders || staff || managers) console.log(`[reminder] Nhắc chấm điểm: ${leaders} leader · nhắc ghi việc: ${staff} người · nhắc duyệt CV: ${managers} manager`);
   } catch (e) {
     console.error('[reminder] lỗi:', e.message);

@@ -1,9 +1,6 @@
 const db = require('../config/db');
 
-// Ghi 1 dòng log hoạt động — dùng ở khắp các controller khi có hành động quan
-// trọng cần lưu vết (tạo/xóa CV, đổi người, chấm điểm...). KHÔNG throw ra
-// ngoài nếu lỗi — việc ghi log không được phép làm hỏng luồng chính của
-// request (giống cách notify() được xử lý ở các controller khác).
+// Ghi 1 dòng log hoạt động — dùng ở khắp các controller khi có hành động quan trọng cần lưu vết
 async function logActivity({ actorId, actionType, entityType, entityId = null, description, metadata = null }) {
   try {
     await db.query(
@@ -44,9 +41,7 @@ const STATUS_LABEL = {
 };
 const PRIORITY_LABEL = { low: 'Thấp', medium: 'Trung bình', high: 'Cao', urgent: 'Khẩn cấp' };
 
-// So sánh trước/sau theo từng trường: chỉ ghi những trường THỰC SỰ đổi.
-// fields: { tên_trường: [nhãn tiếng Việt, hàm định dạng] }
-// Trả về { text: 'tiêu đề: "a" → "b"; deadline: … → …', changes: { trường: { old, new } } }
+// So sánh trước/sau theo từng trường
 function diffFields(before, after, fields) {
   const parts = [], changes = {};
   for (const [key, [label, fmt = fmtText]] of Object.entries(fields)) {

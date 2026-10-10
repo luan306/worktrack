@@ -2,7 +2,8 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
 const db     = require('../config/db');
-const { revokeToken } = require('../middleware/auth');
+const { revokeToken, invalidateUser } = require('../middleware/auth');
+const { DEFAULT_PASSWORD } = require('../utils/password');
 const { logActivity } = require('../services/activityLogService');
 
 const MIN_PASSWORD = 8;
@@ -11,7 +12,6 @@ const makeTokens = (user) => {
   const payload = { id: user.id, username: user.username, role: user.role, full_name: user.full_name };
   return {
     // jwtid ngẫu nhiên: 2 lần đăng nhập trong cùng 1 giây vẫn ra 2 token KHÁC nhau
-    // (nếu trùng, đăng xuất ở máy này sẽ vô hiệu hóa luôn phiên ở máy kia)
     access:  jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN  || '8h', jwtid: crypto.randomUUID() }),
     // type:'refresh' để middleware từ chối nếu ai đó dùng refresh token thay access token
     refresh: jwt.sign({ id: user.id, type: 'refresh' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d', jwtid: crypto.randomUUID() }),
@@ -35,6 +35,14 @@ exports.login = async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password)))
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
+    // Đăng nhập bằng mật khẩu MẶC ĐỊNH → đánh dấu bắt đổi: từ giờ tài khoản chỉ gọi được API đổi mật khẩu
+    let mustChange = !!user.must_change_password;
+    if (!mustChange && password === DEFAULT_PASSWORD) {
+      mustChange = true;
+      await db.query('UPDATE users SET must_change_password=1 WHERE id=?', [user.id]);
+      invalidateUser(user.id);
+    }
+
     const { access, refresh } = makeTokens(user);
     const exp = new Date(Date.now() + 7 * 86400000);
     const [, , [groups]] = await Promise.all([
@@ -49,7 +57,8 @@ exports.login = async (req, res) => {
     res.json({ success: true, data: {
       access_token: access, refresh_token: refresh,
       user: { id: user.id, username: user.username, email: user.email,
-              full_name: user.full_name, role: user.role, avatar_color: user.avatar_color, groups }
+              full_name: user.full_name, role: user.role, avatar_color: user.avatar_color, groups,
+              must_change_password: mustChange }
     }});
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -77,8 +86,7 @@ exports.logout = async (req, res) => {
   const { refresh_token } = req.body;
   if (refresh_token) await db.query('DELETE FROM refresh_tokens WHERE token=?', [refresh_token]).catch(() => {});
 
-  // Vô hiệu hóa access token ngay lập tức (trước đây code này gọi tới 1
-  // `blacklist` không tồn tại nên token đăng xuất rồi vẫn dùng được thêm 8h)
+  // Vô hiệu hóa access token ngay lập tức
   const token = req.headers?.authorization?.split(' ')[1];
   if (token) revokeToken(token);
 
@@ -94,7 +102,7 @@ exports.me = async (req, res) => {
          FROM group_members gm JOIN \`groups\` g ON g.id=gm.group_id
          WHERE gm.user_id=? AND g.is_active=1`, [req.user.id, req.user.id]),
     ]);
-    res.json({ success: true, data: { ...user, groups } });
+    res.json({ success: true, data: { ...user, groups, must_change_password: !!req.user.must_change_password } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -107,8 +115,13 @@ exports.changePassword = async (req, res) => {
     const [[user]] = await db.query('SELECT * FROM users WHERE id=?', [req.user.id]);
     const ok = await bcrypt.compare(old_password, user.password);
     if (!ok) return res.status(400).json({ success:false, message:'Mật khẩu hiện tại không đúng!' });
+    if (new_password === DEFAULT_PASSWORD)
+      return res.status(400).json({ success:false, message:'Không được dùng lại mật khẩu mặc định' });
+    if (new_password === old_password)
+      return res.status(400).json({ success:false, message:'Mật khẩu mới phải khác mật khẩu hiện tại' });
     const hash = await bcrypt.hash(new_password, 10);
-    await db.query('UPDATE users SET password=? WHERE id=?', [hash, req.user.id]);
+    await db.query('UPDATE users SET password=?, must_change_password=0 WHERE id=?', [hash, req.user.id]);
+    invalidateUser(req.user.id); // gỡ chặn ngay, không chờ cache 15 giây
     // Đăng xuất các thiết bị khác (nếu mật khẩu cũ bị lộ, kẻ gian không gia hạn được phiên)
     await db.query('DELETE FROM refresh_tokens WHERE user_id=?', [req.user.id]);
     await logActivity({

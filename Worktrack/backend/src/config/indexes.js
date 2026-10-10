@@ -1,6 +1,4 @@
-// Đảm bảo DB có đúng các index cần cho hiệu năng — chạy mỗi lần server khởi
-// động, an toàn khi chạy lại nhiều lần (chỉ thêm/xóa khi cần). Nhờ vậy DB mới
-// tạo từ db-init/*.sql hay DB cũ đều được cập nhật giống nhau.
+// Đảm bảo DB có đúng các index cần cho hiệu năng
 const db = require('./db');
 
 // Index còn thiếu
@@ -9,6 +7,8 @@ const ADD = [
   ['refresh_tokens', 'idx_rt_token', '(token)'],
   // Danh sách thông báo: WHERE user_id=? ORDER BY id DESC
   ['notifications', 'idx_notif_user_id', '(user_id, id)'],
+  // daily_entries là bảng lớn nhanh nhất
+  ['daily_entries', 'idx_de_date_user', '(work_date, user_id)'],
 ];
 
 // Index trùng lặp hoàn toàn với index khác — chỉ làm chậm INSERT/UPDATE
@@ -62,6 +62,13 @@ const TABLES = [
      INDEX idx_ddo_date (work_date),
      CONSTRAINT fk_ddo_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  // Ngày nghỉ lễ của CÔNG TY (Admin đặt, áp dụng cho mọi người) — 1 dòng / ngày
+  `CREATE TABLE IF NOT EXISTS company_holidays (
+     work_date   DATE NOT NULL PRIMARY KEY,
+     name        VARCHAR(120) NOT NULL,
+     created_by  INT NULL,
+     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 async function ensureIndexes() {
@@ -71,7 +78,7 @@ async function ensureIndexes() {
     const [colRows] = await db.query(
       `SELECT table_name AS t, column_name AS c, is_nullable AS n FROM information_schema.columns
         WHERE table_schema=DATABASE() AND (table_name, column_name) IN
-              (('daily_entries','start_time'), ('request_task_assignees','score'), ('activity_logs','actor_id'))`);
+              (('daily_entries','start_time'), ('daily_entries','span_start'), ('users','must_change_password'), ('request_task_assignees','score'), ('request_task_assignees','added_late'), ('activity_logs','actor_id'))`);
     const col = (t, c) => colRows.find(r => (r.t || r.TABLE_NAME) === t && (r.c || r.COLUMN_NAME) === c);
 
     // DB cũ: ghi chú công việc không cần giờ nữa → cho phép start_time/end_time để trống
@@ -81,14 +88,31 @@ async function ensureIndexes() {
       console.log('[indexes] daily_entries: giờ bắt đầu/kết thúc → không bắt buộc');
     }
 
+    // Người được thêm vào CV SAU KHI CV đã nộp (chờ chấm / chờ duyệt) → đánh dấu để Manager thấy khi chấm điểm
+    if (!col('request_task_assignees', 'added_late')) {
+      await db.query('ALTER TABLE request_task_assignees ADD COLUMN added_late TINYINT(1) NOT NULL DEFAULT 0');
+      console.log('[indexes] request_task_assignees.added_late → đánh dấu người thêm sau khi nộp');
+    }
+
+    // Bắt đổi mật khẩu mặc định: 1 = chỉ gọi được API đổi mật khẩu (bật khi đăng nhập bằng mật khẩu mặc định)
+    if (!col('users', 'must_change_password')) {
+      await db.query('ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0');
+      console.log('[indexes] users.must_change_password → bắt đổi mật khẩu mặc định');
+    }
+
+    // Việc làm NHIỀU NGÀY: mỗi ngày vẫn là 1 dòng riêng
+    if (!col('daily_entries', 'span_start')) {
+      await db.query('ALTER TABLE daily_entries ADD COLUMN span_start DATE NULL, ADD COLUMN span_end DATE NULL');
+      console.log('[indexes] daily_entries.span_start/span_end → việc làm nhiều ngày');
+    }
+
     // Chấm điểm CV yêu cầu RIÊNG cho từng người thực hiện (NULL = dùng điểm chung của CV)
     if (!col('request_task_assignees', 'score')) {
       await db.query('ALTER TABLE request_task_assignees ADD COLUMN score DECIMAL(4,1) NULL');
       console.log('[indexes] request_task_assignees.score → chấm điểm riêng từng người');
     }
 
-    // Lịch sử thay đổi phải ghi được cả hành động của HỆ THỐNG (VD: tự động chốt
-    // kỳ lúc 0h, không có người thực hiện) → cho phép actor_id = NULL
+    // Lịch sử thay đổi phải ghi được cả hành động của HỆ THỐNG
     if (col('activity_logs', 'actor_id')?.n === 'NO') {
       await db.query('ALTER TABLE activity_logs MODIFY actor_id INT NULL');
       console.log('[indexes] activity_logs.actor_id → cho phép NULL (hành động hệ thống)');

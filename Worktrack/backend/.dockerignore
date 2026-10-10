@@ -1,0 +1,7 @@
+# Không đưa vào image: file người dùng tải lên (đã mount qua volume — không thì mỗi lần build
+# phải chép lại hàng GB), git và log.
+# KHÔNG bỏ qua node_modules: server không ra internet được nên image dùng thẳng thư viện trong source.
+uploads
+src/uploads
+.git
+npm-debug.log

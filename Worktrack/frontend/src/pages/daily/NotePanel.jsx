@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
-import { C, FONT_SANS, FONT_MONO, dmy, scoreColor, initialsOf, OFF_KINDS, idLine, offLabel, isWeekendDate, inputStyle } from './shared';
+import { C, FONT_SANS, FONT_MONO, dmy, addDays, scoreColor, initialsOf, OFF_KINDS, idLine, offLabel, isWeekendDate, inputStyle } from './shared';
 import { Btn, SectionTitle, ErrBox } from './ui';
 
 /* ---------------- 1 dòng công việc trong ghi chú ---------------- */
@@ -46,6 +46,12 @@ function TaskItem({ idx, entry, editable, onChanged }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, lineHeight: 1.45, wordBreak: 'break-word' }}>{entry.title}</div>
         {entry.description && <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.5, whiteSpace: 'pre-wrap', marginTop: 2 }}>{entry.description}</div>}
+        {/* việc làm nhiều ngày: từ ngày – đến ngày của cả đợt */}
+        {entry.span_start && entry.span_end && entry.span_start !== entry.span_end && (
+          <span title={t('wl_multi_day', 'Làm nhiều ngày')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4, padding: '1px 8px', borderRadius: 20, background: C.primarySoft, color: C.primary, fontSize: 11, fontWeight: 700, fontFamily: FONT_MONO, whiteSpace: 'nowrap' }}>
+            📅 {dmy(entry.span_start).slice(0, 5)} → {dmy(entry.span_end).slice(0, 5)}
+          </span>
+        )}
         <ErrBox>{err}</ErrBox>
       </div>
       {editable && (
@@ -64,27 +70,49 @@ function AddTask({ date, onAdded }) {
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [showDesc, setShowDesc] = useState(false);
+  const [endDate, setEndDate] = useState(''); // '' = việc 1 ngày; có giá trị = làm đến ngày này
+  const [showSpan, setShowSpan] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+  const multi = showSpan && endDate > date;
   const add = async () => {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await api.post('/worklog/entries', { work_date: date, title, description: desc });
-      setTitle(''); setDesc(''); setShowDesc(false); setErr(''); onAdded();
+      const r = await api.post('/worklog/entries', { work_date: date, title, description: desc, end_date: multi ? endDate : undefined });
+      const { created = 1, skipped = 0 } = r.data.data || {};
+      setNote(multi ? `${t('wl_span_done', 'Đã ghi vào')} ${created} ${t('wl_days', 'ngày')}${skipped ? ` · ${t('wl_span_skipped', 'bỏ qua')} ${skipped} ${t('wl_span_skipped_why', 'ngày đã chấm / nghỉ')}` : ''}` : '');
+      setTitle(''); setDesc(''); setShowDesc(false); setShowSpan(false); setEndDate(''); setErr(''); onAdded();
     } catch (e) { setErr(e.response?.data?.message || e.message); }
     finally { setBusy(false); }
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
       <div style={{ display: 'flex', gap: 6 }}>
-        <input value={title} maxLength={200} onChange={e => { setTitle(e.target.value); setErr(''); }} onKeyDown={e => e.key === 'Enter' && !showDesc && add()}
+        <input value={title} maxLength={200} onChange={e => { setTitle(e.target.value); setErr(''); }} onKeyDown={e => e.key === 'Enter' && !showDesc && !showSpan && add()}
           placeholder={`＋ ${t('wl_add_ph', 'Thêm công việc đã làm... (Enter để lưu)')}`} className="wl-add-input"
           style={{ ...inputStyle, background: 'var(--wt-surface)', borderStyle: 'dashed' }} />
+        <Btn small onClick={() => { setShowSpan(v => !v); setNote(''); }} title={t('wl_multi_day', 'Làm nhiều ngày')} style={{ padding: '0 10px', ...(showSpan ? { borderColor: C.primary, background: C.primarySoft } : null) }}>📅</Btn>
         <Btn small onClick={() => setShowDesc(v => !v)} title={t('wl_add_detail', 'Thêm chi tiết')} style={{ padding: '0 10px' }}>📝</Btn>
         <Btn small kind="primary" onClick={add} disabled={busy || !title.trim()} style={{ padding: '0 14px' }}>{busy ? '...' : t('wl_add_btn', 'Thêm')}</Btn>
       </div>
+      {/* Việc làm nhiều ngày: ngày bắt đầu = ngày đang mở, chọn ngày kết thúc */}
+      {showSpan && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 10px', borderRadius: 10, background: C.primarySoft, border: `1px solid ${C.primary}33` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, fontWeight: 700, color: C.ink }}>
+            <span style={{ color: C.sub, fontWeight: 600 }}>{t('wl_span_start', 'Bắt đầu')}</span>
+            <span style={{ fontFamily: FONT_MONO }}>{dmy(date)}</span>
+            <span style={{ color: C.faint }}>→</span>
+            <span style={{ color: C.sub, fontWeight: 600 }}>{t('wl_span_end', 'Kết thúc')}</span>
+            <input type="date" value={endDate} min={date} max={addDays(date, 30)} onChange={e => setEndDate(e.target.value)}
+              style={{ ...inputStyle, width: 'auto', padding: '5px 8px', fontSize: 12.5, fontWeight: 700 }} />
+          </div>
+          <div style={{ fontSize: 11.5, color: C.sub, lineHeight: 1.45 }}>{t('wl_span_hint', 'Việc sẽ được ghi vào từng ngày làm việc trong khoảng này (bỏ Thứ 7, CN, ngày nghỉ, ngày đã chấm).')}</div>
+        </div>
+      )}
       {showDesc && <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2} placeholder={t('wl_desc_ph', 'Chi tiết / kết quả (không bắt buộc)')} style={{ ...inputStyle, resize: 'vertical', fontSize: 12.5 }} />}
+      {note && <div style={{ fontSize: 12, fontWeight: 700, color: C.success }}>✓ {note}</div>}
       <ErrBox>{err}</ErrBox>
     </div>
   );
@@ -286,8 +314,9 @@ function DayOffBox({ member, date, off, canMark, locked, entryCount, isSelf, onC
 /* ---------------- khung bên phải: ghi chú của 1 ngày ---------------- */
 export default function NotePanel({ day, member, entries, score, off, data, history, onChanged, onClose, isMobile, isSelf }) {
   const { t } = useTranslation();
-  const weekend = isWeekendDate(day.date);
-  // Cuối tuần: mặc định nghỉ — chỉ hiện phần ghi việc khi đã có việc hoặc bấm "Ghi tăng ca"
+  const holiday = (data.holidays || []).find(h => h.work_date === day.date)?.name; // tên ngày lễ công ty (nếu có)
+  const weekend = isWeekendDate(day.date) || !!holiday; // ngày NGHỈ CHUNG: cuối tuần hoặc lễ
+  // Cuối tuần / ngày lễ: mặc định nghỉ — chỉ hiện phần ghi việc khi đã có việc hoặc bấm "Ghi tăng ca"
   const [overtimeOpen, setOvertimeOpen] = useState(false);
   const restDay = weekend && !entries.length && !score && !overtimeOpen;
   const locked = !!score;
@@ -308,7 +337,7 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
           <div style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{isSelf ? `${member.full_name} · ` : ''}{idLine(member) ? `${idLine(member)} · ` : ''}{entries.length} {t('wl_tasks', 'việc')}</div>
         </div>
         {restDay
-          ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: 'var(--wt-surface-3)', color: C.sub }}>🛌 {t('wl_weekend', 'Cuối tuần')}</span>
+          ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: holiday ? 'var(--wt-tint-danger)' : 'var(--wt-surface-3)', color: holiday ? C.danger : C.sub }}>{holiday ? `🎉 ${t('hol_short', 'Nghỉ lễ')}` : `🛌 ${t('wl_weekend', 'Cuối tuần')}`}</span>
           : fullOff
           ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: C.tealSoft, color: C.teal }}>🌴 {t('wl_off_short', 'Nghỉ')}</span>
           : weekend && !locked
@@ -325,8 +354,8 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
 
         {restDay && (
           <div style={{ padding: '22px 18px', borderRadius: 14, border: `1.5px dashed ${C.line}`, background: 'var(--wt-surface-2)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }}>
-            <span style={{ fontSize: 34 }}>🛌</span>
-            <div style={{ fontSize: 14.5, fontWeight: 800, color: C.ink }}>{t('wl_weekend_rest', 'Cuối tuần — mặc định là ngày nghỉ')}</div>
+            <span style={{ fontSize: 34 }}>{holiday ? '🎉' : '🛌'}</span>
+            <div style={{ fontSize: 14.5, fontWeight: 800, color: C.ink }}>{holiday ? `${t('hol_company_off', 'Công ty nghỉ lễ')}: ${holiday}` : t('wl_weekend_rest', 'Cuối tuần — mặc định là ngày nghỉ')}</div>
             {data.can_edit ? (<>
               <div style={{ fontSize: 12.5, color: C.sub, maxWidth: 300 }}>{t('wl_weekend_hint', 'Nếu bạn đi làm tăng ca, hãy ghi lại để được ghi nhận và chấm điểm.')}</div>
               <button onClick={() => setOvertimeOpen(true)} className="wl-btn" style={{
@@ -339,7 +368,7 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
 
         {weekend && !restDay && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 12, background: C.violetSoft, color: C.violet, fontSize: 12.5, fontWeight: 700 }}>
-            <span style={{ fontSize: 18 }}>⏰</span>{t('wl_overtime_banner', 'Ngày tăng ca (cuối tuần) — ghi lại các việc đã làm')}
+            <span style={{ fontSize: 18 }}>⏰</span>{holiday ? `${t('hol_overtime_banner', 'Tăng ca ngày lễ')} (${holiday})` : t('wl_overtime_banner', 'Ngày tăng ca (cuối tuần) — ghi lại các việc đã làm')}
           </div>
         )}
 

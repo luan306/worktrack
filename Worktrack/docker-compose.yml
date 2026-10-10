@@ -2,10 +2,23 @@
 # Đặt file này ở thư mục gốc project (cùng cấp với 2 thư mục backend/ và frontend/)
 version: "3.8"
 
+# Giới hạn log của mỗi container: tối đa 3 file x 10MB, đầy thì Docker tự xóa file cũ nhất.
+# Mặc định Docker KHÔNG giới hạn → chạy vài tháng không cập nhật là log có thể làm đầy đĩa server.
+x-logging: &default-logging
+    driver: json-file
+    options:
+        max-size: "10m"
+        max-file: "3"
+
 services:
     mysql:
+        logging: *default-logging
         image: mysql:8.0
         restart: unless-stopped
+        # Bộ nhớ đệm của MySQL (mặc định của MySQL chỉ 128MB). Dữ liệu nằm gọn trong bộ đệm thì truy vấn
+        # không phải đọc đĩa. Đặt MYSQL_BUFFER_POOL trong file .env theo RAM server: khoảng 25–40% RAM
+        # (server 4GB → 1G, 8GB → 2G–3G). Không đặt thì dùng 256M — an toàn cho mọi server.
+        command: --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-256M}
         environment:
             # App thật của bạn dùng DB_USER=root trực tiếp (không có user MySQL
             # riêng) — nên ở đây chỉ cần set MYSQL_ROOT_PASSWORD, không cần
@@ -19,7 +32,10 @@ services:
             # tức lần đầu tạo container). Muốn chạy lại thì phải xóa volume trước.
             - ./db-init:/docker-entrypoint-initdb.d
         ports:
-            - "3306:3306" # bỏ dòng này nếu không cần truy cập MySQL từ máy host
+            # Chỉ mở cho CHÍNH server (127.0.0.1). Trước đây "3306:3306" mở MySQL (tài khoản root)
+            # cho mọi máy trong mạng. Cần xem DB từ máy khác: dùng SSH tunnel
+            #   ssh -L 3306:127.0.0.1:3306 user@server
+            - "127.0.0.1:3306:3306"
         healthcheck:
             test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
             interval: 5s
@@ -27,6 +43,7 @@ services:
             retries: 10
 
     backend:
+        logging: *default-logging
         build:
             context: ./backend
         restart: unless-stopped
@@ -50,15 +67,17 @@ services:
             # Bind mount thư mục uploads ra ngoài host — sống sót qua mọi lần
             # rebuild/xóa container, và dễ backup riêng (ảnh, file đính kèm, Excel
             # export của tính năng Chốt & Reset).
-            - ./backend/uploads:/app/uploads
+            # ⚠️ Phải trỏ vào /app/src/uploads — nơi code THẬT SỰ ghi file. Trước đây mount vào
+            # /app/uploads trong khi code ghi vào /app/src/uploads → file đính kèm nằm trong
+            # container và MẤT mỗi lần build lại backend.
+            - ./backend/uploads:/app/src/uploads
         expose:
             - "3001" # chỉ expose nội bộ trong network Docker, không ra ngoài trực tiếp
 
     frontend:
+        logging: *default-logging
         build:
-            context: ./frontend
-            args:
-                VITE_API_URL: /api
+            context: ./frontend # chỉ đóng gói frontend/dist đã build sẵn (xem frontend/Dockerfile)
         restart: unless-stopped
         depends_on:
             - backend

@@ -1,11 +1,4 @@
-// src/cron/maintenance.cron.js
-//
-// Bảo trì định kỳ để DB không phình vô hạn theo thời gian:
-//   - Xóa refresh token đã hết hạn (mỗi lần đăng nhập/gia hạn đều tạo 1 dòng
-//     mới, trước đây không bao giờ bị xóa).
-//   - Xóa thông báo ĐÃ ĐỌC cũ hơn NOTIFICATION_KEEP_DAYS ngày (thông báo chưa
-//     đọc luôn được giữ lại).
-// Chạy 03:00 mỗi ngày + 1 lần lúc server khởi động.
+// src/cron/maintenance.cron.js Bảo trì định kỳ để DB không phình vô hạn theo thời gian
 
 const cron = require('node-cron');
 const db   = require('../config/db');

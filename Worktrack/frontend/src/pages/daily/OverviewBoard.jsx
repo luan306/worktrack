@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 import { onRealtime } from '../../lib/socket';
-import { C, FONT_SANS, FONT_MONO, ymd, addDays, dmy, scoreColor, initialsOf, offLabel, weekdayNames, wdOf, mondayOf, monthRange, daysBetween, isWeekendDate, CELL, cellState, inputStyle } from './shared';
+import { C, FONT_SANS, FONT_MONO, ymd, addDays, dmy, scoreColor, initialsOf, offLabel, weekdayNames, wdOf, mondayOf, monthRange, daysBetween, isRestDate, holidayIndex, CELL, cellState, inputStyle } from './shared';
 import { ErrBox } from './ui';
 import DayDetail from './DayDetail';
 
@@ -54,10 +54,11 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
     .sort((a, b) => (a.group_names || '~').localeCompare(b.group_names || '~') || a.full_name.localeCompare(b.full_name));
 
   const cellOf = (u, d) => ov?.cells?.[u.id]?.[d];
+  const holidays = holidayIndex(ov?.holidays); // ngày lễ công ty → coi như cuối tuần
   const rowStats = (u) => {
     let missing = 0, pending = 0;
     days.forEach(d => {
-      const st = cellState(cellOf(u, d), d, today);
+      const st = cellState(cellOf(u, d), d, today, holidays);
       if (st === 'missing') missing++;
       if (st === 'pending' || st === 'overtime') pending++;
     });
@@ -140,7 +141,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
                   {!isMobile && <th style={{ ...th, ...stickyL(W.name, W.msnv, { zIndex: 4, top: 0 }), position: 'sticky' }}>MSNV</th>}
                   {!isMobile && <th style={{ ...th, ...stickyL(W.name + W.msnv, W.dept, { zIndex: 4, top: 0, borderRight: `1px solid ${C.line}` }), position: 'sticky' }}>{t('wl_col_dept', 'Bộ phận')}</th>}
                   {days.map(dd => {
-                    const isT = dd === today, mon = wdOf(dd) === 1, we = isWeekendDate(dd);
+                    const isT = dd === today, mon = wdOf(dd) === 1, we = isRestDate(dd, holidays);
                     return (
                       <th key={dd} style={{ ...th, position: 'sticky', top: 0, zIndex: 3, textAlign: 'center', padding: '6px 2px', minWidth: we ? 32 : 46, background: isT ? C.primary : th.background, color: isT ? '#fff' : we ? `${C.danger}bb` : C.sub, borderLeft: mon ? `2px solid ${C.line}` : 'none', opacity: we && !isT ? .8 : 1 }}>
                         <div style={{ fontSize: 10, opacity: .8 }}>{WDS[wdOf(dd)]}</div>
@@ -170,14 +171,14 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
                       {!isMobile && <td style={{ ...td, ...stickyL(W.name, W.msnv), fontFamily: FONT_MONO, fontSize: 12, color: C.sub }}>{u.username || '—'}</td>}
                       {!isMobile && <td style={{ ...td, ...stickyL(W.name + W.msnv, W.dept), borderRight: `1px solid ${C.line}`, color: C.sub, fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={u.group_names || ''}>{u.group_names || '—'}</td>}
                       {days.map(dd => {
-                        const c = cellOf(u, dd), s = cellState(c, dd, today), on = sel?.userId === u.id && sel?.date === dd;
+                        const c = cellOf(u, dd), s = cellState(c, dd, today, holidays), on = sel?.userId === u.id && sel?.date === dd;
                         const look = s === 'scored' ? { bg: `${scoreColor(c.score, maxScore)}1f`, fg: scoreColor(c.score, maxScore), bd: `${scoreColor(c.score, maxScore)}55` } : CELL[s];
                         const half = c?.off && c.off !== 'full';
                         const tip = [WDF[wdOf(dd)] + ' ' + dmy(dd), c?.off ? `${offLabel(t, c.off)}${c.reason ? ` — ${c.reason}` : ''}` : '', c?.n ? `${c.n} ${t('wl_tasks', 'việc')}` : '', c?.score != null ? `★ ${c.score}/${maxScore}` : ''].filter(Boolean).join(' · ');
                         return (
                           <td key={dd} style={{ ...td, padding: 3, textAlign: 'center', borderLeft: wdOf(dd) === 1 ? `2px solid ${C.lineSoft}` : 'none' }}>
                             <button onClick={() => setSel({ userId: u.id, date: dd })} title={tip} className="wl-cell" style={{
-                              position: 'relative', width: '100%', minWidth: isWeekendDate(dd) ? 26 : 40, height: 32, borderRadius: 8, cursor: 'pointer', fontFamily: FONT_MONO, fontWeight: 800,
+                              position: 'relative', width: '100%', minWidth: isRestDate(dd, holidays) ? 26 : 40, height: 32, borderRadius: 8, cursor: 'pointer', fontFamily: FONT_MONO, fontWeight: 800,
                               fontSize: s === 'scored' ? 12.5 : 11, background: look.bg, color: look.fg, border: `1.5px solid ${on ? C.primary : look.bd}`,
                               boxShadow: on ? `0 0 0 3px ${C.primary}33` : 'none',
                             }}>

@@ -1,5 +1,22 @@
 // services/worklogService.js — truy vấn dùng chung của "Công việc hằng ngày"
 const db = require('../config/db');
+const cache = require('../config/cache');
+const { isWeekend } = require('../utils/date');
+
+/**
+ * Ngày nghỉ lễ của công ty: Map 'YYYY-MM-DD' → tên ngày lễ. Bảng rất nhỏ (vài chục dòng / năm) và
+ * được hỏi ở hầu hết API của "Công việc hằng ngày" → cache cả bảng, xóa cache khi Admin sửa.
+ */
+const holidayMap = () => cache.wrap('wl:holidays', 10 * 60 * 1000, async () => {
+  const [rows] = await db.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d, name FROM company_holidays ORDER BY work_date`);
+  return new Map(rows.map(r => [r.d, r.name]));
+});
+const clearHolidayCache = () => cache.clear('wl:holidays');
+// Ngày NGHỈ CHUNG = cuối tuần hoặc ngày lễ công ty
+const isRestDay = (date, hol) => isWeekend(date) || hol.has(date);
+// Các ngày lễ trong khoảng, dạng mảng cho frontend
+const holidaysBetween = async (from, to) =>
+  [...await holidayMap()].filter(([d]) => d >= from && d <= to).map(([work_date, name]) => ({ work_date, name }));
 
 /**
  * Các ngày CHỜ CHẤM: đã ghi ít nhất 1 việc, chưa có điểm, không nghỉ cả ngày.
@@ -25,4 +42,4 @@ async function pendingScoreDays({ from, to, userIds = null }) {
   return rows.map(r => ({ ...r, n: Number(r.n) }));
 }
 
-module.exports = { pendingScoreDays };
+module.exports = { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };

@@ -19,9 +19,7 @@ const pool = mysql.createPool({
   namedPlaceholders: false,
 });
 
-// Áp dụng cho MỌI connection trong pool. Trước đây users.list() gọi
-// "SET SESSION ..." riêng — nhưng với pool, câu SET và câu SELECT sau đó có thể
-// chạy trên 2 connection KHÁC NHAU nên thiết lập không có tác dụng ổn định.
+// Áp dụng cho MỌI connection trong pool
 pool.on('connection', c => { c.query('SET SESSION group_concat_max_len = 100000'); });
 
 pool.getConnection()

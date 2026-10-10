@@ -74,7 +74,7 @@ function Modal({show,title,onClose,children,width=460}){
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(15,23,41,.5)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(3px)',WebkitBackdropFilter:'blur(3px)'}}
       className="users-backdrop"
-      onClick={e=>e.target===e.currentTarget&&onClose()}>
+      onMouseDown={e=>e.target===e.currentTarget&&onClose()}>
       <div className="users-modal-box" style={{background:C.canvas,borderRadius:18,padding:0,width,maxWidth:'95vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 30px 70px rgba(15,23,41,.35)'}}>
         <div style={{fontSize:15,fontWeight:800,color:C.ink,padding:'18px 22px',display:'flex',alignItems:'center',gap:10,background:'var(--wt-surface)',borderBottom:`1px solid ${C.line}`,fontFamily:FONT_SANS,position:'sticky',top:0}}>
           {title}
@@ -105,10 +105,7 @@ const PERMS = [
 ];
 
 
-// Trích thông báo lỗi THẬT SỰ từ backend (VD: "Leader không có quyền xóa tài
-// khoản admin/manager") thay vì để lọt qua thông báo chung chung của axios
-// (VD: "Request failed with status code 403"). Dùng chung cho MỌI hành động
-// trong trang này để đảm bảo lúc nào cũng báo đúng lý do khi bị từ chối quyền.
+// Trích thông báo lỗi THẬT SỰ từ backend
 const errMsg = (e) => e.response?.data?.message || e.message;
 
 // Nút hành động dạng chip tròn — dùng chung cho các icon trong bảng
@@ -119,8 +116,7 @@ const IconBtn = ({ onClick, title, color, bg, children }) => (
   }}>{children}</button>
 );
 
-// ── Nhập tài khoản: đọc CSV ĐÚNG NHƯ CHỮ (không bao giờ đổi MSNV thành số) ──
-// Hiểu ô có dấu ngoặc kép ("a,b") và kiểu ="019123" mà Excel dùng để giữ số 0.
+// Nhập tài khoản: đọc CSV ĐÚNG NHƯ CHỮ (không bao giờ đổi MSNV thành số)
 function parseCsvLine(line) {
   const out = []; let cur = ''; let q = false;
   for (let i = 0; i < line.length; i++) {
@@ -781,13 +777,12 @@ export default function UsersPage(){
   );
 }
 
-// ── Modal: Thêm user ──
-// currentUserRole: role của người đang thao tác — nếu là 'leader' thì ẩn hẳn dropdown role
-// và luôn khóa cứng role='user' khi gửi lên server (double-check, backend cũng đã chặn).
+// Modal: Thêm user
 function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
   const isLeader = currentUserRole === 'leader';
   const [f,setF]=useState({username:'',email:'',full_name:'',role:'user',password:'',avatar_color:'#3654ff',group_id:''});
+  const [showPw,setShowPw]=useState(false);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
     if(!f.username||!f.full_name||!f.password) return alert(t('users_fill_all'));
@@ -801,7 +796,13 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
           <div style={{flex:'1 1 160px'}}><label style={FL}>MSNV *</label><input style={FI} value={f.username} onChange={e=>s('username',e.target.value)} placeholder="019..."/></div>
         </div>
         <div><label style={FL}>Email *</label><input type="email" style={FI} value={f.email} onChange={e=>s('email',e.target.value)} placeholder="email@smc.com"/></div>
-        <div><label style={FL}>{t('password')} *</label><input type="password" style={FI} value={f.password} onChange={e=>s('password',e.target.value)}/></div>
+        <div><label style={FL}>{t('password')} *</label>
+          <div style={{position:'relative'}}>
+            <input type={showPw?'text':'password'} autoComplete="new-password" style={{...FI,paddingRight:44}} value={f.password} onChange={e=>s('password',e.target.value)}/>
+            <button type="button" onClick={()=>setShowPw(v=>!v)} title={showPw?t('pw_hide','Ẩn mật khẩu'):t('pw_show','Hiện mật khẩu')} aria-label={showPw?t('pw_hide','Ẩn mật khẩu'):t('pw_show','Hiện mật khẩu')} aria-pressed={showPw}
+              style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',width:32,height:32,border:'none',background:'none',cursor:'pointer',fontSize:16,lineHeight:1,borderRadius:8,opacity:showPw?1:.65}}>{showPw?'🙈':'👁'}</button>
+          </div>
+        </div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
           {/* Leader không thấy dropdown role — luôn tạo với quyền 'user' */}
           {!isLeader && (
@@ -833,11 +834,7 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
   );
 }
 
-// ── Modal: Sửa user ──
-// currentUserRole: nếu là 'leader', cũng ẩn dropdown role như AddUserModal.
-// ⚠️ MỚI: thêm ô sửa MSNV (username) — trước đây modal này không cho sửa
-// MSNV, giờ cho sửa được, gửi kèm trong payload lúc Lưu (backend cũng cần
-// hỗ trợ nhận field username, xem users.controller.js).
+// Modal: Sửa user
 function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
   const isLeader = currentUserRole === 'leader';

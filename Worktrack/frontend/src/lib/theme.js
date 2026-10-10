@@ -1,5 +1,4 @@
-// Chế độ sáng / tối — lưu trên trình duyệt ('light' | 'dark'); chưa chọn thì theo hệ điều hành.
-// <html data-theme> đã được đặt sẵn trong index.html trước khi vẽ trang (không chớp trắng).
+// Chế độ sáng / tối — lưu trên trình duyệt
 import { useSyncExternalStore } from 'react';
 
 const KEY = 'wt_theme';

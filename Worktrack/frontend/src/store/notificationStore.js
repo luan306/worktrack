@@ -1,6 +1,4 @@
-// store/notificationStore.js
-//
-// Theo đúng pattern authStore (zustand) đang dùng trong project.
+// store/notificationStore.js Theo đúng pattern authStore
 import { create } from 'zustand';
 import api from '../api/client';
 import { getSocket, disconnectSocket } from '../lib/socket';

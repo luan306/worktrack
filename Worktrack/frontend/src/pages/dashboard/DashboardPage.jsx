@@ -92,11 +92,7 @@ export default function DashboardPage() {
     finally { setLoading(false); }
   };
 
-  // Tải file Excel qua endpoint GET /dashboard/excel/:filename (dùng res.download()
-  // ở server, không phải static '/uploads/...'). Gọi qua chính `api` (đã có sẵn
-  // auth header/cookie) và nhận về dạng blob, thay vì gắn thẳng URL vào <a> —
-  // tránh bị 401/403 nếu API cần token mà request trực tiếp qua <a href> không
-  // gửi kèm được.
+  // Tải file Excel qua endpoint GET /dashboard/excel/:filename
   const downloadExcelFile = async (filename) => {
     const fileRes = await api.get(`/dashboard/excel/${filename}`, { responseType: 'blob' });
     const blobUrl = window.URL.createObjectURL(new Blob([fileRes.data]));
@@ -110,8 +106,6 @@ export default function DashboardPage() {
   };
 
   // Nút "📤 Xuất Excel" ở topbar — mở modal liệt kê TẤT CẢ các kỳ đã CHỐT
-  // (GET /dashboard/exports) để người dùng chọn kỳ muốn tải lại báo cáo.
-  // KHÔNG chốt/reset điểm gì cả — khác hẳn nút "🔒 Chốt & Reset" bên cạnh.
   const openExportList = async () => {
     setShowExportList(true);
     setLoadingExportList(true);
@@ -497,7 +491,7 @@ export default function DashboardPage() {
       {/* ── Modal: Chọn kỳ để xuất Excel ── */}
       {showExportList && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,41,.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
-          onClick={e => e.target === e.currentTarget && setShowExportList(false)}>
+          onMouseDown={e=>e.target===e.currentTarget&&setShowExportList(false)}>
           <div className="dash-modal-nopad" style={{ background: C.surface, borderRadius: 18, width: 460, maxWidth: '92vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 70px rgba(15,23,41,.3)', overflow: 'hidden' }}>
 
             {/* Header */}
@@ -547,7 +541,7 @@ export default function DashboardPage() {
       {/* ── Modal: Chốt & Reset ── */}
       {showLock && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,41,.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
-          onClick={e => e.target === e.currentTarget && setShowLock(false)}>
+          onMouseDown={e=>e.target===e.currentTarget&&setShowLock(false)}>
           <div className="dash-modal" style={{ background: C.surface, borderRadius: 18, padding: 32, width: 420, maxWidth: '92vw', boxShadow: '0 30px 70px rgba(15,23,41,.3)', textAlign: 'center' }}>
             <div style={{ width:72, height:72, borderRadius:'50%', background:C.dangerSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 34, margin:'0 auto 16px' }}>🔒</div>
             <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, marginBottom: 10 }}>{t('dash_lock_title')}</div>
@@ -590,22 +584,17 @@ export default function DashboardPage() {
   );
 }
 
-// ══════════════════════════════════════
 // Modal: Chi tiết NV
-// ══════════════════════════════════════
 function DetailModal({ s, onClose }) {
   const { t } = useTranslation();
   const ini = s.user.full_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
-  // Danh sách CV thật (tên từng CV) mà người này làm Chính / Hỗ trợ —
-  // KHÔNG tải ngay khi mở modal (tránh gọi API + lọc toàn bộ CV công ty mỗi lần
-  // xem 1 người). Chỉ tải 1 lần duy nhất khi người dùng bấm mở rộng lần đầu.
+  // Danh sách CV thật (tên từng CV) mà người này làm Chính / Hỗ trợ
   const [myRequests,     setMyRequests]     = useState(null); // null = chưa tải
   const [loadingReq,     setLoadingReq]     = useState(false);
   const [showMainList,   setShowMainList]   = useState(false);
   const [showSupportList,setShowSupportList]= useState(false);
-  // Giới hạn số dòng render mỗi lần — có "Xem thêm" thay vì đẩy hết hàng trăm
-  // dòng vào DOM cùng lúc.
+  // Giới hạn số dòng render mỗi lần
   const PAGE = 20;
   const [mainShown,    setMainShown]    = useState(PAGE);
   const [supportShown, setSupportShown] = useState(PAGE);
@@ -613,8 +602,7 @@ function DetailModal({ s, onClose }) {
   const ensureLoaded = () => {
     if (myRequests !== null || loadingReq) return; // đã tải rồi hoặc đang tải dở
     setLoadingReq(true);
-    // Lọc ở server (assigned_to) thay vì tải toàn bộ CV công ty rồi lọc ở trình
-    // duyệt; include_archived=1 để thấy cả CV đã lưu trữ (vẫn được tính điểm).
+    // Lọc ở server (assigned_to) thay vì tải toàn bộ CV công ty rồi lọc ở trình duyệt
     api.get('/requests', { params: { assigned_to: s.user.id, include_archived: 1 } }).then(r => {
       setMyRequests(r.data.data || []);
     }).catch(() => setMyRequests([])).finally(() => setLoadingReq(false));
@@ -631,7 +619,7 @@ function DetailModal({ s, onClose }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,41,.5)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
-      onClick={e => e.target === e.currentTarget && onClose()}>
+      onMouseDown={e=>e.target===e.currentTarget&&onClose()}>
       <div className="dash-modal-nopad" style={{ background: C.surface, borderRadius: 18, width: 580, maxWidth: '92vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 70px rgba(15,23,41,.3)', overflow: 'hidden' }}>
 
         {/* Header — dark control-panel gradient, đồng bộ với header bảng chấm điểm DailyPage */}

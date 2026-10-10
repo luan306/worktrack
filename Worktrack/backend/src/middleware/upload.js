@@ -5,9 +5,7 @@ const fs     = require('fs');
 const uploadDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-// Đuôi file chạy được trong trình duyệt / hệ điều hành — chặn để không ai tải
-// lên trang HTML/SVG chứa mã độc rồi gửi link cho người khác mở (đánh cắp
-// token đăng nhập), hoặc phát tán file thực thi qua hệ thống.
+// Đuôi file chạy được trong trình duyệt / hệ điều hành
 const BLOCKED_EXT = new Set([
   '.html', '.htm', '.xhtml', '.shtml', '.svg', '.svgz', '.xml', '.xsl', '.js', '.mjs', '.jsp', '.php',
   '.exe', '.msi', '.bat', '.cmd', '.com', '.scr', '.ps1', '.vbs', '.vbe', '.wsf', '.hta', '.jar', '.sh', '.dll', '.lnk',

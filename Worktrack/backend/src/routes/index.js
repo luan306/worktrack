@@ -21,8 +21,7 @@ router.post('/auth/logout',  aC.logout);
 router.get ('/auth/me',      auth(), aC.me);
 router.post('/auth/change-password', auth(), aC.changePassword);
 
-// Mọi thao tác ghi vào nhóm / người dùng làm danh sách nhóm (có kèm thành viên)
-// đang cache bị cũ → xóa cache trước khi xử lý và sau khi xử lý xong.
+// Mọi thao tác ghi vào nhóm / người dùng làm danh sách nhóm
 const clearGroupCache = (req, res, next) => {
   if (req.method === 'GET') return next();
   cache.clear('grp:');
@@ -53,9 +52,7 @@ router.delete('/groups/:id/members/:userId', auth(['admin','manager','leader']),
 router.get('/daily/board',                    auth(),                          dC.getBoardData);
 router.get('/daily/page-data',                auth(),                          dC.getPageData);
 router.get('/daily/logs/week',                auth(),                          dC.getWeekLogs);
-// ⚠️ MỚI — lịch sử ghi chú của ĐÚNG 1 ô (task+người+ngày), dùng cho panel 📝
-// bên trong DailyPage.jsx. Phải đứng TRƯỚC '/daily/logs' vì không xung đột
-// path nhưng để cùng nhóm static route cho dễ theo dõi.
+// ⚠️ MỚI — lịch sử ghi chú của ĐÚNG 1 ô
 router.get('/daily/note-history',             auth(),                          dC.getNoteHistory);
 router.get('/daily/logs',                     auth(),                          dC.getLogs);
 router.post('/daily/logs',                    auth(['admin','manager','leader']), dC.saveLogs);
@@ -68,8 +65,7 @@ router.post  ('/daily/task-groups/:groupId/tasks', auth(['admin','manager','lead
 router.put   ('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.updateTask);
 router.delete('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.deleteTask);
 
-// ── Công việc hằng ngày (user tự ghi việc, Leader chấm cả ngày) ──
-// Phân quyền chi tiết (xem ai / chấm ai) kiểm tra trong controller
+// Công việc hằng ngày (user tự ghi việc, Leader chấm cả ngày)
 router.get   ('/worklog/members',       auth(), wlC.members);
 router.get   ('/worklog',               auth(), wlC.week);
 router.post  ('/worklog/entries',       auth(), wlC.createEntry);
@@ -82,6 +78,9 @@ router.delete('/worklog/offs',          auth(), wlC.removeDayOff);
 router.get   ('/worklog/export',        auth(), wlC.exportReport);
 router.get   ('/worklog/overview',      auth(), wlC.overview);
 router.get   ('/worklog/pending',       auth(), wlC.pending);
+router.get   ('/worklog/holidays',      auth(), wlC.listHolidays);
+router.put   ('/worklog/holidays',      auth(['admin']), wlC.setHolidays);
+router.delete('/worklog/holidays',      auth(['admin']), wlC.removeHolidays);
 
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);
@@ -93,11 +92,9 @@ router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
 router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);
 router.put   ('/requests/:id/assign/:userId/role', auth(), rC.setAssigneeRole);
 router.post  ('/requests/:id/claim',          auth(), rC.claim);
-// ⚠️ Thêm upload.single('file') để đọc được multipart/form-data khi frontend gửi kèm tệp đính kèm.
-// Không có middleware này thì req.file/req.body luôn rỗng với request dạng multipart → lỗi 400 "content required".
+// ⚠️ Thêm upload.single('file') để đọc được multipart/form-data khi frontend gửi kèm tệp đính kèm
 router.post  ('/requests/:id/comments',       auth(), upload.single('file'), rC.addComment);
-// Chấm điểm trực tiếp, bỏ qua luồng scoring → reviewing → done (frontend không dùng)
-// → chỉ Manager/Admin, tránh Leader tự chấm điểm cho CV của mình qua API
+// Chấm điểm trực tiếp, bỏ qua luồng scoring
 router.post  ('/requests/:id/score',          auth(['admin','manager']), rC.score);
 router.delete('/requests/:id',                auth(), rC.remove);
 
@@ -105,8 +102,7 @@ router.delete('/requests/:id',                auth(), rC.remove);
 router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
 router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
 
-// ── Dashboard ── ai đăng nhập cũng xem được bảng điểm;
-// Export Excel / Lock & Reset chỉ admin/manager
+// Dashboard
 router.get ('/dashboard/debug',              auth(['admin','manager']), dbC.debug);
 router.get ('/dashboard/scores',             auth(), dbC.getScores);
 router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);

@@ -1,8 +1,7 @@
 const db    = require('../config/db');
 const cache = require('../config/cache');
 
-// GET /activity-logs — quyền admin/manager được chặn ở route (auth(['admin','manager']))
-// Query: page, limit, action_type, entity_type, actor_id, from, to (YYYY-MM-DD)
+// GET /activity-logs — quyền admin/manager được chặn ở route
 exports.list = async (req, res) => {
   try {
     const { page = 1, limit = 30, action_type, entity_type, actor_id, from, to } = req.query;
@@ -18,8 +17,7 @@ exports.list = async (req, res) => {
     if (from)        { where += ' AND al.created_at>=?'; params.push(`${from} 00:00:00`); }
     if (to)          { where += ' AND al.created_at<=?'; params.push(`${to} 23:59:59`); }
 
-    // COUNT(*) trên bảng log hàng triệu dòng tốn thời gian → cache 30s theo bộ lọc
-    // (lật trang không phải đếm lại; tổng số trễ tối đa 30s là chấp nhận được)
+    // COUNT(*) trên bảng log hàng triệu dòng tốn thời gian
     const [cnt, [rows]] = await Promise.all([
       cache.wrap('al:count:' + JSON.stringify(params) + where, 30000,
         async () => (await db.query(`SELECT COUNT(*) as cnt FROM activity_logs al ${where}`, params))[0][0].cnt),
@@ -37,14 +35,7 @@ exports.list = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// GET /activity-logs/action-types — danh sách các loại hành động đang có trong
-// DB, để đổ vào dropdown lọc bên frontend mà không cần hardcode.
-// ⚠️ TỐI ƯU: danh sách này gần như KHÔNG ĐỔI (chỉ tăng khi thêm tính năng mới
-// vào code, không phải khi có thêm dữ liệu) — trước đây mỗi lần mở trang Lịch
-// sử là 1 lần SELECT DISTINCT quét TOÀN BỘ bảng activity_logs, càng nhiều bản
-// ghi thì càng chậm dù kết quả gần như luôn giống lần trước. Cache 5 phút để
-// không phải quét lại liên tục — dữ liệu vẫn tự cập nhật đúng, chỉ trễ tối đa
-// 5 phút nếu vừa có action_type mới tinh xuất hiện lần đầu.
+// GET /activity-logs/action-types
 exports.listActionTypes = async (req, res) => {
   try {
     const cKey = 'activitylog:action-types';

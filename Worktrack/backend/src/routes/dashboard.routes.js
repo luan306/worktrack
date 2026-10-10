@@ -4,9 +4,7 @@ const express = require('express');
 const router  = express.Router();
 const dashboardController = require('../controllers/dashboard.controller');
 
-// Middleware xác thực dùng chung của dự án — LÀ FACTORY FUNCTION, phải gọi
-// auth() (có dấu ngoặc) chứ không truyền thẳng auth trần vào route, nếu không
-// middleware thật sẽ không bao giờ chạy → request bị treo vô thời hạn.
+// Middleware xác thực dùng chung của dự án
 const auth = require('../middleware/auth');
 
 // GET /api/dashboard/scores — bảng xếp hạng điểm theo view (day/week/month/all) — ai cũng xem được

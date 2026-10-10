@@ -10,15 +10,12 @@ const { logActivity } = require('../services/activityLogService');
 
 const UPLOADS_DIR = path.join(__dirname, '../uploads');
 
-// CV được tính điểm = đã duyệt hoàn thành. Sau 6 ngày CV 'done' bị tự chuyển
-// sang 'archived' (xem requests.controller.js) nhưng VẪN phải giữ điểm — trước
-// đây chỉ lọc status='done' nên điểm YC biến mất khỏi Dashboard sau 6 ngày.
+// CV được tính điểm = đã duyệt hoàn thành
 const SCORED = "rt.status IN ('done','archived')";
 
 const EPOCH = '2000-01-01 00:00:00'; // dự phòng khi chưa có kỳ nào đang mở
 
-// Kỳ đang mở + mốc bắt đầu dạng chuỗi 'YYYY-MM-DD HH:MM:SS' (lấy thẳng từ
-// MySQL để không bị lệch múi giờ khi Node chuyển Date qua lại).
+// Kỳ đang mở + mốc bắt đầu dạng chuỗi 'YYYY-MM-DD HH:MM:SS'
 async function getOpenPeriod(q = db, forUpdate = false) {
   const [[period]] = await q.query(
     `SELECT *, DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at_str
@@ -27,9 +24,7 @@ async function getOpenPeriod(q = db, forUpdate = false) {
   return period;
 }
 
-// ⚠️ LEFT JOIN group_members (không phải JOIN): user chưa được xếp nhóm vẫn
-// hiện khi xem "Tất cả"; khi có group_id thì gm.group_id=NULL tự bị loại.
-// Admin/Manager là người chấm & duyệt, không phải người được chấm → không xếp hạng.
+// ⚠️ LEFT JOIN group_members (không phải JOIN)
 async function getMembers(groupId, q = db) {
   let sql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.role
                FROM users u
@@ -41,17 +36,13 @@ async function getMembers(groupId, q = db) {
   return rows;
 }
 
-// Toàn bộ số liệu điểm của nhiều nhân viên trong 2 câu SQL chạy song song:
-// điểm trong khoảng xem (range) + cộng dồn từ đầu kỳ (period) + số CV.
-// Tốc độ không phụ thuộc số nhân viên. Trả về hàm tra cứu theo user_id.
+// Toàn bộ số liệu điểm của nhiều nhân viên trong 2 câu SQL chạy song song
 async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart, groupId }) {
   // Cùng định dạng 'YYYY-MM-DD HH:MM:SS' nên so sánh chuỗi = so sánh thời gian
   const lower = rangeStart < periodStart ? rangeStart : periodStart;
   const periodDay = periodStart.slice(0, 10);
 
-  // Điểm Daily = điểm Leader chấm CẢ NGÀY trong Công việc hằng ngày (daily_day_scores)
-  //   + điểm Daily kiểu cũ (daily_task_logs) còn lại trong kỳ lúc đổi giao diện.
-  // "CV hằng ngày" = số việc đã ghi trong Công việc hằng ngày + việc Daily cũ đã làm.
+  // Điểm Daily = điểm Leader chấm CẢ NGÀY trong Công việc hằng ngày
   const lowerDay = lower.slice(0, 10);
   let oldDaily = `
         SELECT dtl.user_id, dtl.log_date AS d, dtl.score, dtl.is_done AS n
@@ -132,8 +123,7 @@ exports.getScores = async (req, res) => {
     const { group_id, view = 'week', date } = req.query;
     const [start, end] = getRange(view, date || localDate());
 
-    // Bảng điểm giống nhau với mọi người xem → cache 30s + gộp request trùng.
-    // Bị xóa ngay khi có chấm điểm Daily / đổi trạng thái CV / chốt kỳ.
+    // Bảng điểm giống nhau với mọi người xem
     const cKey = 'dash:scores:' + JSON.stringify([group_id || '', view, start, end]);
     await sendCachedJson(req, res, cKey, 30000, async () => {
     const [openPeriod, members] = await Promise.all([getOpenPeriod(), getMembers(group_id)]);
@@ -175,9 +165,7 @@ exports.getScores = async (req, res) => {
   }
 };
 
-// Chốt kỳ, xuất Excel, reset — dùng chung cho nút bấm tay và cron tự động.
-// Toàn bộ chạy trong 1 transaction; SELECT ... FOR UPDATE để 2 lần bấm chốt
-// cùng lúc không tạo ra 2 kỳ mới / 2 file Excel.
+// Chốt kỳ, xuất Excel, reset — dùng chung cho nút bấm tay và cron tự động
 async function performLockAndReset(group_id, lockedByUserId) {
   const conn = await db.getConnection();
   let excelFile = null;
@@ -263,8 +251,7 @@ async function performLockAndReset(group_id, lockedByUserId) {
       [lockedByUserId || null, filename, period.id]
     );
 
-    // Reset: xóa daily_task_logs + điểm YC. Điểm YC của kỳ mới luôn tính từ
-    // started_at của kỳ, nên CV kỳ cũ (kể cả archived) không bị cộng lại.
+    // Reset: xóa daily_task_logs + điểm YC
     const [delDaily] = await conn.query('DELETE FROM daily_task_logs');
     await conn.query(`UPDATE request_task_assignees rta JOIN request_tasks rt ON rt.id=rta.task_id
                          SET rta.score=NULL WHERE rt.status='done'`);
@@ -279,8 +266,7 @@ async function performLockAndReset(group_id, lockedByUserId) {
     await conn.commit();
     cache.clear('req:'); cache.clear('dash:'); // điểm vừa bị reset → cache đã cũ
 
-    // 📝 Lịch sử thay đổi — thao tác ảnh hưởng điểm của TẤT CẢ mọi người.
-    // Lưu kèm điểm từng người lúc chốt để tra lại được sau khi đã reset.
+    // 📝 Lịch sử thay đổi — thao tác ảnh hưởng điểm của TẤT CẢ mọi người
     const [[actor]] = lockedByUserId
       ? await db.query('SELECT full_name FROM users WHERE id=?', [lockedByUserId]) : [[null]];
     await logActivity({

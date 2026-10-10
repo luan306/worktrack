@@ -1,5 +1,5 @@
 // Công việc hằng ngày — nút, ô nhập, khung lỗi và các kiểu panel chi tiết dùng chung
-import { C, FONT_SANS } from './shared';
+import { C, FONT_SANS, initialsOf } from './shared';
 
 // Tablet: panel chi tiết trượt đè lên bên phải thay vì chen ngang làm bảng bị hẹp
 export const OverlayPanel = ({ onClose, children, width = 460 }) => (
@@ -37,3 +37,16 @@ export const SectionTitle = ({ icon, children, right }) => (
   </div>
 );
 export const ErrBox = ({ children }) => children ? <div style={{ fontSize: 12.5, color: C.danger, background: C.dangerSoft, padding: '8px 11px', borderRadius: 9 }}>⚠ {children}</div> : null;
+
+// Avatar nhỏ chồng nhau của những người nghỉ trong nhóm (tối đa `max`, còn lại "+n")
+export const OffAvatars = ({ people, max = 3, size = 18 }) => (
+  <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+    {people.slice(0, max).map((o, i) => (
+      <span key={o.user_id} style={{
+        width: size, height: size, borderRadius: '50%', marginLeft: i ? -5 : 0, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: o.avatar_color || C.teal, color: '#fff', fontSize: size * .5, fontWeight: 800, border: '1.5px solid var(--wt-surface)', opacity: o.kind === 'full' ? 1 : .75,
+      }}>{initialsOf(o.full_name)}</span>
+    ))}
+    {people.length > max && <span style={{ marginLeft: 3, fontSize: 10, fontWeight: 800, color: C.teal }}>+{people.length - max}</span>}
+  </span>
+);

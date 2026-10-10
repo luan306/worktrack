@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
-import NotificationBell from '../../components/NotificationBell';
+import NotificationBell from '../../components/Notificationbell';
 import NotificationToast from '../../components/NotificationToast';
 
 /* ============================================================
@@ -180,10 +180,7 @@ export function MainLayout() {
   );
 }
 
-// Route guard dùng trong file khai báo <Routes> (App.jsx hoặc tương tự), ví dụ:
-//   <Route element={<ProtectedRoute roles={['admin','manager']} />}>
-//     <Route path="/dashboard" element={<DashboardPage/>} />
-//   </Route>
+// Route guard dùng trong file khai báo <Routes>
 export function ProtectedRoute({ roles = [] }) {
   const { t } = useTranslation();
   const { authenticated, loading, user } = useAuthStore();

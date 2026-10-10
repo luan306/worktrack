@@ -1,5 +1,4 @@
-// Panel chi tiết 1 ngày của 1 người BẤT KỲ (dùng ở Bảng tổng hợp và hộp "Chờ chấm"):
-// tự tải dữ liệu tuần + lịch sử chấm của ô đang chọn rồi hiện NotePanel đúng kiểu thiết bị.
+// Panel chi tiết 1 ngày của 1 người BẤT KỲ
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';

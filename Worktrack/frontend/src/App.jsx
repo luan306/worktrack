@@ -13,7 +13,7 @@ const CompletedPage   = lazy(() => import('./pages/completed/CompletedPage'));
 const DashboardPage   = lazy(() => import('./pages/dashboard/DashboardPage'));
 const UsersPage       = lazy(() => import('./pages/users/UsersPage'));
 const ProfilePage     = lazy(() => import('./pages/profile/ProfilePage.jsx'));
-const ActivityLogPage = lazy(() => import('./pages/activity/ActivityLogPage'));
+const ActivityLogPage = lazy(() => import('./pages/activity/Activitylogpage'));
 const NotFoundPage    = lazy(() => import('./pages/NotFoundPage'));
 
 const queryClient = new QueryClient({

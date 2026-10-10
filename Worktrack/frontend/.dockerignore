@@ -1,0 +1,5 @@
+# Image chỉ cần dist + nginx.conf
+node_modules
+src
+public
+.git

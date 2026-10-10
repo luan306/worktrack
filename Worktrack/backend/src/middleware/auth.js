@@ -12,25 +12,25 @@ setInterval(() => {
   for (const [t, exp] of revoked) if (exp < now) revoked.delete(t);
 }, 60 * 60 * 1000).unref();
 
-// ── Trạng thái user đọc từ DB (cache ngắn) ──
-// Không tin role/is_active ghi trong token: token sống 8h, nếu chỉ đọc từ token
-// thì user bị KHÓA hoặc bị HẠ QUYỀN vẫn dùng quyền cũ tới khi token hết hạn.
+// Trạng thái user đọc từ DB (cache ngắn)
 const USER_TTL = 15 * 1000;
 const userCache = new Map();
 async function loadUser(id) {
   const hit = userCache.get(id);
   if (hit && hit.exp > Date.now()) return hit.user;
-  const [[user]] = await db.query(
-    'SELECT id, username, full_name, role, is_active FROM users WHERE id=?', [id]
-  );
+  // SELECT * rồi chỉ giữ các cột cần
+  const [[row]] = await db.query('SELECT * FROM users WHERE id=?', [id]);
+  const user = row && {
+    id: row.id, username: row.username, full_name: row.full_name, role: row.role, is_active: row.is_active,
+    must_change_password: !!row.must_change_password,
+  };
   userCache.set(id, { user, exp: Date.now() + USER_TTL });
   return user;
 }
 // Gọi sau khi sửa/khóa/xóa user để thay đổi có hiệu lực ngay
 const invalidateUser = (id) => userCache.delete(+id);
 
-// Xác thực access token — dùng chung cho HTTP và Socket.IO.
-// Trả về user hiện tại trong DB, hoặc ném lỗi có .status.
+// Xác thực access token — dùng chung cho HTTP và Socket.IO
 async function verifyAccessToken(token) {
   const fail = (message) => Object.assign(new Error(message), { status: 401 });
   if (!token) throw fail('No token');
@@ -50,12 +50,18 @@ async function verifyAccessToken(token) {
   return user;
 }
 
+// Tài khoản còn mật khẩu mặc định chỉ được gọi: xem thông tin mình + đổi mật khẩu (đăng xuất không cần token)
+const PASSWORD_CHANGE_OK = /\/auth\/(me|change-password)(\?|$)/;
+
 const auth = (roles = []) => async (req, res, next) => {
   const h = req.headers.authorization;
   const token = h?.startsWith('Bearer ') ? h.slice(7) : null;
   try {
     const user = await verifyAccessToken(token);
-    req.user = { id: user.id, username: user.username, full_name: user.full_name, role: user.role };
+    req.user = { id: user.id, username: user.username, full_name: user.full_name, role: user.role, must_change_password: user.must_change_password };
+    // Chặn ở SERVER, không chỉ ở giao diện: ai gọi thẳng API bằng token cũng không lách được
+    if (user.must_change_password && !PASSWORD_CHANGE_OK.test(req.originalUrl))
+      return res.status(403).json({ success: false, code: 'PASSWORD_CHANGE_REQUIRED', message: 'Bạn cần đổi mật khẩu mặc định trước khi tiếp tục sử dụng hệ thống' });
     if (roles.length && !roles.includes(user.role))
       return res.status(403).json({ success: false, message: 'Forbidden' });
     next();

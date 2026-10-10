@@ -4,9 +4,7 @@ const db = require('../config/db');
 // Map entity_type -> đường dẫn frontend để click thông báo là nhảy đúng chỗ
 const ENTITY_LINK = {
   request: (id) => `/requests?id=${id}`,
-  // ⚠️ Nhảy thẳng tới ĐÚNG nhóm + ĐÚNG ngày + ĐÚNG công việc thay vì chỉ mở
-  // trang Daily chung chung — cần groupId/logDate được gửi kèm trong payload
-  // lúc gọi notify() (xem daily.controller.js).
+  // ⚠️ Nhảy thẳng tới ĐÚNG nhóm + ĐÚNG ngày + ĐÚNG công việc thay vì chỉ mở trang Daily chung chung
   daily_task: (id, payload = {}) => `/daily?group_id=${payload.groupId||''}&date=${payload.logDate||''}&task_id=${id}`,
   // Công việc hằng ngày: mở đúng người + đúng tuần của ngày được chấm
   worklog: (id, payload = {}) => `/daily?user_id=${id}&date=${payload.workDate || ''}`,

@@ -1,16 +1,10 @@
-// lib/socket.js
-//
-// ⚠️ Nếu WorkTrack đã có sẵn 1 socket client dùng chung ở đâu đó (kiểu như bên
-// MobileAudit.tsx / SMC Inventory), hãy dùng lại socket đó thay vì file này,
-// chỉ cần đảm bảo có join room `user:{id}` (xem INTEGRATION_NOTES.md) và
-// lắng nghe thêm event 'notification:new'.
+// lib/socket.js ⚠️ Nếu WorkTrack đã có sẵn 1 socket client dùng chung ở đâu đó
 import { io } from 'socket.io-client';
 import { clearApiCache } from '../api/client';
 
 let socket = null;
 
-// Server xác định người dùng từ access token (không tin userId client gửi lên).
-// Dùng hàm cho `auth` để mỗi lần reconnect lấy token MỚI NHẤT sau khi refresh.
+// Server xác định người dùng từ access token
 export function getSocket() {
   if (socket?.connected || socket?.active) return socket;
 
@@ -28,12 +22,7 @@ export function disconnectSocket() {
   socket?.disconnect();
   socket = null;
 }
-// Lắng nghe 1 sự kiện realtime rồi gọi handler — GỘP các sự kiện dồn dập và
-// lệch giờ ngẫu nhiên giữa các máy. Không có bước này, mỗi thay đổi làm TẤT
-// CẢ người đang online tải lại cùng 1 lúc (100 người × vài request); duyệt 10
-// CV liên tiếp là hàng nghìn request dồn vào server trong 1 giây.
-// handler nhận MẢNG payload của các sự kiện đã gộp (để trang tự lọc: có liên quan mình không).
-// Trả về hàm hủy đăng ký — dùng thẳng làm cleanup của useEffect.
+// Lắng nghe 1 sự kiện realtime rồi gọi handler
 export function onRealtime(event, handler, { wait = 400, jitter = 1200 } = {}) {
   const s = getSocket();
   let timer = null, batch = [];
@@ -47,5 +36,8 @@ export function onRealtime(event, handler, { wait = 400, jitter = 1200 } = {}) {
     }, wait + Math.random() * jitter);
   };
   s.on(event, listener);
-  return () => { s.off(event, listener); clearTimeout(timer); };
+  // Nối lại được sau khi rớt mạng / máy chủ khởi động lại
+  const onReconnect = () => listener(undefined);
+  s.io.on('reconnect', onReconnect);
+  return () => { s.off(event, listener); s.io.off('reconnect', onReconnect); clearTimeout(timer); };
 }

@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist ĐƯỢC commit: server nội bộ không build được (không có internet) nên dùng bản build sẵn
 dist-ssr
 *.local
 

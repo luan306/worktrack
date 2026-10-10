@@ -47,8 +47,8 @@ export default function ExportDialog({ onClose, refDate, member, members, viewUs
   const label = { fontSize: 11.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase', letterSpacing: .5 };
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(15,23,41,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} className="wl-sheet" style={{ width: 'min(440px, 100%)', background: 'var(--wt-surface)', borderRadius: 18, boxShadow: '0 24px 60px rgba(15,23,41,.25)', overflow: 'hidden' }}>
+    <div onMouseDown={e => e.target === e.currentTarget && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(15,23,41,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div className="wl-sheet" style={{ width: 'min(440px, 100%)', background: 'var(--wt-surface)', borderRadius: 18, boxShadow: '0 24px 60px rgba(15,23,41,.25)', overflow: 'hidden' }}>
         <div style={{ padding: '16px 18px', borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 36, height: 36, borderRadius: 10, background: C.successSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17 }}>📊</span>
           <div style={{ flex: 1 }}>

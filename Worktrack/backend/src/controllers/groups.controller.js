@@ -7,8 +7,7 @@ const getGroup = async (id) => (await db.query(
   'SELECT g.*, u.full_name AS leader_name FROM `groups` g LEFT JOIN users u ON u.id=g.leader_id WHERE g.id=?', [id]))[0][0];
 const userName = async (id) => (await db.query('SELECT full_name FROM users WHERE id=?', [id]))[0][0]?.full_name || `#${id}`;
 
-// Danh sách nhóm giống nhau với mọi người và hầu như mọi trang đều tải →
-// cache dùng chung (bị xóa khi sửa nhóm / thành viên / người dùng — xem routes/index.js)
+// Danh sách nhóm giống nhau với mọi người và hầu như mọi trang đều tải
 exports.list = async (req, res) => {
   try {
     await sendCachedJson(req, res, 'grp:list', 60000, async () => {
@@ -81,11 +80,7 @@ exports.remove = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// Kiểm tra dùng chung cho addMember/removeMember:
-// - Admin/Manager: thao tác được nhóm bất kỳ.
-// - Leader: CHỈ thao tác được nhóm mà chính họ là leader_id — không được
-//   thêm/xóa thành viên ở nhóm khác, kể cả khi họ là leader của 1 nhóm khác.
-// Trả về { ok:true } nếu được phép, { ok:false, message } nếu bị chặn.
+// Kiểm tra dùng chung cho addMember/removeMember
 async function canManageGroupMembers(req) {
   const isPrivileged = ['admin','manager'].includes(req.user.role);
   if (isPrivileged) return { ok: true };

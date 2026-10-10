@@ -3,9 +3,11 @@ import { NavLink, useNavigate, useLocation, Outlet, Navigate } from 'react-route
 import { useTranslation } from 'react-i18next';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
-import NotificationBell from '../NotificationBell';
+import NotificationBell from '../Notificationbell';
 import NotificationToast from '../NotificationToast';
 import useMaxWidth from '../../lib/useMediaQuery';
+import ForceChangePassword from '../../pages/auth/ForceChangePassword';
+import ConnectionBanner from '../ConnectionBanner';
 import ThemeToggle from '../ThemeToggle';
 import usePendingScoreCount from '../../lib/usePendingScoreCount';
 
@@ -240,8 +242,7 @@ export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = f
   );
 
   if (drawer) return aside;
-  // Nút thu gọn / mở rộng nằm NGOÀI <aside> (aside có overflow-hidden nên trước đây
-  // nửa nút lòi ra ngoài mép bị cắt mất) — nổi trên đường viền phải của sidebar
+  // Nút thu gọn / mở rộng nằm NGOÀI <aside>
   return (
     <div className="relative z-40 hidden h-full flex-shrink-0 md:flex">
       {aside}
@@ -369,13 +370,7 @@ export function MainLayout() {
   const badges = { '/daily': pendingScore };
   const { connect, disconnect } = useNotificationStore();
 
-  // ⚠️ KHÔNG disconnect() trong cleanup của effect này — socket dùng CHUNG
-  // cho cả app, và effect này bị React 19 chạy 2 lần trong dev (double-invoke
-  // effects) khiến trước đây cứ disconnect() rồi connect() lại liên tục →
-  // lỗi "WebSocket closed before connection is established" lặp vô hạn.
-  // connect() tự có guard "nếu đã kết nối thì return" nên gọi lại nhiều lần
-  // vô hại — chỉ cần disconnect() đúng 1 lần lúc logout thật sự (xem nút
-  // Đăng xuất bên dưới).
+  // ⚠️ KHÔNG disconnect() trong cleanup của effect này
   useEffect(() => {
     if (!user?.id) return;
     connect(user.id);
@@ -399,6 +394,7 @@ export function MainLayout() {
       <MobileNav badges={badges} />
       {isPhone && drawerUsed && <MobileDrawer open={drawerOpen} onClose={closeDrawer} badges={badges} />}
       <NotificationToast />
+      <ConnectionBanner />
     </div>
   );
 }
@@ -411,12 +407,12 @@ export function ProtectedRoute({ roles = [] }) {
 
   if (!authenticated) { window.location.href = '/login'; return null; }
   if (roles.length && !roles.includes(user?.role)) { window.location.href = '/board'; return null; }
+  // Còn mật khẩu mặc định → chỉ hiện màn đổi mật khẩu, không dựng menu / trang nào khác
+  if (user?.must_change_password) return <ForceChangePassword />;
   return <Outlet />;
 }
 
-// Ngược lại với ProtectedRoute: chặn user ĐÃ đăng nhập vào lại /login,
-// tự động đưa về trang chính (dùng Navigate của react-router thay vì
-// window.location.href để không phải reload cả trang).
+// Ngược lại với ProtectedRoute: chặn user ĐÃ đăng nhập vào lại /login, tự động đưa về trang chính
 export function GuestRoute() {
   const { t } = useTranslation();
   const { authenticated, loading } = useAuthStore();

@@ -12,9 +12,7 @@ const { verifyAccessToken } = require('./middleware/auth');
 
 const app = express();
 
-// Khi chạy sau nginx (Docker): tin 1 lớp proxy để rate-limit thấy IP thật của
-// người dùng thay vì IP của nginx. KHÔNG bật khi backend lộ trực tiếp ra mạng,
-// vì khi đó ai cũng giả được header X-Forwarded-For để né giới hạn đăng nhập.
+// Khi chạy sau nginx (Docker): tin 1 lớp proxy để rate-limit thấy IP thật của người dùng thay vì IP của nginx
 if (process.env.TRUST_PROXY) app.set('trust proxy', +process.env.TRUST_PROXY || process.env.TRUST_PROXY);
 
 // ── Bảo mật HTTP headers ──
@@ -34,15 +32,11 @@ app.options('*', cors());
 // ── Gzip ──
 app.use(compression());
 
-// ── Body parser ──
-// File đi qua multer (upload riêng), JSON chỉ cần nhỏ — 100MB cũ cho phép
-// làm treo server bằng vài request khổng lồ
+// Body parser
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// ── Rate limit chung cho API ──
-// (Đã bỏ giới hạn riêng 10 lần đăng nhập/15 phút theo yêu cầu — đăng nhập giờ
-// chỉ chịu giới hạn chung 200 request/phút/IP bên dưới.)
+// Rate limit chung cho API
 const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 phút
   max: 600,                  // 600 request/phút/IP — trang Board 1 lần tải đã ~5 + số nhóm request
@@ -54,13 +48,10 @@ const apiLimiter = rateLimit({
 
 app.use('/api', apiLimiter);
 
-// ── Static uploads — thử cả 2 đường dẫn ──
-// File Excel báo cáo điểm (worktrack_period_*.xlsx) có tên đoán được → chặn
-// tải trực tiếp, chỉ tải qua /api/dashboard/excel/ (đã kiểm tra quyền admin/manager).
+// Static uploads — thử cả 2 đường dẫn
 app.use('/uploads', (req, res, next) =>
   /^worktrack_period_/i.test(path.basename(req.path)) ? res.status(404).end() : next());
-// Ảnh/PDF được xem trực tiếp; mọi loại khác buộc tải về (không cho trình duyệt
-// mở/chạy nội dung file người dùng tải lên ngay trên domain của hệ thống)
+// Ảnh/PDF được xem trực tiếp; mọi loại khác buộc tải về
 const INLINE_OK = /\.(png|jpe?g|gif|webp|bmp|pdf)$/i;
 const uploadPaths = [
   path.join(__dirname, 'uploads'),
@@ -123,17 +114,13 @@ app.use((err, _, res, __) => {
   res.status(status).json({ success: false, message });
 });
 
-// ── Socket.IO ──
-// Bọc app Express trong 1 http.Server, rồi attach Socket.IO vào server đó
-// (không phải attach vào app) — đây là phần trước giờ CHƯA từng tồn tại.
+// Socket.IO
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
-// Xác thực socket bằng access token. Trước đây server tin `userId` do client
-// tự khai → ai cũng nghe lén được thông báo realtime của người khác chỉ bằng
-// cách đổi userId.
+// Xác thực socket bằng access token
 io.use(async (socket, next) => {
   try {
     const user = await verifyAccessToken(socket.handshake.auth?.token);
@@ -147,11 +134,7 @@ io.use(async (socket, next) => {
 io.on('connection', (socket) => {
   const { userId } = socket.data;
   socket.join(`user:${userId}`);
-  console.log(`🔌 socket ${socket.id} joined room user:${userId}`);
-
-  socket.on('disconnect', () => {
-    console.log(`🔌 socket ${socket.id} disconnected`);
-  });
+  // Không log từng lần kết nối / ngắt: hàng trăm người × mỗi lần mở tab, rớt mạng → log phình vô hạn
 });
 
 // Cho các route/controller lấy io qua req.app.get('io')
@@ -173,13 +156,7 @@ function getLocalIp() {
 }
 
 const PORT = process.env.PORT || 3001;
-// ⚠️ Đổi app.listen(...) thành server.listen(...) — phải listen trên http.Server
-// đã attach Socket.IO, listen thẳng trên `app` như cũ sẽ làm Socket.IO không hoạt động.
-// Không chỉ định host → nghe cả IPv4 lẫn IPv6. Chỉ nghe '0.0.0.0' (IPv4) thì
-// trình duyệt/công cụ gọi "localhost" trên Windows thử IPv6 trước, bị từ chối
-// rồi mới quay về IPv4 → mỗi kết nối mới chậm thêm ~200ms.
-// backlog: hàng đợi kết nối chờ được nhận — mặc định 511; khi hàng trăm người
-// cùng mở app 1 lúc (mỗi trình duyệt mở tới 6 kết nối) sẽ tràn → bị từ chối kết nối.
+// ⚠️ Đổi app.listen(...) thành server.listen(...)
 server.listen({ port: PORT, backlog: 4096 }, () => {
   const localIp = getLocalIp();
   console.log(`🚀 WorkTrack API → http://localhost:${PORT}`);
@@ -195,23 +172,17 @@ require('./cron/maintenance.cron');
 // ── Nhắc chấm điểm (leader) + nhắc ghi việc (nhân viên) — 08:00 sáng T2–T6 ──
 require('./cron/worklogReminder.cron')(io);
 
-// ── Chống sập ──
-// 1 lỗi async không được catch ở bất kỳ đâu (Node 15+) sẽ làm TẮT CẢ server →
-// mọi người mất kết nối. Ghi log và chạy tiếp thay vì sập.
+// Chống sập
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason?.stack || reason);
 });
-// Lỗi đồng bộ không bắt được thì trạng thái process không còn tin cậy → ghi
-// log rồi thoát để Docker/pm2 tự khởi động lại sạch sẽ.
+// Lỗi đồng bộ không bắt được thì trạng thái process không còn tin cậy
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err.stack || err);
   process.exit(1);
 });
 
-// ── Graceful shutdown ──
-// Đóng Socket.IO và http.Server đúng cách khi nodemon restart / process bị kill.
-// Thiếu đoạn này là nguyên nhân phổ biến gây lỗi EADDRINUSE khi nodemon reload:
-// process cũ không kịp release port trước khi process mới listen lại.
+// Graceful shutdown
 function gracefulShutdown(signal) {
   console.log(`\n🛑 Nhận ${signal}, đang tắt server...`);
   io.close(() => {

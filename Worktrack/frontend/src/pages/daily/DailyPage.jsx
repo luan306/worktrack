@@ -13,10 +13,11 @@ import api from '../../api/client';
 import useMaxWidth from '../../lib/useMediaQuery';
 import useAuth from '../../store/authStore';
 import { onRealtime } from '../../lib/socket';
-import { C, FONT_SANS, FONT_MONO, ymd, addDays, dmy, scoreColor, initialsOf, idLine, offLabel, offShort, weekdayNames, wdOf, monthRange, isWeekendDate, cellState, inputStyle } from './shared';
-import { DetailDock, Btn } from './ui';
+import { C, FONT_SANS, FONT_MONO, ymd, addDays, dmy, scoreColor, initialsOf, idLine, offLabel, offShort, weekdayNames, wdOf, monthRange, cellState, holidayIndex, inputStyle } from './shared';
+import { DetailDock, Btn, OffAvatars } from './ui';
 import NotePanel from './NotePanel';
 import ExportDialog from './ExportDialog';
+import HolidayDialog from './HolidayDialog';
 import OverviewBoard from './OverviewBoard';
 import PendingBoard from './PendingBoard';
 import usePendingScoreCount from '../../lib/usePendingScoreCount';
@@ -65,7 +66,7 @@ export default function DailyPage() {
     return () => { alive = false; };
   }, [viewUserId, month, loadKey, tick]);
   const loading = res?.key !== loadKey;
-  // Đổi tháng: giữ lịch cũ (mờ) trong lúc tải. Đổi NGƯỜI: ẩn ngay — không bao giờ hiện lịch người A dưới tên người B
+  // Đổi tháng: giữ lịch cũ (mờ) trong lúc tải
   const sameUser = res?.key?.split('|')[0] === String(viewUserId);
   const data = sameUser ? res.data ?? null : null;
   const error = res?.key === loadKey ? res.error || '' : '';
@@ -73,11 +74,12 @@ export default function DailyPage() {
   // ── Lịch THÁNG: lưới T2 → CN, mỗi hàng 1 tuần. T7/CN mặc định nghỉ, có thể ghi tăng ca ──
   const today = data?.today || ymd(new Date());
   const WDN = weekdayNames(t);
+  const holidays = holidayIndex(data?.holidays); // { ngày: tên ngày lễ }
   const allDays = [];
   if (data?.week_start) {
     for (let d = data.week_start; d <= data.week_end; d = addDays(d, 1)) {
       const wd = wdOf(d);
-      allDays.push({ label: WDN.short[wd], full: WDN.full[wd], date: d, inMonth: d.slice(0, 7) === month, weekend: wd === 0 || wd === 6 });
+      allDays.push({ label: WDN.short[wd], full: WDN.full[wd], date: d, inMonth: d.slice(0, 7) === month, holiday: holidays[d], weekend: wd === 0 || wd === 6 || !!holidays[d] });
     }
   }
   // Bỏ hàng (tuần) không có ngày nào của tháng
@@ -110,19 +112,26 @@ export default function DailyPage() {
   }, [view, userId, month, currentDate, user?.id, setParams]);
 
   const refresh = useCallback(() => { setTick(n => n + 1); setHistTick(n => n + 1); }, []);
-  // 📡 Có người ghi việc / chấm điểm cho ĐÚNG người đang xem → tự tải lại
+  // 📡 Có người ghi việc / chấm điểm cho ĐÚNG người đang xem, hoặc BẤT KỲ AI báo / hủy nghỉ → tự tải lại
   useEffect(() => onRealtime('worklog:updated', (evs) => {
-    if (evs.some(e => !e?.userId || e.userId === viewUserId)) refresh();
+    if (evs.some(e => !e?.userId || e.off || e.userId === viewUserId)) refresh();
   }), [refresh, viewUserId]);
 
   const byDay = (date) => (data?.entries || []).filter(e => e.work_date === date);
   const scoreOf = (date) => (data?.scores || []).find(s => s.work_date === date);
   const offOf = (date) => (data?.offs || []).find(o => o.work_date === date);
+  // Người trong nhóm nghỉ theo từng ngày: { 'YYYY-MM-DD': [{ user_id, full_name, kind, reason }] }
+  const teamOffByDay = {};
+  (data?.team_offs || []).forEach(o => { (teamOffByDay[o.work_date] ||= []).push(o); });
+  const teamOffOf = (date) => teamOffByDay[date] || [];
+  const offTip = (list) => list.map(o => `${o.full_name} — ${offLabel(t, o.kind)}`).join('\n');
+  const dayOffs = teamOffOf(currentDate); // người nghỉ của ngày đang mở (dải trên cùng)
   const member = data?.user;
   const isSelf = viewUserId === user?.id;
   const viewing = members.find(m => m.id === viewUserId) || member;
   const maxScore = data?.max_score || 10;
   const [showExport, setShowExport] = useState(false);
+  const [showHolidays, setShowHolidays] = useState(false);
   // Đổi người → xóa dữ liệu cũ NGAY để không bao giờ thấy lịch người A dưới tên người B
   const switchUser = (id) => { if (id === viewUserId) return; setHistory([]); setPanelOpen(false); setUserId(id); };
   const goMonth = (m) => { if (m === month) return; setMonth(m); setSelected(null); setPanelOpen(false); };
@@ -133,7 +142,7 @@ export default function DailyPage() {
   const meta = (d) => {
     const list = byDay(d.date), sc = scoreOf(d.date), off = offOf(d.date), isToday = d.date === today, future = d.date > today;
     const fullOff = off?.kind === 'full';
-    const state = cellState({ off: off?.kind, score: sc?.score, n: list.length }, d.date, today);
+    const state = cellState({ off: off?.kind, score: sc?.score, n: list.length }, d.date, today, holidays);
     const status = {
       scored:  () => ({ col: scoreColor(+sc.score, maxScore) }),
       off:     () => ({ col: C.teal, soft: C.tealSoft, label: `🌴 ${t('wl_off_short', 'Nghỉ')}` }),
@@ -144,7 +153,7 @@ export default function DailyPage() {
       missing: () => isToday ? { col: C.primary, soft: C.primarySoft, label: t('wl_todo_today', 'Chưa ghi') }
                              : { col: C.danger, soft: C.dangerSoft, label: t('wl_missing', 'Chưa ghi') },
     }[state]();
-    return { list, sc, off, fullOff, isToday, future, state, status, weekend: isWeekendDate(d.date) };
+    return { list, sc, off, fullOff, isToday, future, state, status, weekend: d.weekend };
   };
   const statusBadge = (m) => m.sc ? (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 1, padding: '2px 8px', borderRadius: 20, background: `${m.status.col}17`, border: `1px solid ${m.status.col}40`, color: m.status.col, fontFamily: FONT_MONO, fontWeight: 800, fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -158,7 +167,7 @@ export default function DailyPage() {
 
   // Tổng hợp tháng (chỉ các ngày thuộc tháng)
   const monthAll = monthDays.map(d => [d, meta(d)]);
-  const monthMeta = monthAll.filter(([d]) => !d.weekend); // ngày làm việc T2–T6
+  const monthMeta = monthAll.filter(([d]) => !d.weekend); // ngày làm việc (bỏ cuối tuần + ngày lễ)
   const count = (st) => monthMeta.filter(([, m]) => m.state === st).length;
   const scoredN = count('scored'), workDays = monthMeta.filter(([, m]) => !m.fullOff).length;
   const overtimeN = monthAll.filter(([d, m]) => d.weekend && m.list.length).length;
@@ -218,6 +227,7 @@ export default function DailyPage() {
             const m = d.inMonth ? m0 : { ...m0, sc: null, list: [], off: null, fullOff: false, state: 'future', status: { col: C.line } };
             const dim = !d.inMonth;
             const rest = m.state === 'weekend'; // cuối tuần không tăng ca
+            const teamOff = teamOffOf(d.date);
             const today_ = m.isToday && d.inMonth;
             const editable = data?.can_edit && !m.sc && !m.fullOff && !m.future && !d.weekend;
             return (
@@ -252,11 +262,14 @@ export default function DailyPage() {
                     {m.sc ? <span style={{ fontFamily: FONT_MONO, fontWeight: 800, fontSize: 12, color: m.status.col }}>{+m.sc.score}</span>
                       : m.fullOff ? <span style={{ fontSize: 13 }}>🌴</span>
                       : m.state === 'overtime' ? <span style={{ fontSize: 11 }}>⏰</span>
+                      : d.holiday && d.inMonth ? <span title={d.holiday} style={{ fontSize: 11 }}>🎉</span>
                       : m.status.label ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: m.status.col }} /> : null}
                     {m.list.length > 0 && <span style={{ fontSize: 9.5, color: C.faint, fontWeight: 700 }}>{m.list.length} {t('wl_tasks', 'việc')}</span>}
                   </div>
                 ) : rest ? (
-                  d.inMonth ? <div style={{ fontSize: 11, color: C.faint, fontWeight: 600 }}>🛌 {t('wl_rest', 'Nghỉ')}</div> : null
+                  !d.inMonth ? null
+                  : d.holiday ? <div title={d.holiday} style={{ fontSize: 11, color: C.danger, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>🎉 {d.holiday}</div>
+                  : <div style={{ fontSize: 11, color: C.faint, fontWeight: 600 }}>🛌 {t('wl_rest', 'Nghỉ')}</div>
                 ) : m.fullOff ? (
                   <div style={{ fontSize: 11.5, fontWeight: 800, color: C.teal, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     🌴 {offLabel(t, 'full')}{m.off.reason ? <span style={{ fontWeight: 600, color: C.sub }}> · {m.off.reason}</span> : null}
@@ -270,6 +283,13 @@ export default function DailyPage() {
                     {m.list.length > 2 && <span style={{ fontSize: 10.5, color: C.faint, fontWeight: 700 }}>+{m.list.length - 2} {t('wl_more_tasks', 'việc khác')}</span>}
                     {!m.list.length && editable && d.inMonth && <span className="wl-add-cta" style={{ alignSelf: 'flex-start', fontSize: 11, fontWeight: 700, color: C.primary, padding: '2px 8px', borderRadius: 8, border: `1px dashed ${C.primary}66` }}>＋ {t('wl_add_btn_long', 'Ghi việc')}</span>}
                   </div>
+                )}
+                {/* đồng đội nghỉ ngày này */}
+                {d.inMonth && teamOff.length > 0 && (
+                  <span title={`${t('wl_team_off', 'Nghỉ trong nhóm')}:\n${offTip(teamOff)}`} style={{ marginTop: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: isMobile ? 'center' : 'flex-start', paddingTop: 2 }}>
+                    <span style={{ fontSize: isMobile ? 9 : 11 }}>🌴</span>
+                    {isMobile ? <span style={{ fontSize: 9.5, fontWeight: 800, color: C.teal }}>{teamOff.length}</span> : <OffAvatars people={teamOff} max={d.weekend ? 2 : 4} />}
+                  </span>
                 )}
               </button>
             );
@@ -404,7 +424,26 @@ export default function DailyPage() {
           <input type="month" value={month} onChange={e => e.target.value && goMonth(e.target.value)} className="wl-seg-date" style={{ border: 'none', outline: 'none', background: 'transparent', font: `600 12px ${FONT_SANS}`, color: C.sub, padding: '4px 6px', width: 132 }} />
         </div>}
 
+        {view === 'me' && data && (
+          <Btn onClick={() => setShowHolidays(true)} title={t('hol_title', 'Ngày nghỉ lễ của công ty')} style={{ padding: '9px 12px', borderRadius: 10 }}>🎉<span className="wl-export-label"> {t('hol_btn', 'Ngày lễ')}</span></Btn>
+        )}
         <Btn kind="primary" onClick={() => setShowExport(true)} title={t('wl_export', 'Xuất báo cáo')} style={{ padding: '9px 14px', borderRadius: 10 }}>⬇<span className="wl-export-label"> {t('wl_export', 'Xuất báo cáo')}</span></Btn>
+
+        {/* Ai trong nhóm nghỉ ngày đang chọn (mặc định hôm nay) — luôn nằm trên cùng để mở trang là thấy */}
+        {view === 'me' && data && current && (
+          <div className="wl-offbar" style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '7px 12px', borderRadius: 12, background: dayOffs.length ? C.tealSoft : C.board, border: `1px solid ${dayOffs.length ? `${C.teal}33` : C.line}` }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: dayOffs.length ? C.teal : C.sub, whiteSpace: 'nowrap' }}>
+              🌴 {current.date === today ? t('wl_team_off_today', 'Hôm nay nghỉ') : `${t('wl_team_off_on', 'Nghỉ ngày')} ${dmy(current.date)}`}{dayOffs.length ? ` (${dayOffs.length})` : ''}:
+            </span>
+            {current.holiday && <span style={{ padding: '2px 10px', borderRadius: 20, background: 'var(--wt-tint-danger)', border: '1px solid var(--wt-tint-danger-bd)', color: C.danger, fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap' }}>🎉 {t('hol_company_off', 'Công ty nghỉ lễ')}: {current.holiday}</span>}
+            {dayOffs.length ? dayOffs.map(o => (
+              <span key={o.user_id} title={o.reason || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 9px 2px 3px', borderRadius: 20, background: 'var(--wt-surface)', fontSize: 12, fontWeight: 700, color: C.ink, whiteSpace: 'nowrap' }}>
+                <OffAvatars people={[o]} size={20} />{o.full_name}
+                {o.kind !== 'full' && <span style={{ fontWeight: 600, color: C.teal }}>· {offShort(t, o.kind)}</span>}
+              </span>
+            )) : <span style={{ fontSize: 12, fontWeight: 600, color: C.faint }}>{t('wl_team_off_none', 'Không ai nghỉ')}</span>}
+          </div>
+        )}
       </div>
 
       {/* ── Đang xem lịch của NGƯỜI KHÁC → báo thật rõ để không chấm nhầm ── */}
@@ -425,6 +464,7 @@ export default function DailyPage() {
         </div>
       )}
 
+      {showHolidays && <HolidayDialog onClose={() => setShowHolidays(false)} onChanged={refresh} canManage={!!data?.can_manage_holidays} refDate={current?.date || `${month}-01`} />}
       {showExport && <ExportDialog onClose={() => setShowExport(false)} refDate={current?.date || `${month}-01`} defaultRange="month" member={viewing} members={members} viewUserId={viewUserId} defaultWho={view === 'me' ? 'one' : 'all'} />}
 
       {view === 'pending' ? (

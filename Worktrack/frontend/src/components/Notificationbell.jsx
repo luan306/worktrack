@@ -30,7 +30,8 @@ function activityText(p, actor, title, t) {
   const q = `"${title}"`;
   switch (p.action) {
     case 'created':    return t('notif_act_created', { actor, title, target: p.target, defaultValue: `${actor} đã tạo CV ${q}${p.target ? ` và giao cho ${p.target}` : ''}` });
-    case 'assigned':   return t('notif_act_assigned', { actor, title, target: p.target, defaultValue: `${actor} đã giao CV ${q} cho ${p.target}${p.role === 'support' ? ' (hỗ trợ)' : ''}` });
+    case 'assigned':   return t('notif_act_assigned', { actor, title, target: p.target, defaultValue: `${actor} đã giao CV ${q} cho ${p.target}${p.role === 'support' ? ' (hỗ trợ)' : ''}` })
+      + (p.late ? ` — ⚠️ ${t('req_late_added_notif', 'thêm SAU KHI công việc đã nộp, cần xem lại trước khi chấm điểm')}` : '');
     case 'unassigned': return t('notif_act_unassigned', { actor, title, target: p.target, defaultValue: `${actor} đã gỡ ${p.target} khỏi CV ${q}` });
     case 'claimed':    return t('notif_act_claimed', { actor, title, defaultValue: `${actor} đã tự nhận CV ${q}` });
     case 'deleted':    return t('notif_act_deleted', { actor, title, defaultValue: `${actor} đã xóa CV ${q}` });
@@ -54,10 +55,7 @@ function NotificationText({ n, t }) {
     case 'request_commented':      return t('notif_commented', { actor, title });
     case 'request_scored':         return t('notif_scored', { actor, title, score: p.score });
     case 'request_claimed':        return t('notif_claimed', { actor, title });
-    // ⚠️ MỚI — payload của 2 loại này dùng taskName/score/oldScore/newScore,
-    // KHÔNG có field "title" như các loại request ở trên, nên trước đây rơi
-    // vào default và hiện chữ RỖNG (không phải không tạo thông báo — thông
-    // báo vẫn được tạo, chỉ là không có chữ để hiện).
+    // ⚠️ MỚI — payload của 2 loại này dùng taskName/score/oldScore/newScore
     case 'daily_scored':
       return t('notif_daily_scored', { actor, task: p.taskName, score: p.score, defaultValue: `${actor} đã chấm điểm công việc "${p.taskName}": ${p.score}đ` });
     case 'daily_score_edited':
@@ -104,8 +102,7 @@ export default function NotificationBell() {
 
   useEffect(() => { fetchUnreadCount(); }, []);
 
-  // Đóng dropdown khi click ra ngoài — phải check cả nút chuông lẫn panel
-  // (panel giờ render qua portal, không còn là con DOM của nút nữa)
+  // Đóng dropdown khi click ra ngoài
   useEffect(() => {
     const onClick = (e) => {
       if (btnRef.current?.contains(e.target)) return;
@@ -116,12 +113,7 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  // Đóng khi cuộn trang hoặc resize để tránh dropdown "lơ lửng" sai vị trí
-  // Lưu ý: sự kiện 'scroll' không bubble, nhưng vẫn được bắt ở capture phase
-  // trên mọi ancestor kể cả window. Vì vậy nếu không loại trừ, việc cuộn
-  // bên trong chính panel (danh sách thông báo có overflowY: auto) cũng sẽ
-  // kích hoạt listener này và đóng dropdown ngay lập tức — đây chính là lỗi
-  // "lăn chuột" mà bạn gặp phải.
+  // Đóng khi cuộn trang hoặc resize để tránh dropdown "lơ lửng" sai vị trí Lưu ý
   useEffect(() => {
     if (!open) return;
     const close = (e) => {

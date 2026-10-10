@@ -1,17 +1,12 @@
-// ══════════════════════════════════════════════════════════════════
-// Công việc hằng ngày (thay cho Daily cũ)
-//   - Nhân viên ghi chú từng việc mình làm trong ngày (không cần giờ).
-//   - Leader (của nhóm) / Manager / Admin xem và CHẤM ĐIỂM CẢ NGÀY (0–10).
-//   - Ngày đã chấm thì bị khóa: nhân viên không thêm/sửa/xóa việc của ngày đó.
-// ══════════════════════════════════════════════════════════════════
+// Công việc hằng ngày (thay cho Daily cũ) - Nhân viên ghi chú từng việc mình làm trong ngày
 const ExcelJS = require('exceljs');
 const db    = require('../config/db');
 const cache = require('../config/cache');
 const { logActivity, fmtScore } = require('../services/activityLogService');
 const { notifyMany } = require('../services/notificationService');
-const { localDate, parseLocalDate, addDays, mondayOf } = require('../utils/date');
+const { localDate, parseLocalDate, addDays, mondayOf, isWeekend } = require('../utils/date');
 const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
-const { pendingScoreDays } = require('../services/worklogService');
+const { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay } = require('../services/worklogService');
 
 const MAX_SCORE = 10;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -38,10 +33,20 @@ const dayScoreOf = async (userId, date) =>
 const dayOffOf = async (userId, date) =>
   (await db.query('SELECT kind, reason FROM daily_day_offs WHERE user_id=? AND work_date=?', [userId, date]))[0][0];
 const OFF_LABEL = { full: 'Nghỉ cả ngày', am: 'Nghỉ buổi sáng', pm: 'Nghỉ buổi chiều' };
-// Công ty làm T2–T6
-const isWeekend = (dateStr) => [0, 6].includes(parseLocalDate(dateStr).getDay());
 
-const broadcast = (req, userId, workDate) => req.app.get('io')?.emit('worklog:updated', { userId: +userId, workDate });
+// off=true: thay đổi NGÀY NGHỈ — mọi người đang mở lịch đều cần cập nhật (dải "ai nghỉ hôm nay")
+const broadcast = (req, userId, workDate, off = false) => {
+  if (off) cache.clear('wl:offs:'); // xóa TRƯỚC khi báo để mọi máy tải lại đều nhận danh sách mới
+  req.app.get('io')?.emit('worklog:updated', { userId: +userId, workDate, off });
+};
+
+// Ai nghỉ ngày nào trong 1 khoảng
+const teamOffsOf = (start, end) => cache.wrap(`wl:offs:${start}:${end}`, 60000, async () => (await db.query(
+  `SELECT DATE_FORMAT(o.work_date,'%Y-%m-%d') AS work_date, o.kind, o.reason,
+          u.id AS user_id, u.full_name, u.avatar_color
+     FROM daily_day_offs o JOIN users u ON u.id=o.user_id AND u.is_active=1
+    WHERE o.work_date BETWEEN ? AND ?
+    ORDER BY o.work_date, u.full_name`, [start, end]))[0]);
 
 // GET /worklog/members — danh sách người mình được xem công việc hằng ngày
 exports.members = async (req, res) => {
@@ -60,8 +65,7 @@ exports.week = async (req, res) => {
     const ref = DATE_RE.test(req.query.week || '') ? req.query.week : localDate();
     if (!(await canView(req, userId))) return fail(res, 403, 'Bạn không có quyền xem công việc hằng ngày của người này');
 
-    // ?month=YYYY-MM → cả tháng (từ Thứ 2 của tuần đầu đến Chủ nhật của tuần cuối, để vẽ lưới lịch)
-    // ?week=YYYY-MM-DD → 1 tuần chứa ngày đó (giữ cho tương thích)
+    // ?month=YYYY-MM → cả tháng (từ Thứ 2 của tuần đầu đến Chủ nhật của tuần cuối, để vẽ lưới lịch) ?week=YYYY-MM-DD
     const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
     let start, end;
     if (month) {
@@ -73,7 +77,7 @@ exports.week = async (req, res) => {
       end = addDays(start, 6);
     }
 
-    const [[[user]], [entries], [scores], [offs]] = await Promise.all([
+    const [[[user]], [entries], [scores], [offs], teamOffs, holidays] = await Promise.all([
       db.query(
         `SELECT u.id, u.full_name, u.username, u.avatar_color, u.role,
                 (SELECT GROUP_CONCAT(g.name ORDER BY g.name SEPARATOR ', ') FROM group_members gm
@@ -81,6 +85,7 @@ exports.week = async (req, res) => {
            FROM users u WHERE u.id=?`, [userId]),
       db.query(
         `SELECT id, DATE_FORMAT(work_date,'%Y-%m-%d') AS work_date, title, description,
+                DATE_FORMAT(span_start,'%Y-%m-%d') AS span_start, DATE_FORMAT(span_end,'%Y-%m-%d') AS span_end,
                 DATE_FORMAT(created_at,'%Y-%m-%d %H:%i') AS created_at
            FROM daily_entries WHERE user_id=? AND work_date BETWEEN ? AND ?
           ORDER BY work_date, id`, [userId, start, end]),
@@ -93,12 +98,19 @@ exports.week = async (req, res) => {
         `SELECT DATE_FORMAT(o.work_date,'%Y-%m-%d') AS work_date, o.kind, o.reason, u.full_name AS created_by_name
            FROM daily_day_offs o LEFT JOIN users u ON u.id=o.created_by
           WHERE o.user_id=? AND o.work_date BETWEEN ? AND ?`, [userId, start, end]),
+      teamOffsOf(start, end), // ai nghỉ ngày nào — MỌI NGƯỜI đều thấy toàn bộ (không chia nhóm/quyền)
+      holidaysBetween(start, end),
     ]);
     if (!user) return fail(res, 404, 'Không tìm thấy người dùng');
+    // Lý do nghỉ là thông tin riêng → chỉ Leader/Manager/Admin thấy; nhân viên chỉ thấy tên + loại nghỉ
+    const seeReason = req.user.role !== 'user';
+    // trừ người đang xem (ngày nghỉ của họ đã có ở `offs`)
+    const team_offs = teamOffs.filter(o => o.user_id !== userId).map(o => ({ ...o, reason: seeReason ? o.reason : null }));
     const scorer = scoresVisible(req, userId);
     res.json({ success: true, data: {
       user, week_start: start, week_end: end, today: localDate(),
-      entries, scores, offs, can_edit: userId === req.user.id, can_score: scorer,
+      entries, scores, offs, team_offs, holidays, can_manage_holidays: req.user.role === 'admin',
+      can_edit: userId === req.user.id, can_score: scorer,
       can_mark_off: userId === req.user.id || scorer, max_score: MAX_SCORE,
     } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -116,17 +128,43 @@ async function validateEntry(req, { work_date, title }) {
   return null;
 }
 
-// POST /worklog/entries — chỉ ghi cho CHÍNH MÌNH
+const MAX_SPAN_DAYS = 31; // việc làm nhiều ngày: tối đa 1 tháng / lần ghi
+
+// POST /worklog/entries — chỉ ghi cho CHÍNH MÌNH Có `end_date`
 exports.createEntry = async (req, res) => {
   try {
     const body = { ...req.body, title: (req.body.title || '').trim() };
     const err = await validateEntry(req, body);
     if (err) return fail(res, 400, err);
+    const start = body.work_date, end = body.end_date || start;
+    if (!DATE_RE.test(end) || end < start) return fail(res, 400, 'Ngày kết thúc phải từ ngày bắt đầu trở đi');
+    if (end > addDays(start, MAX_SPAN_DAYS - 1)) return fail(res, 400, `Một việc chỉ kéo dài tối đa ${MAX_SPAN_DAYS} ngày`);
+
+    if (end === start) {
+      const [r] = await db.query(
+        'INSERT INTO daily_entries (user_id, work_date, title, description) VALUES (?,?,?,?)',
+        [req.user.id, start, body.title, body.description || null]);
+      broadcast(req, req.user.id, start);
+      return res.status(201).json({ success: true, data: { id: r.insertId, created: 1, skipped: 0 } });
+    }
+
+    const [[scored], [offs]] = await Promise.all([
+      db.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_scores WHERE user_id=? AND work_date BETWEEN ? AND ?`, [req.user.id, start, end]),
+      db.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_offs WHERE user_id=? AND kind='full' AND work_date BETWEEN ? AND ?`, [req.user.id, start, end]),
+    ]);
+    const blocked = new Set([...scored, ...offs].map(r => r.d));
+    const hol = await holidayMap();
+    const days = [start]; // ngày bắt đầu đã qua validateEntry (kể cả khi là ngày tăng ca cuối tuần)
+    let skipped = 0;
+    for (let d = addDays(start, 1); d <= end; d = addDays(d, 1)) {
+      if (isRestDay(d, hol)) continue; // cuối tuần / ngày lễ: không tự ghi (ai tăng ca thì ghi riêng)
+      if (blocked.has(d)) skipped++; else days.push(d);
+    }
     const [r] = await db.query(
-      'INSERT INTO daily_entries (user_id, work_date, title, description) VALUES (?,?,?,?)',
-      [req.user.id, body.work_date, body.title, body.description || null]);
-    broadcast(req, req.user.id, body.work_date);
-    res.status(201).json({ success: true, data: { id: r.insertId } });
+      'INSERT INTO daily_entries (user_id, work_date, title, description, span_start, span_end) VALUES ?',
+      [days.map(d => [req.user.id, d, body.title, body.description || null, start, end])]);
+    broadcast(req, req.user.id, start);
+    res.status(201).json({ success: true, data: { id: r.insertId, created: days.length, skipped } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -167,8 +205,7 @@ exports.deleteEntry = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// PUT /worklog/scores — Leader/Manager/Admin chấm điểm CẢ NGÀY cho 1 người
-// { user_id, work_date, score (0–10), comment, edit_reason (bắt buộc khi sửa điểm đã chấm) }
+// PUT /worklog/scores — Leader/Manager/Admin chấm điểm CẢ NGÀY cho 1 người { user_id, work_date, score
 exports.scoreDay = async (req, res) => {
   try {
     const { user_id, work_date, comment, edit_reason } = req.body;
@@ -218,9 +255,7 @@ exports.scoreDay = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// GET /worklog/history?user_id=&date= — lịch sử chấm / sửa điểm của 1 ngày:
-// ai chấm, điểm cũ → mới, lý do sửa, nhận xét, lúc nào. Ai xem được ghi chú
-// ngày đó thì xem được lịch sử (nhân viên biết vì sao mình bị sửa điểm).
+// GET /worklog/history?user_id=&date=
 exports.history = async (req, res) => {
   try {
     const userId = +req.query.user_id;
@@ -244,12 +279,12 @@ exports.history = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// ── Ngày nghỉ ─────────────────────────────────────────────────────
-// Nhân viên tự báo nghỉ cho mình; Leader/Manager/Admin đánh dấu nghỉ cho người mình chấm được.
-// Ngày đã chấm điểm thì khóa (không đổi trạng thái nghỉ nữa).
+// Ngày nghỉ ───────────────────────────────────────────────────── Nhân viên tự báo nghỉ cho mình
 async function checkOffAccess(req, res, userId, date) {
   if (!userId || !DATE_RE.test(date || '')) { fail(res, 400, 'Thiếu người hoặc ngày'); return false; }
   if (isWeekend(date)) { fail(res, 400, 'Thứ 7, Chủ nhật công ty đã nghỉ sẵn'); return false; }
+  const holiday = (await holidayMap()).get(date);
+  if (holiday) { fail(res, 400, `Ngày này công ty nghỉ lễ (${holiday}) — không cần báo nghỉ`); return false; }
   const [allowed, scored] = await Promise.all([userId === req.user.id || canScore(req, userId), dayScoreOf(userId, date)]);
   if (!allowed) { fail(res, 403, 'Bạn không có quyền đánh dấu nghỉ cho người này'); return false; }
   if (scored) { fail(res, 400, 'Ngày này đã được chấm điểm — không thể đổi trạng thái nghỉ'); return false; }
@@ -282,7 +317,7 @@ exports.setDayOff = async (req, res) => {
        ON DUPLICATE KEY UPDATE kind=VALUES(kind), reason=VALUES(reason), created_by=VALUES(created_by), created_at=NOW()`,
       [userId, work_date, kind, reason, req.user.id]);
     await logOff(req, userId, work_date, `đã đánh dấu ${OFF_LABEL[kind].toUpperCase()}${reason ? ` (${reason})` : ''} cho`, { kind, reason });
-    broadcast(req, userId, work_date);
+    broadcast(req, userId, work_date, true);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -295,20 +330,19 @@ exports.removeDayOff = async (req, res) => {
     if (!(await checkOffAccess(req, res, userId, date))) return;
     const [r] = await db.query('DELETE FROM daily_day_offs WHERE user_id=? AND work_date=?', [userId, date]);
     if (r.affectedRows) await logOff(req, userId, date, 'đã HỦY ngày nghỉ', { kind: null });
-    broadcast(req, userId, date);
+    broadcast(req, userId, date, true);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// ── Xuất báo cáo Excel ────────────────────────────────────────────
-// GET /worklog/export?from=&to=&user_id=  (user_id='all' → mọi người mình được xem)
-// Sheet "Tổng hợp": mỗi người 1 dòng; sheet "Chi tiết": mỗi người × mỗi ngày làm việc (T2–T6).
+// Xuất báo cáo Excel ──────────────────────────────────────────── GET /worklog/export?from=&to=&user_id=
 const WD_VI = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 const MAX_EXPORT_DAYS = 186;
 const vnDate = (s) => s.split('-').reverse().join('/');
 // Kiểm tra ?from=&to= — trả về thông báo lỗi hoặc null
+const validRange = (from, to) => DATE_RE.test(from || '') && DATE_RE.test(to || '') && from <= to;
 const rangeError = ({ from, to }, maxDays) =>
-  !DATE_RE.test(from || '') || !DATE_RE.test(to || '') || from > to ? 'Khoảng ngày không hợp lệ'
+  !validRange(from, to) ? 'Khoảng ngày không hợp lệ'
   : (parseLocalDate(to) - parseLocalDate(from)) / 864e5 > maxDays ? `Chỉ xem / xuất tối đa ${maxDays} ngày mỗi lần` : null;
 
 // Danh sách người `req.user` được xem (giống /worklog/members), có thể lọc 1 người
@@ -337,7 +371,8 @@ exports.exportReport = async (req, res) => {
     if (bad) return fail(res, 400, bad);
     const days = [];
     for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);   // gồm T7/CN để ghi nhận tăng ca
-    const workdays = days.filter(d => !isWeekend(d));
+    const hol = await holidayMap();
+    const workdays = days.filter(d => !isRestDay(d, hol)); // ngày lễ không tính là ngày làm việc
 
     let users;
     if (req.query.user_id === 'all') users = await viewableUsers(req);
@@ -407,7 +442,7 @@ exports.exportReport = async (req, res) => {
       let off = 0, ot = 0, logged = 0, missing = 0, tasks = 0, scored = 0, unscored = 0;
       days.forEach(d => {
         const k = key(u.id, d), list = entMap.get(k) || [], sc = scMap.get(k), o = offMap.get(k);
-        const past = d <= today, fullOff = o?.kind === 'full', weekend = isWeekend(d);
+        const past = d <= today, fullOff = o?.kind === 'full', weekend = isRestDay(d, hol);
         if (weekend && !list.length && !sc) return;   // T7/CN không tăng ca → ngày nghỉ, không ghi dòng
         if (weekend) ot++;
         if (o) off += fullOff ? 1 : .5;
@@ -445,8 +480,7 @@ exports.exportReport = async (req, res) => {
   } catch (e) { xlsxError(res, e); }
 };
 
-// GET /worklog/overview?from=&to= — bảng tổng hợp: mọi người mình được xem × từng ngày T2–T6
-// Mỗi ô: số việc, điểm, nghỉ — giao diện tự tô màu (trắng: chưa tới, đỏ: chưa ghi, vàng: chờ chấm)
+// GET /worklog/overview?from=&to=
 const MAX_OVERVIEW_DAYS = 93;
 exports.overview = async (req, res) => {
   try {
@@ -471,13 +505,12 @@ exports.overview = async (req, res) => {
     offs.forEach(r => { Object.assign(cell(r.user_id, r.d), { off: r.kind, reason: r.reason }); });
     res.json({ success: true, data: {
       from, to, today: localDate(), max_score: MAX_SCORE,
-      users, cells,
+      users, cells, holidays: await holidaysBetween(from, to),
     } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// GET /worklog/pending?count=1 — HỘP "CHỜ CHẤM": các ngày người mình chấm được đã ghi việc
-// nhưng chưa có điểm (30 ngày gần nhất, tới hôm nay). count=1 → chỉ trả số lượng (badge menu).
+// GET /worklog/pending?count=1 — HỘP "CHỜ CHẤM"
 const PENDING_DAYS = 30;
 exports.pending = async (req, res) => {
   try {
@@ -509,5 +542,64 @@ exports.pending = async (req, res) => {
                  work_date: d.work_date, n: d.n, titles: titles.get(`${d.user_id}|${d.work_date}`) || [] };
       }),
     } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// ── Ngày nghỉ lễ của công ty ──────────────────────────────────────
+const MAX_HOLIDAY_SPAN = 31;
+
+// GET /worklog/holidays?year=YYYY — ai đăng nhập cũng xem được
+exports.listHolidays = async (req, res) => {
+  try {
+    const year = /^\d{4}$/.test(req.query.year || '') ? req.query.year : localDate().slice(0, 4);
+    res.json({ success: true, data: await holidaysBetween(`${year}-01-01`, `${year}-12-31`) });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// Báo cho mọi máy đang mở lịch tải lại (off=true = thay đổi ảnh hưởng tất cả mọi người)
+const holidaysChanged = (req, from) => { clearHolidayCache(); broadcast(req, 0, from, true); };
+
+// PUT /worklog/holidays { from, to, name } hoặc { items
+const MAX_HOLIDAY_ITEMS = 20;
+exports.setHolidays = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [req.body];
+    if (!items.length || items.length > MAX_HOLIDAY_ITEMS) return fail(res, 400, `Mỗi lần thêm từ 1 đến ${MAX_HOLIDAY_ITEMS} đợt nghỉ lễ`);
+    const rows = [], summary = [];
+    for (const it of items) {
+      const from = it?.from, to = it?.to || from;
+      const name = String(it?.name || '').trim().slice(0, 120);
+      if (!validRange(from, to)) return fail(res, 400, 'Khoảng ngày không hợp lệ');
+      if (!name) return fail(res, 400, 'Vui lòng nhập tên ngày lễ');
+      if (to > addDays(from, MAX_HOLIDAY_SPAN - 1)) return fail(res, 400, `Một đợt nghỉ lễ tối đa ${MAX_HOLIDAY_SPAN} ngày`);
+      for (let d = from; d <= to; d = addDays(d, 1)) rows.push([d, name, req.user.id]);
+      summary.push({ from, to, name });
+    }
+    await db.query('INSERT INTO company_holidays (work_date, name, created_by) VALUES ? ON DUPLICATE KEY UPDATE name=VALUES(name), created_by=VALUES(created_by)', [rows]);
+    await logActivity({
+      actorId: req.user.id, actionType: 'holiday_set', entityType: 'holiday', entityId: 0,
+      description: `${actorOf(req)} đã đặt ngày nghỉ lễ: ${summary.map(x => `"${x.name}" ${x.from}${x.to !== x.from ? ` → ${x.to}` : ''}`).join('; ')}`,
+      metadata: { items: summary },
+    });
+    holidaysChanged(req, summary[0].from);
+    res.json({ success: true, data: { days: rows.length } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// DELETE /worklog/holidays?from=&to= — CHỈ Admin
+exports.removeHolidays = async (req, res) => {
+  try {
+    const { from } = req.query, to = req.query.to || from;
+    if (!validRange(from, to)) return fail(res, 400, 'Khoảng ngày không hợp lệ');
+    const [r] = await db.query('DELETE FROM company_holidays WHERE work_date BETWEEN ? AND ?', [from, to]);
+    if (r.affectedRows) {
+      await logActivity({
+        actorId: req.user.id, actionType: 'holiday_removed', entityType: 'holiday', entityId: 0,
+        description: `${actorOf(req)} đã xóa ngày nghỉ lễ: ${from}${to !== from ? ` → ${to}` : ''}`,
+        metadata: { from, to },
+      });
+      holidaysChanged(req, from);
+    }
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

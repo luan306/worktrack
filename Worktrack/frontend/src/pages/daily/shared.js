@@ -57,12 +57,15 @@ export const CELL = {
   pending: { bg: 'var(--wt-tint-warning)', fg: 'var(--wt-warn-text)', bd: 'var(--wt-tint-warning-bd)' },
   off:     { bg: C.tealSoft, fg: C.teal, bd: 'var(--wt-tint-teal-bd)' },
 };
-// Thứ tự ưu tiên trạng thái 1 ngày — dùng chung cho lịch cá nhân & bảng tổng hợp.
-// T7/CN mặc định là ngày NGHỈ (không tính "chưa ghi"); có ghi việc = TĂNG CA (chờ chấm).
-export const cellState = (c, date, today) => {
+// Ngày lễ công ty: mảng [{ work_date, name }] từ API → { 'YYYY-MM-DD': tên }
+export const holidayIndex = (list) => Object.fromEntries((list || []).map(h => [h.work_date, h.name]));
+// Ngày NGHỈ CHUNG = cuối tuần hoặc ngày lễ công ty
+export const isRestDate = (d, holidays) => isWeekendDate(d) || !!holidays?.[d];
+// Thứ tự ưu tiên trạng thái 1 ngày
+export const cellState = (c, date, today, holidays) => {
   if (c?.off === 'full') return 'off';
   if (c?.score != null) return 'scored';
-  if (isWeekendDate(date)) return c?.n ? 'overtime' : 'weekend';
+  if (isRestDate(date, holidays)) return c?.n ? 'overtime' : 'weekend';
   if (date > today) return 'future';
   return c?.n ? 'pending' : 'missing';
 };

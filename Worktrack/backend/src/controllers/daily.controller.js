@@ -4,10 +4,7 @@ const { logActivity, logActivities, diffFields } = require('../services/activity
 const { localDate, parseLocalDate } = require('../utils/date');
 const { notify, notifyMany } = require('../services/notificationService');
 
-// ── Leader chỉ thao tác trong nhóm của mình ──
-// "Nhóm của leader" = nhóm họ là thành viên (group_members). Không dùng
-// groups.leader_id vì 1 nhóm có thể có nhiều leader và cột này đang để trống.
-// Admin/Manager: không giới hạn.
+// Leader chỉ thao tác trong nhóm của mình
 const NOT_YOUR_GROUP = { success: false, message: 'Leader chỉ được thao tác trong nhóm của mình' };
 
 async function leaderGroupIds(req) {
@@ -132,11 +129,7 @@ exports.listTasks = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// POST /daily/task-groups/:groupId/tasks
-// ⚠️ assigned_user_id (mới): NULL = công việc chung cho CẢ NHÓM (mặc định,
-// hành vi cũ). Có giá trị = công việc RIÊNG, chỉ hiện với đúng 1 người đó
-// khi Leader bấm chọn họ trong bảng chấm điểm — người khác trong nhóm sẽ
-// không thấy dòng công việc này.
+// POST /daily/task-groups/:groupId/tasks ⚠️ assigned_user_id
 exports.createTask = async (req, res) => {
   try {
     const { name, max_score=10, frequency='daily', frequency_day=null, assigned_user_id=null } = req.body;
@@ -191,9 +184,7 @@ exports.updateTask = async (req, res) => {
     if (!(await inLeaderGroup(req, { taskId: req.params.id }))) return res.status(403).json(NOT_YOUR_GROUP);
     const before = await getDailyTask(req.params.id);
     if (!before) return res.status(404).json({ success: false, message: 'Not found' });
-    // ⚠️ Chỉ đổi người được giao khi request CÓ gửi assigned_user_id (null = bỏ giao
-    // riêng). Trước đây thiếu field này là tự gán NULL → sửa tên công việc riêng
-    // của 1 người vô tình biến nó thành công việc chung của cả nhóm.
+    // ⚠️ Chỉ đổi người được giao khi request CÓ gửi assigned_user_id
     await db.query(
       `UPDATE daily_tasks SET name=COALESCE(?,name), max_score=COALESCE(?,max_score),
        frequency=COALESCE(?,frequency), frequency_day=COALESCE(?,frequency_day),
@@ -342,15 +333,7 @@ exports.saveLogs = async (req, res) => {
       );
       const existingMap = {};
       existingRows.forEach(r => {
-        // ⚠️ SỬA LỖI MÚI GIỜ NGHIÊM TRỌNG: .toISOString() quy đổi Date object
-        // sang giờ UTC trước khi cắt lấy ngày — với server chạy múi giờ VN
-        // (UTC+7), ngày có thể bị LÙI 1 NGÀY (VD: 13/08 00:00 giờ VN →
-        // 12/08 17:00 UTC → cắt ra "12/08" SAI). Điều này khiến khóa tra cứu
-        // existingMap không khớp với ngày thực sự gửi lên, nên code LUÔN coi
-        // mọi lần chấm là "mới" (existing=undefined) dù đã có người chấm
-        // trước đó — hậu quả: không phát hiện được đây là SỬA điểm, nên
-        // không thông báo đúng cho người đã chấm trước (VD: Leader). Dùng
-        // local date components (getFullYear/getMonth/getDate) thay vì UTC.
+        // ⚠️ SỬA LỖI MÚI GIỜ NGHIÊM TRỌNG
         const dateStr = r.log_date instanceof Date
           ? `${r.log_date.getFullYear()}-${String(r.log_date.getMonth()+1).padStart(2,'0')}-${String(r.log_date.getDate()).padStart(2,'0')}`
           : r.log_date;
@@ -388,10 +371,7 @@ exports.saveLogs = async (req, res) => {
       await conn.commit();
       cache.clear('logs:'); cache.clear('board:'); cache.clear('dash:');
 
-      // 📡 Realtime — báo cho MỌI người đang mở trang Daily biết vừa có điểm
-      // mới/sửa, để tự tải lại ngay không cần F5 (giống cơ chế đã làm cho
-      // Requests). Gửi kèm user_id bị ảnh hưởng để frontend biết có liên
-      // quan tới mình hay không.
+      // 📡 Realtime — báo cho MỌI người đang mở trang Daily biết vừa có điểm mới/sửa, để tự tải lại ngay không cần F5
       const affectedUserIds = [...new Set(logs.map(l => l.user_id))];
       req.app.get('io')?.emit('daily:updated', { taskIds: [...new Set(logs.map(l=>l.daily_task_id))], userIds: affectedUserIds, logDate: logs[0]?.log_date });
 
@@ -441,10 +421,7 @@ exports.saveLogs = async (req, res) => {
           };
         }));
 
-        // 🔔 Thông báo — CHẤM MỚI: báo cho chính người được chấm (User).
-        // SỬA LẠI: báo cho CẢ người được chấm (User) LẪN người đã chấm lần
-        // trước đó (VD: Leader) để họ biết điểm mình chấm vừa bị đổi — trừ
-        // khi người đó chính là người vừa thực hiện hành động (không tự báo mình).
+        // 🔔 Thông báo — CHẤM MỚI: báo cho chính người được chấm
         const io = req.app.get('io');
         for (const entry of activityEntries) {
           const taskName = taskNameMap[entry.log.daily_task_id] || `#${entry.log.daily_task_id}`;
@@ -515,8 +492,7 @@ exports.getBoardData = async (req, res) => {
     const { group_id, date = localDate() } = req.query;
     if (!group_id) return res.json({ success: true, data: [] });
 
-    // Dữ liệu có điểm HÔM NAY của CHÍNH người xem → key phải có user id (trước
-    // đây thiếu, nên trong 15s người sau thấy điểm của người tải trước)
+    // Dữ liệu có điểm HÔM NAY của CHÍNH người xem
     const cKey = `board:${group_id}:${date}:${req.user.id}`;
     let result = cache.get(cKey);
     if (!result) {
@@ -578,9 +554,7 @@ exports.getPageData = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// GET /daily/note-history?task_id=&user_id=&log_date=
-// Lịch sử TẤT CẢ lần chấm/sửa điểm của ĐÚNG 1 Ô (task+người+ngày cụ thể) —
-// mỗi người từng ghi lý do ở lần chấm/sửa của họ đều được giữ lại riêng biệt.
+// GET /daily/note-history?task_id=&user_id=&log_date= Lịch sử TẤT CẢ lần chấm/sửa điểm của ĐÚNG 1 Ô
 exports.getNoteHistory = async (req, res) => {
   try {
     const { task_id, user_id, log_date } = req.query;

@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 
-// Đồng hồ DÙNG CHUNG cho mọi bộ đếm giờ (đếm ngược deadline, giờ công...).
-// Trước đây mỗi thẻ CV tự chạy 1 setInterval riêng → 200 thẻ = 200 timer,
-// mỗi giây React phải vẽ lại 200 lần riêng lẻ → trang giật/lag. Giờ mỗi chu
-// kỳ chỉ có 1 timer, tất cả thẻ cập nhật trong cùng 1 lần vẽ.
+// Đồng hồ DÙNG CHUNG cho mọi bộ đếm giờ
 const clocks = new Map(); // periodMs → { subs: Set, timer }
 
 function subscribe(period, fn) {
@@ -23,8 +20,7 @@ function subscribe(period, fn) {
   };
 }
 
-// Trả về Date.now(), tự cập nhật mỗi `period` ms khi `enabled`.
-// `period` có thể là hàm (now) => ms để đổi nhịp theo thời gian còn lại.
+// Trả về Date.now(), tự cập nhật mỗi `period` ms khi `enabled`
 export function useNow(period = 1000, enabled = true) {
   const [now, setNow] = useState(() => Date.now());
   const ms = typeof period === 'function' ? period(now) : period;

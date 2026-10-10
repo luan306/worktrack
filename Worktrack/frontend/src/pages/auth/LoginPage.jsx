@@ -18,8 +18,7 @@ export default function LoginPage() {
 
   const switchLang = c => { setLang(c); i18n.changeLanguage(c); localStorage.setItem('lang', c); };
 
-  // Xóa lỗi khi người dùng bắt đầu sửa lại thông tin — nhưng lỗi vẫn hiển thị
-  // liên tục cho đến lúc đó, không tự động biến mất sau vài giây.
+  // Xóa lỗi khi người dùng bắt đầu sửa lại thông tin
   const updateField = (key, value) => {
     setForm(p => ({ ...p, [key]: value }));
     if (err) setErr('');
@@ -31,9 +30,7 @@ export default function LoginPage() {
     setBusy(true); setErr('');
     try { await login(form.username, form.password); navigate('/'); }
     catch (e) {
-      // Chỉ báo "sai thông tin" khi server thật sự trả 401 — các lỗi khác (quá
-      // nhiều lần thử, mất kết nối server...) phải hiện đúng lý do, nếu không
-      // người dùng tưởng mình nhập sai mật khẩu.
+      // Chỉ báo "sai thông tin" khi server thật sự trả 401
       const status = e.response?.status;
       if (status === 401) setErr(t('bad_creds'));
       else if (!e.response) setErr('Không kết nối được máy chủ, vui lòng thử lại sau');

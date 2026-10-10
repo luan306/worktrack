@@ -59,8 +59,7 @@ const isNearDeadline = (task) => {
 };
 const isOverdue = (task) => task.deadline && new Date(task.deadline) < new Date() && task.status !== 'done';
 const isUnassigned = (task) => !(task.assignees && task.assignees.length);
-// Chưa có field assigned_at riêng trong API — dùng assigned_at nếu backend có trả,
-// nếu không thì fallback về updated_at/created_at để ước lượng "vừa mới giao".
+// Chưa có field assigned_at riêng trong API
 const isRecentlyAssigned = (task) => {
   const raw = task.assigned_at || task.updated_at || task.created_at;
   if (!raw) return false;
@@ -362,8 +361,7 @@ const ColSearch = ({ value, onChange, placeholder }) => (
   </div>
 );
 
-// Các nút lọc trên 1 hàng, cuộn ngang khi cột hẹp (không chiếm 2–3 dòng như trước)
-// items: [[key, nhãn, icon, số lượng], ...]
+// Các nút lọc trên 1 hàng, cuộn ngang khi cột hẹp
 const ChipRow = ({ items, value, onChange, color = C.primary }) => (
   <div className="brd-chiprow" style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: '1 1 auto', minWidth: 0 }}>
     {items.map(([key, label, icon, count]) => {
@@ -479,13 +477,7 @@ export default function BoardPage() {
     finally { setLoading(false); }
   }, []);
 
-  // 📡 Realtime — tự cập nhật cột "Yêu cầu"/"Hoàn thành" khi có CV mới/đổi
-  // trạng thái/gán người... ở bất kỳ đâu, không cần F5. Xóa cache client
-  // trước khi fetch lại (cache GET chỉ tự xóa khi CHÍNH tab này gọi
-  // POST/PUT/DELETE, không biết gì về thay đổi từ tab/người khác).
-  // ⚠️ Đặt SAU khai báo fetchAll (không phải trước) — fetchAll dùng const,
-  // tham chiếu nó trong dependency array TRƯỚC khi khai báo sẽ crash ngay lúc
-  // render (temporal dead zone), không đợi tới lúc effect thật sự chạy.
+  // 📡 Realtime — tự cập nhật cột "Yêu cầu"/"Hoàn thành" khi có CV mới/đổi trạng thái/gán người..
   useEffect(() => {
     if (!user?.id) return;
     return onRealtime('requests:updated', () => { clearApiCache(); fetchAll(); });

@@ -4,6 +4,7 @@ const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
 const db = require('../config/db');
 const cache = require('../config/cache');
 const { invalidateUser } = require('../middleware/auth');
+const { DEFAULT_PASSWORD } = require('../utils/password');
 const { logActivity, diffFields } = require('../services/activityLogService');
 
 // ── Lịch sử thay đổi tài khoản ──
@@ -31,8 +32,7 @@ const actorOf = (req) => req.user.full_name || req.user.username;
 const ROLES = ['user', 'leader', 'manager', 'admin'];
 const MIN_PASSWORD = 8;
 const weakPassword = (p) => typeof p !== 'string' || p.length < MIN_PASSWORD;
-// Chỉ Admin mới được tạo/nâng quyền Admin hoặc đụng vào tài khoản Admin —
-// trước đây Manager có thể tự nâng mình lên Admin, đổi mật khẩu/xóa Admin.
+// Chỉ Admin mới được tạo/nâng quyền Admin hoặc đụng vào tài khoản Admin
 const ADMIN_ONLY = { success: false, message: 'Chỉ Admin mới được thao tác với tài khoản/quyền Admin' };
 
 exports.list = async (req, res) => {
@@ -47,16 +47,10 @@ exports.list = async (req, res) => {
                LEFT JOIN \`groups\` g ON g.id=gm.group_id AND g.is_active=1
                WHERE 1=1`;
     const p = [];
-    // ⚠️ Trước đây lọc cứng "WHERE u.is_active=1" — hễ khóa 1 người là họ biến
-    // mất khỏi danh sách vĩnh viễn, không có cách nào xem lại hay mở khóa
-    // (giống hệt như xóa dù dữ liệu vẫn còn). Giờ mặc định hiện CẢ người đã
-    // khóa (khớp với cột trạng thái 🔒/🔓 vốn đã có sẵn ở giao diện) — chỉ lọc
-    // theo is_active nếu người dùng chủ động chọn qua bộ lọc.
+    // ⚠️ Trước đây lọc cứng "WHERE u.is_active=1"
     if (is_active !== undefined && is_active !== '') { sql += ' AND u.is_active=?'; p.push(is_active); }
     if (role)     { sql += ' AND u.role=?'; p.push(role); }
-    // User thường chỉ cần danh sách tên để chọn người (giao việc, lọc...) —
-    // không trả tên đăng nhập / email / lần đăng nhập cuối, tránh lộ danh sách
-    // tài khoản admin để dò mật khẩu. Tìm kiếm cũng chỉ theo họ tên.
+    // User thường chỉ cần danh sách tên để chọn người
     const limited = !['admin','manager','leader'].includes(req.user.role);
     if (search && limited) { sql += ' AND u.full_name LIKE ?'; p.push(`%${search}%`); }
     else if (search) { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
@@ -110,18 +104,7 @@ exports.create = async (req, res) => {
   }
 };
 
-// PUT /users/:id — cho phép các trường hợp sau:
-//   1) Admin/Manager: sửa BẤT KỲ user nào, kể cả đổi role/is_active/nhóm.
-//   2) Leader: KHÔNG được đổi role của ai (kể cả chính mình), nhưng ĐƯỢC sửa
-//      thông tin (full_name/email/avatar_color), khóa/mở khóa (is_active),
-//      VÀ ĐỔI NHÓM (group_id) cho bất kỳ ai TRỪ admin/manager — không được
-//      đụng vào admin/manager dưới bất kỳ hình thức nào, không tự khóa
-//      chính mình.
-//   3) Chính chủ (req.user.id === :id): chỉ được tự sửa hồ sơ CỦA MÌNH, và
-//      CHỈ với các trường an toàn (full_name, email, avatar_color) — tuyệt đối
-//      không cho tự đổi role/is_active/group_id dù là tự sửa mình, để tránh
-//      tự nâng quyền hoặc tự chuyển nhóm/kích hoạt lại tài khoản đã bị khóa.
-// Mọi trường hợp khác (user thường sửa người khác) → 403.
+// PUT /users/:id — cho phép các trường hợp sau
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
@@ -135,11 +118,7 @@ exports.update = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa người dùng khác' });
     }
 
-    // ⚠️ Lấy TRƯỚC thông tin hiện tại của target — cần để so sánh "có thực sự
-    // ĐỔI giá trị hay không" thay vì chỉ xét "field có được gửi lên hay
-    // không". Trước đây EditUserModal luôn gửi kèm role=giá trị hiện tại (kể
-    // cả khi Leader không đổi role), khiến role!==undefined luôn đúng và
-    // Leader bị chặn 403 dù chỉ đang đổi NHÓM chứ không hề đụng tới role.
+    // ⚠️ Lấy TRƯỚC thông tin hiện tại của target
     const [[target]] = !isSelf ? await db.query('SELECT role, is_active FROM users WHERE id=?', [id]) : [[null]];
     if (!isSelf && !target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
 
@@ -151,18 +130,13 @@ exports.update = async (req, res) => {
     // username (MSNV) là tên đăng nhập — chính chủ không tự đổi được
     const username = isSelf && !isPrivileged ? undefined : req.body.username;
 
-    // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi, kể cả Leader
-    // hay chính chủ tự sửa mình cũng không được. Chỉ chặn khi GIÁ TRỊ thực
-    // sự khác với role hiện tại (không chặn oan khi field được gửi lên
-    // nhưng giữ nguyên giá trị cũ).
+    // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi
     const roleChanging = role !== undefined && (isSelf || role !== target.role);
     if (roleChanging && !isPrivileged) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
     }
 
-    // Nhóm — admin/manager luôn được; Leader ĐƯỢC đổi nhóm cho người khác
-    // (đã qua kiểm tra target không phải admin/manager ở khối bên dưới),
-    // nhưng KHÔNG được tự chuyển nhóm của chính mình.
+    // Nhóm — admin/manager luôn được
     if (group_id !== undefined && !isPrivileged) {
       if (!isLeader) {
         return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi nhóm của người dùng' });
@@ -172,19 +146,14 @@ exports.update = async (req, res) => {
       }
     }
 
-    // Leader sửa NGƯỜI KHÁC (không phải chính mình, không phải admin/manager
-    // thực hiện): được phép sửa full_name/email/avatar_color/is_active/group_id,
-    // NHƯNG target không được là admin/manager — kiểm tra 1 lần chung cho mọi
-    // trường thay vì tách riêng như trước.
+    // Leader sửa NGƯỜI KHÁC (không phải chính mình, không phải admin/manager thực hiện)
     if (isLeader && !isSelf && !isPrivileged) {
       if (['admin','manager'].includes(target.role)) {
         return res.status(403).json({ success: false, message: 'Leader không có quyền chỉnh sửa tài khoản admin/manager' });
       }
     }
 
-    // is_active (khóa/mở khóa): admin/manager luôn được; Leader được (đã qua
-    // kiểm tra target ở trên) nhưng không được tự khóa/mở khóa chính mình.
-    // Cũng chỉ chặn khi GIÁ TRỊ thực sự đổi, cùng lý do như role ở trên.
+    // is_active (khóa/mở khóa): admin/manager luôn được
     const activeChanging = is_active !== undefined && (isSelf || +is_active !== +target.is_active);
     if (activeChanging && !isPrivileged) {
       if (!isLeader) {
@@ -216,8 +185,7 @@ exports.update = async (req, res) => {
 
     invalidateUser(id); // khóa / đổi role có hiệu lực ngay, không chờ token hết hạn
 
-    // Đổi nhóm — gỡ khỏi nhóm cũ, thêm vào nhóm mới (group_id rỗng/"" thì chỉ
-    // gỡ khỏi mọi nhóm, không nhóm nào — tương ứng lựa chọn "-- Không nhóm --").
+    // Đổi nhóm — gỡ khỏi nhóm cũ, thêm vào nhóm mới
     if (group_id !== undefined) {
       await db.query('DELETE FROM group_members WHERE user_id=?', [id]);
       if (group_id) {
@@ -242,9 +210,7 @@ exports.update = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-// POST /users/:id/reset-password — admin/manager đổi được cho bất kỳ ai;
-// Leader đổi được cho bất kỳ ai TRỪ admin/manager (khớp quy tắc chung đã áp
-// dụng cho update()/remove()).
+// POST /users/:id/reset-password
 exports.resetPassword = async (req, res) => {
   try {
     const { password } = req.body;
@@ -258,7 +224,10 @@ exports.resetPassword = async (req, res) => {
     }
     if (target.role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
 
-    await db.query('UPDATE users SET password=? WHERE id=?', [await bcrypt.hash(password, 10), req.params.id]);
+    // Đặt lại về mật khẩu mặc định → người đó phải đổi ở lần đăng nhập tới; đặt mật khẩu riêng → gỡ yêu cầu
+    await db.query('UPDATE users SET password=?, must_change_password=? WHERE id=?',
+      [await bcrypt.hash(password, 10), password === DEFAULT_PASSWORD ? 1 : 0, req.params.id]);
+    invalidateUser(req.params.id);
     // Buộc đăng nhập lại trên mọi thiết bị của người bị đổi mật khẩu
     await db.query('DELETE FROM refresh_tokens WHERE user_id=?', [req.params.id]);
     const t = await getUserSnapshot(req.params.id);
@@ -305,7 +274,7 @@ exports.importUsers = async (req, res) => {
           continue;
         }
 
-        const hash = await bcrypt.hash('Welcome00', 10);
+        const hash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
         const [r]  = await db.query(
           'INSERT INTO users (username,email,password,full_name,role,avatar_color) VALUES (?,?,?,?,?,?)',
           [uname, u.email||null, hash, u.full_name.trim(), ROLES.includes(u.role) ? u.role : 'user', color]
@@ -393,9 +362,7 @@ exports.remove = async (req, res) => {
     finally { conn.release(); }
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
-// ── Nhập tài khoản từ Excel ───────────────────────────────────────
-// GET /users/import/template — file mẫu .xlsx, cột MSNV định dạng TEXT để Excel
-// không tự bỏ số 0 ở đầu (019123 → 19123) như khi mở file .csv.
+// Nhập tài khoản từ Excel ─────────────────────────────────────── GET /users/import/template
 exports.importTemplate = async (req, res) => {
   try {
     const wb = new ExcelJS.Workbook();
@@ -419,9 +386,7 @@ exports.importTemplate = async (req, res) => {
   } catch (e) { xlsxError(res, e); }
 };
 
-// POST /users/import/parse (multipart, field "file") — đọc .xlsx, trả về các dòng
-// dạng mảng chữ ĐÚNG NHƯ HIỂN THỊ trong Excel (cell.text) → ô MSNV định dạng
-// "000000" hay dạng Text đều giữ được số 0 ở đầu.
+// POST /users/import/parse (multipart, field "file")
 exports.parseImportFile = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'Chưa chọn file' });
