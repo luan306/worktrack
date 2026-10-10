@@ -44,8 +44,8 @@ function TaskItem({ idx, entry, editable, onChanged }) {
     <div className="wl-task" style={{ display: 'flex', gap: 10, padding: '9px 4px', borderBottom: `1px dashed ${C.noteLine}`, alignItems: 'flex-start' }}>
       <span style={{ width: 22, height: 22, borderRadius: '50%', background: C.primarySoft, color: C.primary, fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: FONT_MONO }}>{idx}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, lineHeight: 1.45, wordBreak: 'break-word' }}>{entry.title}</div>
-        {entry.description && <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.5, whiteSpace: 'pre-wrap', marginTop: 2 }}>{entry.description}</div>}
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{entry.title}</div>
+        {entry.description && <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 2 }}>{entry.description}</div>}
         {/* việc làm nhiều ngày: từ ngày – đến ngày của cả đợt */}
         {entry.span_start && entry.span_end && entry.span_start !== entry.span_end && (
           <span title={t('wl_multi_day', 'Làm nhiều ngày')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4, padding: '1px 8px', borderRadius: 20, background: C.primarySoft, color: C.primary, fontSize: 11, fontWeight: 700, fontFamily: FONT_MONO, whiteSpace: 'nowrap' }}>
@@ -193,7 +193,7 @@ function ScoreBox({ member, date, score, maxScore, canScore, scorable, onSaved }
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
           <div style={{ fontSize: 12, color: C.sub }}>{t('wl_scored_by', 'Chấm bởi')} <b style={{ color: C.ink }}>{score.scorer_name || '?'}</b></div>
           {score.comment
-            ? <div style={{ fontSize: 13, color: C.ink, background: C.canvas, borderRadius: 9, padding: '7px 10px', borderLeft: `3px solid ${col}`, whiteSpace: 'pre-wrap' }}>“{score.comment}”</div>
+            ? <div style={{ fontSize: 13, color: C.ink, background: C.canvas, borderRadius: 9, padding: '7px 10px', borderLeft: `3px solid ${col}`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>“{score.comment}”</div>
             : <div style={{ fontSize: 12, color: C.faint }}>{t('wl_no_comment', 'Không có nhận xét')}</div>}
           {canScore && scorable && <div><Btn small onClick={open}>✏️ {t('wl_edit_score', 'Sửa điểm')}</Btn></div>}
         </div>

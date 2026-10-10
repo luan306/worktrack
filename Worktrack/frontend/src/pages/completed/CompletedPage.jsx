@@ -313,7 +313,7 @@ function TaskCard({ task, fmtDate, late=false, expanded, onToggle, detail, detai
           {detail && (
             <div className="flex flex-col gap-3">
               {detail.description && (
-                <div className="text-xs text-[var(--wt-text-2)] bg-[var(--wt-canvas)] rounded-xl p-3 whitespace-pre-wrap leading-relaxed">{detail.description}</div>
+                <div className="text-xs text-[var(--wt-text-2)] bg-[var(--wt-canvas)] rounded-xl p-3 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed">{detail.description}</div>
               )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">

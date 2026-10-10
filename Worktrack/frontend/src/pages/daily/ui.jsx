@@ -11,7 +11,7 @@ export const OverlayPanel = ({ onClose, children, width = 460 }) => (
 export const DetailDock = ({ isMobile, isNarrow, width = 460, onClose, children }) =>
   isMobile ? <MobileSheet>{children}</MobileSheet>
   : isNarrow ? <OverlayPanel onClose={onClose} width={width}>{children}</OverlayPanel>
-  : <div className="wl-sheet" style={{ flex: `0 0 min(${width}px, 42%)`, borderLeft: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', minHeight: 0, background: C.surface, boxShadow: '-6px 0 18px rgba(15,23,41,.06)' }}>{children}</div>;
+  : <div className="wl-sheet" style={{ flex: `0 0 min(${width}px, 42%)`, maxWidth: `min(${width}px, 42%)`, minWidth: 0, overflow: 'hidden', borderLeft: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', minHeight: 0, background: C.surface, boxShadow: '-6px 0 18px rgba(15,23,41,.06)' }}>{children}</div>;
 export const MobileSheet = ({ children }) => (
   <div className="wl-sheet" style={{ position: 'fixed', inset: 0, zIndex: 450, display: 'flex', flexDirection: 'column', background: C.surface, paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>{children}</div>
 );
