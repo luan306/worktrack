@@ -10,8 +10,8 @@ const gC  = require('../controllers/groups.controller');
 const dC  = require('../controllers/daily.controller');
 const rC  = require('../controllers/requests.controller');
 const dbC = require('../controllers/dashboard.controller');
-const nC  = require('../controllers/notifications.controller');
-const alC = require('../controllers/activityLog.controller');
+const nC  = require('../controllers/Notifications.controller');
+const alC = require('../controllers/Activitylog.controller');
 const wlC = require('../controllers/worklog.controller');
 
 // ── Auth ──

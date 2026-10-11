@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import useAuth from '../../store/authStore';
 import i18n from '../../i18n';
+import smcLogo from '../../assets/smc_logo.png';
 
 const LANGS = [{ c:'en', l:'🇬🇧 EN' }, { c:'ja', l:'🇯🇵 JP' }, { c:'vi', l:'🇻🇳 VI' }];
 
@@ -51,8 +52,8 @@ export default function LoginPage() {
             <div className="mb-4 flex justify-start">
               <div className="bg-white px-3 py-2 rounded">
                 <img
-                  src="./src/assets/smc_logo.png"
-                  alt="Logo"
+                  src={smcLogo}
+                  alt="SMC"
                   className="h-8 md:h-10 w-auto"
                 />
               </div>

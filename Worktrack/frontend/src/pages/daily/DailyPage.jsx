@@ -18,6 +18,7 @@ import { DetailDock, Btn, OffAvatars } from './ui';
 import NotePanel from './NotePanel';
 import ExportDialog from './ExportDialog';
 import HolidayDialog from './HolidayDialog';
+import OffMenu from './OffMenu';
 import OverviewBoard from './OverviewBoard';
 import PendingBoard from './PendingBoard';
 import usePendingScoreCount from '../../lib/usePendingScoreCount';
@@ -424,26 +425,18 @@ export default function DailyPage() {
           <input type="month" value={month} onChange={e => e.target.value && goMonth(e.target.value)} className="wl-seg-date" style={{ border: 'none', outline: 'none', background: 'transparent', font: `600 12px ${FONT_SANS}`, color: C.sub, padding: '4px 6px', width: 132 }} />
         </div>}
 
+        {/* Ai nghỉ ngày đang mở (mặc định hôm nay) — 1 nút, bấm để sổ danh sách */}
+        {view === 'me' && data && current && (
+          <OffMenu people={dayOffs} label={current.date === today ? t('wl_team_off_today', 'Hôm nay nghỉ') : `${t('wl_team_off_on', 'Nghỉ ngày')} ${dmy(current.date).slice(0, 5)}`} />
+        )}
+        {view === 'me' && current?.holiday && (
+          <span title={current.holiday} style={{ padding: '6px 12px', borderRadius: 10, background: 'var(--wt-tint-danger)', border: '1px solid var(--wt-tint-danger-bd)', color: C.danger, fontSize: 12.5, fontWeight: 800, whiteSpace: 'nowrap', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>🎉 {current.holiday}</span>
+        )}
         {view === 'me' && data && (
           <Btn onClick={() => setShowHolidays(true)} title={t('hol_title', 'Ngày nghỉ lễ của công ty')} style={{ padding: '9px 12px', borderRadius: 10 }}>🎉<span className="wl-export-label"> {t('hol_btn', 'Ngày lễ')}</span></Btn>
         )}
         <Btn kind="primary" onClick={() => setShowExport(true)} title={t('wl_export', 'Xuất báo cáo')} style={{ padding: '9px 14px', borderRadius: 10 }}>⬇<span className="wl-export-label"> {t('wl_export', 'Xuất báo cáo')}</span></Btn>
 
-        {/* Ai trong nhóm nghỉ ngày đang chọn (mặc định hôm nay) — luôn nằm trên cùng để mở trang là thấy */}
-        {view === 'me' && data && current && (
-          <div className="wl-offbar" style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '7px 12px', borderRadius: 12, background: dayOffs.length ? C.tealSoft : C.board, border: `1px solid ${dayOffs.length ? `${C.teal}33` : C.line}` }}>
-            <span style={{ fontSize: 12, fontWeight: 800, color: dayOffs.length ? C.teal : C.sub, whiteSpace: 'nowrap' }}>
-              🌴 {current.date === today ? t('wl_team_off_today', 'Hôm nay nghỉ') : `${t('wl_team_off_on', 'Nghỉ ngày')} ${dmy(current.date)}`}{dayOffs.length ? ` (${dayOffs.length})` : ''}:
-            </span>
-            {current.holiday && <span style={{ padding: '2px 10px', borderRadius: 20, background: 'var(--wt-tint-danger)', border: '1px solid var(--wt-tint-danger-bd)', color: C.danger, fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap' }}>🎉 {t('hol_company_off', 'Công ty nghỉ lễ')}: {current.holiday}</span>}
-            {dayOffs.length ? dayOffs.map(o => (
-              <span key={o.user_id} title={o.reason || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 9px 2px 3px', borderRadius: 20, background: 'var(--wt-surface)', fontSize: 12, fontWeight: 700, color: C.ink, whiteSpace: 'nowrap' }}>
-                <OffAvatars people={[o]} size={20} />{o.full_name}
-                {o.kind !== 'full' && <span style={{ fontWeight: 600, color: C.teal }}>· {offShort(t, o.kind)}</span>}
-              </span>
-            )) : <span style={{ fontSize: 12, fontWeight: 600, color: C.faint }}>{t('wl_team_off_none', 'Không ai nghỉ')}</span>}
-          </div>
-        )}
       </div>
 
       {/* ── Đang xem lịch của NGƯỜI KHÁC → báo thật rõ để không chấm nhầm ── */}
