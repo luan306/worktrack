@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import api, { clearApiCache } from '../../api/client';
 import useAuth from '../../store/authStore';
@@ -39,6 +39,8 @@ const ACTIVITY_META = {
   request_created:          { icon:'➕', color:C.primary, bg:'var(--wt-tint-primary)' },
   request_assignee_added:   { icon:'🙋', color:'#17b26a', bg:'var(--wt-tint-success)' },
   request_assignee_removed: { icon:'↩️', color:C.warning, bg:'var(--wt-tint-warning)' },
+  request_link_added:       { icon:'🔗', color:C.primary, bg:'var(--wt-tint-primary)' },
+  request_link_removed:     { icon:'🔗', color:C.warning, bg:'var(--wt-tint-warning)' },
   request_scored:           { icon:'⭐', color:'#8e44ad', bg:'var(--wt-tint-violet)' },
   request_completed:        { icon:'✅', color:C.success, bg:'var(--wt-tint-success)' },
 };
@@ -270,17 +272,19 @@ function ActivityTimeline({ taskId }) {
 export default function RequestsPage() {
   const { t, i18n } = useTranslation();
   const { user, can } = useAuth();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isLeader = can('admin','manager','leader');
   const currentLocale = LOCALE_MAP[i18n.language] || 'vi-VN';
-  const fmtDt = makeFmtDt(currentLocale);
+  const now = useNow(60000); // nhãn "Mới" (tạo trong 24h) tự hết hạn, không gọi Date.now() lúc vẽ
 
   const [tasks,   setTasks]   = useState([]);
   const [groups,  setGroups]  = useState([]);
   const [users,   setUsers]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter,  setFilter]  = useState('all');
+  const [sortBy,  setSortBy]  = useState(() => { try { return localStorage.getItem('req-sort') || 'newest'; } catch { return 'newest'; } });
+  const changeSort = (v) => { setSortBy(v); try { localStorage.setItem('req-sort', v); } catch { /* trình duyệt chặn lưu */ } };
+  const [scope,   setScope]   = useState('all'); // all | mine (tôi làm) | created (tôi tạo/giao)
   const [search,  setSearch]  = useState('');
   const [selected,setSelected]= useState(
     isLeader && searchParams.get('create')==='1' ? 'new' :
@@ -305,38 +309,23 @@ export default function RequestsPage() {
     return onRealtime('requests:updated', () => { clearApiCache(); reload(); });
   }, [user?.id]);
 
-  const isAdminOrManager = can('admin','manager');
-  const isTeamLeaderOnly = !isAdminOrManager && can('leader');
-  const myGroupIds = new Set((user?.groups||[]).map(g=>g.id));
-
-  const teamMemberIds = new Set([user?.id]);
-  if (isTeamLeaderOnly) {
-    users.forEach(u=>{
-      const uGroupIds = (u.groups||[]).map(g=>g.id);
-      if (uGroupIds.some(id=>myGroupIds.has(id))) teamMemberIds.add(u.id);
-    });
-  }
-
-  // CV "đang mở, chưa ai nhận" (status='pending'
-  const isUnclaimedOpen = (t2) => t2.status === 'pending' && !(t2.assignees||[]).length;
-
-  const visibleTasks = isAdminOrManager
-    ? tasks
-    : isTeamLeaderOnly
-      ? tasks.filter(t2 =>
-          teamMemberIds.has(t2.created_by) ||
-          (t2.assignees||[]).some(a=>teamMemberIds.has(a.user_id)) ||
-          isUnclaimedOpen(t2)
-        )
-      : tasks.filter(t2 => t2.created_by===user?.id || (t2.assignees||[]).some(a=>a.user_id===user?.id) || isUnclaimedOpen(t2));
+  // Trang Requests chỉ gồm CV LIÊN QUAN ĐẾN MÌNH (mình làm hoặc mình tạo/giao) — mọi CV của công ty xem ở Board
+  const relationOf = (t2) =>
+    (t2.assignees||[]).some(a=>a.user_id===user?.id) ? 'mine'
+    : t2.created_by===user?.id ? 'created' : null;
+  const visibleTasks = tasks.filter(t2 => relationOf(t2));
+  const scopeCount = (k) => visibleTasks.filter(t2=>relationOf(t2)===k).length;
 
   const filtered = visibleTasks
     .filter(t=>{
+      if (scope!=='all' && relationOf(t)!==scope) return false;
       if (filter!=='all' && t.status!==filter) return false;
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     })
     .sort((a,b)=>{
+      if (sortBy==='newest') return new Date(b.created_at) - new Date(a.created_at);
+      if (sortBy==='oldest') return new Date(a.created_at) - new Date(b.created_at);
       const doneA = ['done','cancelled'].includes(a.status);
       const doneB = ['done','cancelled'].includes(b.status);
       if (doneA !== doneB) return doneA ? 1 : -1;
@@ -394,8 +383,6 @@ export default function RequestsPage() {
           .req-root .req-steps-bar::-webkit-scrollbar { display: none; }
           .req-root .req-steps-bar > div { flex-shrink: 0; }
           .req-root .req-filter-toolbar { padding: 8px 10px !important; }
-          .req-root .req-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-          .req-root .req-chips::-webkit-scrollbar { display: none; }
           .req-root .req-chips > button { flex-shrink: 0; padding: 6px 12px !important; font-size: 12px !important; }
           .req-root .req-list-item { padding: 14px !important; }
           .req-root .req-sec-extra { display: none !important; }
@@ -408,15 +395,30 @@ export default function RequestsPage() {
       `}</style>
 
       {/* LEFT: List */}
-      <div className={`req-list-panel${selected ? ' req-list-selected' : ''}`} style={{flex:selected?'0 0 300px':'1 1 auto',display:'flex',flexDirection:'column',borderRight:`1.5px solid ${C.border}`,overflow:'hidden'}}>
+      <div className={`req-list-panel${selected ? ' req-list-selected' : ''}`} style={{flex:selected?'0 0 300px':'1 1 auto',minWidth:0,display:'flex',flexDirection:'column',borderRight:`1.5px solid ${C.border}`,overflow:'hidden'}}>
         <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:8,background:'var(--wt-surface)',flexShrink:0}}>
           <div style={{fontSize:14,fontWeight:800,color:C.dark,flex:1}}>📨 {t('requests')}</div>
           {isLeader&&<button onClick={()=>setSelected('new')} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>➕ {t('create')}</button>}
         </div>
 
         <div className="req-filter-toolbar" style={{padding:'8px 12px',borderBottom:`1px solid ${C.border}`,background:C.bg,flexShrink:0}}>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`🔍 ${t('req_search_title')}`}
-            style={{...FI,padding:'6px 10px',fontSize:12,marginBottom:8}}/>
+          <div style={{display:'flex',gap:6,marginBottom:8,minWidth:0}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`🔍 ${t('req_search_title')}`}
+              style={{...FI,padding:'6px 10px',fontSize:12,flex:1,minWidth:0}}/>
+            <select value={sortBy} onChange={e=>changeSort(e.target.value)} title={t('req_sort','Sắp xếp')} aria-label={t('req_sort','Sắp xếp')}
+              style={{...FI,width:'auto',flexShrink:0,padding:'6px 8px',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+              <option value="newest">🆕 {t('req_sort_newest','Mới nhất')}</option>
+              <option value="oldest">📜 {t('req_sort_oldest','Cũ nhất')}</option>
+              <option value="deadline">⏰ {t('req_sort_deadline','Deadline gần nhất')}</option>
+            </select>
+          </div>
+          <div className="req-chips" style={{marginBottom:6}}>
+            {[['all',`📋 ${t('req_scope_all','Tất cả')}`,visibleTasks.length],['mine',`🧑‍💻 ${t('req_scope_mine','Tôi làm')}`,scopeCount('mine')],['created',`✍️ ${t('req_scope_created','Tôi giao')}`,scopeCount('created')]].map(([k,l,c])=>(
+              <button key={k} onClick={()=>setScope(k)} style={{padding:'4px 11px',borderRadius:8,fontSize:11.5,fontWeight:700,cursor:'pointer',border:`1.5px solid ${scope===k?C.dark:C.border}`,background:scope===k?C.dark:'var(--wt-surface)',color:scope===k?'var(--wt-surface)':'var(--wt-text-2)'}}>
+                {l} <span style={{opacity:.7}}>{c}</span>
+              </button>
+            ))}
+          </div>
           <div className="req-chips">
             {[['all',t('req_filter_all'),visibleTasks.length],['pending',t('req_filter_pending'),counts.pending||0],['assigned',t('req_filter_assigned'),counts.assigned||0],['in_progress',t('req_filter_in_progress'),counts.in_progress||0],['scoring',t('req_filter_scoring'),counts.scoring||0],['done',t('req_filter_done'),counts.done||0]].map(([k,l,c])=>(
               <button key={k} onClick={()=>setFilter(k)} style={{padding:'3px 10px',borderRadius:15,fontSize:11,fontWeight:600,cursor:'pointer',border:`1.5px solid ${filter===k?C.primary:C.border}`,background:filter===k?C.primary:'var(--wt-surface)',color:filter===k?'#fff':'var(--wt-text-3)'}}>
@@ -435,7 +437,7 @@ export default function RequestsPage() {
             const overdue=t2.deadline&&new Date(t2.deadline)<new Date()&&t2.status!=='done';
             const timeLeft = t2.deadline ? new Date(t2.deadline)-new Date() : null;
             const isUrgent = t2.deadline && !['done','cancelled'].includes(t2.status) && timeLeft<3600000;
-            const isNew = t2.created_at && (Date.now()-new Date(t2.created_at).getTime()) < 24*60*60*1000;
+            const isNew = t2.created_at && (now-new Date(t2.created_at).getTime()) < 24*60*60*1000;
             return (
               <div key={t2.id} className="req-list-item" onClick={()=>setSelected(t2)}
                 style={{padding:'12px 14px',borderBottom:`1px solid var(--wt-surface-3)`,cursor:'pointer',background:isActive?'var(--wt-tint-primary)':'transparent',borderLeft:`3px solid ${isActive?C.primary:'transparent'}`}}
@@ -449,6 +451,13 @@ export default function RequestsPage() {
                   <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:8,background:st.bg,color:st.color,whiteSpace:'nowrap'}}>{st.icon} {t(st.key)}</span>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11,color:'var(--wt-text-4)',flexWrap:'wrap'}}>
+                  {(()=>{ const rel=relationOf(t2); const b={
+                      mine:    { txt:`🧑‍💻 ${t('req_rel_mine','Bạn làm')}`, col:C.success, bg:'var(--wt-tint-success)' },
+                      created: (t2.assignees||[]).length
+                        ? { txt:`✍️ ${t('req_rel_assigned','Bạn giao')}`, col:C.primary, bg:'var(--wt-tint-primary)' }
+                        : { txt:`✍️ ${t('req_rel_unassigned','Bạn tạo · chưa giao ai')}`, col:C.warning, bg:'var(--wt-tint-warning)' },
+                    }[rel];
+                    return b ? <span style={{fontSize:10,fontWeight:800,padding:'1px 7px',borderRadius:6,background:b.bg,color:b.col,whiteSpace:'nowrap'}}>{b.txt}</span> : null; })()}
                   <span>👤 {t2.creator_name}</span>
                   {t2.deadline&&<span style={{color:overdue?C.danger:'var(--wt-text-4)'}}>⏰ {new Date(t2.deadline).toLocaleDateString(currentLocale)}</span>}
                   {t2.deadline&&<Countdown deadline={t2.deadline} status={t2.status}/>}
@@ -498,8 +507,18 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
   const isAdmin = ['admin','manager'].includes(user?.role);
 
-  useEffect(()=>{ loadTask(); },[taskId]);
 
+  const loadTask = async()=>{
+    setLoading(true);
+    try{
+      const{data}=await api.get(`/requests/${taskId}`);
+      setTask(data.data);
+      setActivityTick(n=>n+1);
+      setTimeout(()=>feedRef.current?.scrollTo(0,feedRef.current.scrollHeight),100);
+    }catch(e){console.error(e);}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{ loadTask(); },[taskId]); // eslint-disable-line react-hooks/exhaustive-deps
   // 📡 Realtime — nếu CV đang mở bị người khác đổi
   useEffect(()=>{
     if (!user?.id) return;
@@ -512,18 +531,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     };
     socket.on('requests:updated', onUpdate);
     return () => socket.off('requests:updated', onUpdate);
-  }, [taskId, user?.id]);
-
-  const loadTask = async()=>{
-    setLoading(true);
-    try{
-      const{data}=await api.get(`/requests/${taskId}`);
-      setTask(data.data);
-      setActivityTick(n=>n+1);
-      setTimeout(()=>feedRef.current?.scrollTo(0,feedRef.current.scrollHeight),100);
-    }catch(e){console.error(e);}
-    finally{setLoading(false);}
-  };
+  }, [taskId, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async updates=>{
     setSaving(true);
@@ -860,7 +868,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
             </div>
 
             <Section id="files" icon="📎" title={t('req_files_section')}>
-              <FileSection taskId={task.id} files={task.files||[]} user={user} onReload={loadTask}/>
+              <FileSection taskId={task.id} files={task.files||[]} links={task.links||[]} onReload={loadTask}/>
             </Section>
 
             {isLeader&&(
@@ -1079,10 +1087,29 @@ function CreatePanel({groups,users,onClose,onSaved}){
 }
 
 // ── File Section ──
-function FileSection({ taskId, files, user, onReload }) {
+function FileSection({ taskId, files, links = [], onReload }) {
   const { t } = useTranslation();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef();
+  const [linkForm, setLinkForm] = useState(null); // null | { url, title }
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkErr, setLinkErr] = useState('');
+
+  const saveLink = async () => {
+    if (!linkForm?.url.trim()) return setLinkErr(t('req_link_err_empty', 'Vui lòng dán link'));
+    setLinkBusy(true);
+    try {
+      await api.post(`/requests/${taskId}/links`, { url: linkForm.url, title: linkForm.title });
+      setLinkForm(null); setLinkErr(''); onReload();
+    } catch (e) { setLinkErr(e.response?.data?.message || e.message); }
+    finally { setLinkBusy(false); }
+  };
+  const deleteLink = async (id) => {
+    if (!confirm(t('req_link_delete_confirm', 'Xóa link này?'))) return;
+    try { await api.delete(`/requests/${taskId}/links/${id}`); onReload(); }
+    catch (e) { alert(e.response?.data?.message || e.message); }
+  };
+  const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
@@ -1145,6 +1172,42 @@ function FileSection({ taskId, files, user, onReload }) {
         </div>
       ))}
 
+      {links.map(l => (
+        <div key={`link-${l.id}`} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 12px', background:'var(--wt-surface-2)', borderRadius:8, border:'1px solid var(--wt-line)' }}>
+          <span style={{ fontSize:18 }}>🔗</span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div title={l.url} style={{ fontSize:12, fontWeight:600, color:'var(--wt-ink)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{l.title || l.url}</div>
+            <div style={{ fontSize:10, color:'var(--wt-text-4)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{hostOf(l.url)} · {l.added_by_name||'Unknown'}</div>
+          </div>
+          <a href={l.url} target="_blank" rel="noopener noreferrer"
+            style={{ fontSize:11, color:'#3654ff', textDecoration:'none', fontWeight:600, padding:'3px 8px', borderRadius:5, border:'1px solid var(--wt-tint-primary-bd)', background:'var(--wt-tint-primary)', whiteSpace:'nowrap' }}>
+            ↗ {t('req_link_open', 'Mở link')}
+          </a>
+          <button onClick={()=>deleteLink(l.id)} title={t('delete','Xóa')}
+            style={{ width:24, height:24, borderRadius:5, border:'1px solid var(--wt-tint-danger)', background:'var(--wt-tint-danger)', color:'#e5384d', cursor:'pointer', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            ×
+          </button>
+        </div>
+      ))}
+
+      {linkForm && (
+        <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'10px 12px', borderRadius:8, border:'1.5px solid var(--wt-tint-primary-bd)', background:'var(--wt-tint-primary)' }}>
+          <input autoFocus value={linkForm.url} onChange={e=>{ setLinkForm(f=>({...f,url:e.target.value})); setLinkErr(''); }} onKeyDown={e=>e.key==='Enter'&&saveLink()}
+            placeholder={t('req_link_url_ph', 'Dán link vào đây (https://...)')} maxLength={2000}
+            style={{ padding:'8px 10px', borderRadius:7, border:'1.5px solid var(--wt-line)', fontSize:12.5, outline:'none', background:'var(--wt-surface)', color:'var(--wt-ink)' }}/>
+          <input value={linkForm.title} onChange={e=>setLinkForm(f=>({...f,title:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&saveLink()}
+            placeholder={t('req_link_title_ph', 'Tên hiển thị (không bắt buộc), VD: Bản vẽ line 3')} maxLength={200}
+            style={{ padding:'8px 10px', borderRadius:7, border:'1.5px solid var(--wt-line)', fontSize:12.5, outline:'none', background:'var(--wt-surface)', color:'var(--wt-ink)' }}/>
+          {linkErr && <div style={{ fontSize:11.5, fontWeight:600, color:'#e5384d' }}>{linkErr}</div>}
+          <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+            <button onClick={()=>{ setLinkForm(null); setLinkErr(''); }} disabled={linkBusy}
+              style={{ padding:'6px 12px', borderRadius:7, border:'1.5px solid var(--wt-line)', background:'var(--wt-surface)', color:'var(--wt-text-2)', fontSize:12, fontWeight:600, cursor:'pointer' }}>{t('cancel','Hủy')}</button>
+            <button onClick={saveLink} disabled={linkBusy}
+              style={{ padding:'6px 14px', borderRadius:7, border:'none', background:'#3654ff', color:'#fff', fontSize:12, fontWeight:700, cursor:'pointer', opacity:linkBusy?.7:1 }}>{linkBusy ? '...' : `🔗 ${t('req_link_save', 'Lưu link')}`}</button>
+          </div>
+        </div>
+      )}
+
       <input ref={fileRef} type="file" style={{ display:'none' }} onChange={handleUpload}
         accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.txt,.csv,.mp4,.mov"/>
 
@@ -1154,6 +1217,14 @@ function FileSection({ taskId, files, user, onReload }) {
         onMouseLeave={e=>{ if(!uploading){e.currentTarget.style.borderColor='var(--wt-line-strong)';e.currentTarget.style.color='var(--wt-text-3)';e.currentTarget.style.background='transparent';}}}>
         {uploading ? `⏳ ${t('req_uploading')}` : `📎 ${t('req_attach_file')}`}
       </div>
+      {!linkForm && (
+        <div onClick={()=>setLinkForm({ url:'', title:'' })}
+          style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'10px 14px', borderRadius:8, border:'2px dashed var(--wt-line-strong)', color:'var(--wt-text-3)', fontSize:12, fontWeight:600, cursor:'pointer', transition:'all .15s' }}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor='#3654ff';e.currentTarget.style.color='#3654ff';e.currentTarget.style.background='var(--wt-tint-primary)';}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--wt-line-strong)';e.currentTarget.style.color='var(--wt-text-3)';e.currentTarget.style.background='transparent';}}>
+          🔗 {t('req_attach_link', 'Đính kèm link')}
+        </div>
+      )}
     </div>
   );
 }

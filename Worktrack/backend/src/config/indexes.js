@@ -62,6 +62,17 @@ const TABLES = [
      INDEX idx_ddo_date (work_date),
      CONSTRAINT fk_ddo_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  // Link đính kèm của CV yêu cầu (tài liệu trên mạng nội bộ, thư mục chia sẻ, bản vẽ...)
+  `CREATE TABLE IF NOT EXISTS request_task_links (
+     id          INT AUTO_INCREMENT PRIMARY KEY,
+     task_id     INT NOT NULL,
+     url         VARCHAR(2000) NOT NULL,
+     title       VARCHAR(200) NULL,
+     added_by    INT NULL,
+     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     INDEX idx_rtl_task (task_id),
+     CONSTRAINT fk_rtl_task FOREIGN KEY (task_id) REFERENCES request_tasks(id) ON DELETE CASCADE
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   // Ngày nghỉ lễ của CÔNG TY (Admin đặt, áp dụng cho mọi người) — 1 dòng / ngày
   `CREATE TABLE IF NOT EXISTS company_holidays (
      work_date   DATE NOT NULL PRIMARY KEY,

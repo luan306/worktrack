@@ -13,6 +13,8 @@ const ACTION_META = {
   request_deleted:          { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
   request_assignee_added:   { icon: '👤', color: '#17b26a', bg: 'var(--wt-tint-success)' },
   request_assignee_removed: { icon: '👤', color: C.warning, bg: 'var(--wt-tint-warning)' },
+  request_link_added:       { icon: '🔗', color: C.primary, bg: 'var(--wt-tint-primary)' },
+  request_link_removed:     { icon: '🔗', color: C.warning, bg: 'var(--wt-tint-warning)' },
   request_scored:           { icon: '⭐', color: '#8e44ad', bg: 'var(--wt-tint-violet)' },
   request_completed:        { icon: '✅', color: C.success, bg: 'var(--wt-tint-success)' },
   daily_scored:             { icon: '📅', color: '#17b26a', bg: 'var(--wt-tint-success)' },
@@ -52,6 +54,8 @@ const ACTION_LABELS = {
   request_deleted:          'Xóa CV',
   request_assignee_added:   'Thêm người',
   request_assignee_removed: 'Xóa người',
+  request_link_added:       'Đính kèm link',
+  request_link_removed:     'Xóa link',
   request_scored:           'Chấm điểm CV',
   request_completed:        'Duyệt hoàn thành',
   daily_scored:             'Chấm điểm Daily',
@@ -152,8 +156,6 @@ export default function ActivityLogPage() {
     api.get('/users').then(r => setUsers(r.data.data || [])).catch(() => {});
   }, []);
 
-  useEffect(() => { load(); }, [page, filterType, filterActor, filterFrom, filterTo]);
-
   const load = async () => {
     setLoading(true);
     try {
@@ -169,6 +171,7 @@ export default function ActivityLogPage() {
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
+  useEffect(() => { load(); }, [page, filterType, filterActor, filterFrom, filterTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fmtDt = (d) => {
     if (!d) return '—';

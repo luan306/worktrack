@@ -204,7 +204,7 @@ exports.getOne = async (req, res) => {
     );
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
 
-    const [[assignees], [files], [comments]] = await Promise.all([
+    const [[assignees], [files], [comments], [links]] = await Promise.all([
       db.query(
         `SELECT a.*, u.full_name, u.avatar_color FROM request_task_assignees a JOIN users u ON u.id=a.user_id WHERE a.task_id=?`,
         [req.params.id]),
@@ -212,9 +212,12 @@ exports.getOne = async (req, res) => {
       db.query(
         `SELECT c.*, u.full_name, u.avatar_color FROM request_task_comments c JOIN users u ON u.id=c.user_id
          WHERE c.task_id=? ORDER BY c.created_at`, [req.params.id]),
+      db.query(
+        `SELECT l.id, l.url, l.title, l.added_by, l.created_at, u.full_name AS added_by_name
+           FROM request_task_links l LEFT JOIN users u ON u.id=l.added_by WHERE l.task_id=? ORDER BY l.id`, [req.params.id]),
     ]);
 
-    res.json({ success: true, data: { ...task, assignees, files, comments } });
+    res.json({ success: true, data: { ...task, assignees, files, comments, links } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -795,7 +798,7 @@ exports.remove = async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
-      for (const t of ['request_task_assignees', 'request_task_comments', 'request_task_files']) {
+      for (const t of ['request_task_assignees', 'request_task_comments', 'request_task_files', 'request_task_links']) {
         await conn.query(`DELETE FROM ${t} WHERE task_id=?`, [req.params.id]);
       }
       await conn.query('DELETE FROM request_tasks WHERE id=?', [req.params.id]);
@@ -872,6 +875,65 @@ exports.deleteFile = async (req, res) => {
       await fs.promises.unlink(filePath).catch(() => {}); // file có thể đã bị xóa tay
     }
     await db.query('DELETE FROM request_task_files WHERE id=?', [req.params.fileId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// ── Link đính kèm ──────────────────────────────────────────────────
+// Chỉ nhận http/https: chặn "javascript:..." (bấm vào là chạy mã trên trang) và các kiểu link lạ
+function cleanUrl(raw) {
+  let v = String(raw || '').trim();
+  if (!v || v.length > 2000) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = 'http://' + v; // "intranet/tai-lieu" → "http://intranet/tai-lieu"
+  try {
+    const u = new URL(v);
+    return ['http:', 'https:'].includes(u.protocol) && u.hostname ? u.href : null;
+  } catch { return null; }
+}
+
+// Người tạo CV, người thực hiện, Leader/Manager/Admin
+async function canTouchTask(req, task) {
+  if (['admin', 'manager', 'leader'].includes(req.user.role) || task.created_by === req.user.id) return true;
+  const [[a]] = await db.query('SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND user_id=?', [task.id, req.user.id]);
+  return !!a;
+}
+
+// POST /requests/:id/links { url, title }
+exports.addLink = async (req, res) => {
+  try {
+    const [[task]] = await db.query('SELECT id, title, created_by FROM request_tasks WHERE id=?', [req.params.id]);
+    if (!task) return res.status(404).json({ success: false, message: 'Not found' });
+    if (!(await canTouchTask(req, task))) return res.status(403).json({ success: false, message: 'Bạn không tham gia CV này' });
+    const url = cleanUrl(req.body.url);
+    if (!url) return res.status(400).json({ success: false, message: 'Link không hợp lệ (chỉ nhận http:// hoặc https://)' });
+    const title = String(req.body.title || '').trim().slice(0, 200) || null;
+    const [r] = await db.query('INSERT INTO request_task_links (task_id, url, title, added_by) VALUES (?,?,?,?)', [task.id, url, title, req.user.id]);
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_link_added', entityType: 'request', entityId: task.id,
+      description: `${req.user.full_name || req.user.username} đã đính kèm link${title ? ` "${title}"` : ''} vào CV #${task.id} "${task.title}": ${url}`,
+      metadata: { link_id: r.insertId, url, title },
+    });
+    broadcastRequests(req, { taskId: task.id, action: 'edited' });
+    res.status(201).json({ success: true, data: { id: r.insertId, url, title } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// DELETE /requests/:id/links/:linkId — người thêm link, người tạo CV hoặc Manager/Admin
+exports.deleteLink = async (req, res) => {
+  try {
+    const [[link]] = await db.query(
+      `SELECT l.*, rt.created_by AS task_creator, rt.title AS task_title FROM request_task_links l
+         JOIN request_tasks rt ON rt.id=l.task_id WHERE l.id=? AND l.task_id=?`, [req.params.linkId, req.params.id]);
+    if (!link) return res.status(404).json({ success: false, message: 'Not found' });
+    if (![link.added_by, link.task_creator].includes(req.user.id) && !['admin', 'manager'].includes(req.user.role))
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa link này' });
+    await db.query('DELETE FROM request_task_links WHERE id=?', [link.id]);
+    await logActivity({
+      actorId: req.user.id, actionType: 'request_link_removed', entityType: 'request', entityId: link.task_id,
+      description: `${req.user.full_name || req.user.username} đã xóa link${link.title ? ` "${link.title}"` : ''} khỏi CV #${link.task_id} "${link.task_title}": ${link.url}`,
+      metadata: { url: link.url, title: link.title },
+    });
+    broadcastRequests(req, { taskId: link.task_id, action: 'edited' });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

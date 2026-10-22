@@ -101,6 +101,8 @@ router.delete('/requests/:id',                auth(), rC.remove);
 // File upload
 router.post  ('/requests/:id/files',          auth(), upload.single('file'), rC.uploadFile);
 router.delete('/requests/:id/files/:fileId',  auth(), rC.deleteFile);
+router.post  ('/requests/:id/links',          auth(), rC.addLink);
+router.delete('/requests/:id/links/:linkId',  auth(), rC.deleteLink);
 
 // Dashboard
 router.get ('/dashboard/debug',              auth(['admin','manager']), dbC.debug);

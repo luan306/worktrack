@@ -361,9 +361,9 @@ const ColSearch = ({ value, onChange, placeholder }) => (
   </div>
 );
 
-// Các nút lọc trên 1 hàng, cuộn ngang khi cột hẹp
+// Các nút lọc — hết chỗ thì tự xuống dòng (không cuộn ngang: chuột không kéo ngang được, nút bị che mất)
 const ChipRow = ({ items, value, onChange, color = C.primary }) => (
-  <div className="brd-chiprow" style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: '1 1 auto', minWidth: 0 }}>
+  <div className="brd-chiprow" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: '1 1 auto', minWidth: 0 }}>
     {items.map(([key, label, icon, count]) => {
       const on = value === key;
       return (
@@ -399,6 +399,36 @@ const FilterRow = ({ children }) => <div style={{ display: 'flex', gap: 6, align
    MAIN PAGE
    ============================================================ */
 
+// Tiêu đề 1 cột của Board
+const ColHdr = ({ icon, iconColor, title, count, total, countBg, countColor, onExpand, extra }) => (
+  <div className="brd-col-hdr" style={{ padding: '13px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 10, background: C.surface, flexShrink: 0, flexWrap: 'wrap', rowGap: 6 }}>
+    <div style={{ width: 30, height: 30, borderRadius: 9, background: iconColor, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, boxShadow: `0 3px 10px ${iconColor}66`, flexShrink: 0 }}>{icon}</div>
+    <div className="brd-col-hdr-title" style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, flex: '1 1 auto', minWidth: 40, fontFamily: FONT_SANS, letterSpacing: .1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+    <span title={total != null && total !== count ? `Đang lọc: hiện ${count} trong tổng ${total}` : undefined}
+      style={{ background: countBg, color: countColor, fontSize: 11, fontWeight: 800, padding: '3px 9px', borderRadius: 20, fontFamily: FONT_MONO, display: 'inline-flex', alignItems: 'baseline', gap: 3, flexShrink: 0 }}>
+      {count}
+      {total != null && total !== count && <span style={{ opacity: .6, fontWeight: 700 }}>/{total}</span>}
+    </span>
+    {onExpand && <ExpandBtn onClick={onExpand} color={iconColor} />}
+    {extra}
+  </div>
+);
+
+const BtnPrimary = ({ children, onClick, small }) => (
+  <button onClick={onClick} className="brd-btn-primary" style={{
+    padding: small ? '5px 11px' : '7px 15px', borderRadius: 9, border: 'none',
+    background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, color: '#fff',
+    fontSize: small ? 11 : 12.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+    fontFamily: FONT_SANS, boxShadow: `0 3px 10px ${C.primary}4d`, flexShrink: 0,
+  }}>{children}</button>
+);
+
+// Trang hiện tại của 1 danh sách — tự về trang 1 khi bộ lọc (key) đổi, không cần useEffect + setState
+function usePageFor(key) {
+  const [st, setSt] = useState({ key, page: 1 });
+  return [st.key === key ? st.page : 1, (page) => setSt({ key, page })];
+}
+
 export default function BoardPage() {
   const { t, i18n } = useTranslation();
   const { user, can } = useAuth();
@@ -432,15 +462,10 @@ export default function BoardPage() {
   const [doneQ, setDoneQ] = useState('');
   const [doneFilter, setDoneFilter] = useState('all'); // all | on_time | late
 
-  const [reviewPage, setReviewPage] = useState(1);
-  const [reqPage, setReqPage] = useState(1);
-  const [donePage, setDonePage] = useState(1);
   // Đổi bộ lọc → về trang 1 (tránh đứng ở trang 3 của danh sách chỉ còn 1 trang)
-  useEffect(() => { setReqPage(1); }, [reqFilter, reqGroupFilter, reqQ]);
-  useEffect(() => { setReviewPage(1); }, [reviewFilter, reviewGroup, reviewSort, reviewQ]);
-  useEffect(() => { setDonePage(1); }, [doneFilter, doneQ]);
-
-  useEffect(() => { if (user) fetchAll(); }, [user]);
+  const [reqPage, setReqPage] = usePageFor(`${reqFilter}|${reqGroupFilter}|${reqQ}`);
+  const [reviewPage, setReviewPage] = usePageFor(`${reviewFilter}|${reviewGroup}|${reviewSort}|${reviewQ}`);
+  const [donePage, setDonePage] = usePageFor(`${doneFilter}|${doneQ}`);
 
   const sortByUrgency = (list) => {
     const scoreOf = (tsk) => {
@@ -476,6 +501,7 @@ export default function BoardPage() {
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, []);
+  useEffect(() => { if (user) fetchAll(); }, [user, fetchAll]);
 
   // 📡 Realtime — tự cập nhật cột "Yêu cầu"/"Hoàn thành" khi có CV mới/đổi trạng thái/gán người..
   useEffect(() => {
@@ -584,29 +610,6 @@ export default function BoardPage() {
     </>
   );
 
-  const ColHdr = ({ icon, iconBg, iconColor, title, count, total, countBg, countColor, onExpand, extra }) => (
-    <div className="brd-col-hdr" style={{ padding: '13px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 10, background: C.surface, flexShrink: 0, flexWrap: 'wrap', rowGap: 6 }}>
-      <div style={{ width: 30, height: 30, borderRadius: 9, background: iconColor, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, boxShadow: `0 3px 10px ${iconColor}66`, flexShrink: 0 }}>{icon}</div>
-      <div className="brd-col-hdr-title" style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, flex: '1 1 auto', minWidth: 40, fontFamily: FONT_SANS, letterSpacing: .1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-      <span title={total != null && total !== count ? `Đang lọc: hiện ${count} trong tổng ${total}` : undefined}
-        style={{ background: countBg, color: countColor, fontSize: 11, fontWeight: 800, padding: '3px 9px', borderRadius: 20, fontFamily: FONT_MONO, display: 'inline-flex', alignItems: 'baseline', gap: 3, flexShrink: 0 }}>
-        {count}
-        {total != null && total !== count && <span style={{ opacity: .6, fontWeight: 700 }}>/{total}</span>}
-      </span>
-      {onExpand && <ExpandBtn onClick={onExpand} color={iconColor} />}
-      {extra}
-    </div>
-  );
-
-  const BtnPrimary = ({ children, onClick, small }) => (
-    <button onClick={onClick} className="brd-btn-primary" style={{
-      padding: small ? '5px 11px' : '7px 15px', borderRadius: 9, border: 'none',
-      background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, color: '#fff',
-      fontSize: small ? 11 : 12.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
-      fontFamily: FONT_SANS, boxShadow: `0 3px 10px ${C.primary}4d`, flexShrink: 0,
-    }}>{children}</button>
-  );
-
   return (
     <div className="brd-root" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden', background: C.canvas, minWidth: 0, fontFamily: FONT_SANS }}>
       <style>{`
@@ -627,8 +630,6 @@ export default function BoardPage() {
         .brd-root .brd-filter-chip { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .1s ease, background .15s, color .15s, border-color .15s; }
         .brd-root .brd-filter-chip:active { transform: scale(0.94); }
         .brd-root .brd-filter-chip:hover { border-color: ${C.primary}66; }
-        .brd-root .brd-chiprow { scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); padding-right: 14px; }
-        .brd-root .brd-chiprow::-webkit-scrollbar { display: none; }
         .brd-root .brd-search { transition: border-color .15s, background .15s, box-shadow .15s; }
         .brd-root .brd-search:focus { border-color: ${C.primary}; background: var(--wt-surface); box-shadow: 0 0 0 3px ${C.primary}1f; }
         .brd-root .brd-mini-select:focus { border-color: ${C.primary}; }
@@ -727,7 +728,7 @@ export default function BoardPage() {
       <div className="brd-body" style={{ flex: 1, display: 'flex', overflowX: 'auto', overflowY: 'hidden', minHeight: 480 }}>
         {/* Col 1: Yêu cầu (chờ nhận → đang làm → chờ Leader chấm) */}
         <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.line}`, overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
-          <ColHdr icon="📨" iconBg={C.warningSoft} iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length} total={requests.length}
+          <ColHdr icon="📨" iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length} total={requests.length}
             countBg={C.warningSoft} countColor={C.warning}
             onExpand={requests.length > 0 ? () => setExpanded('requests') : null}
             extra={isLeader && <BtnPrimary small onClick={() => navigate('/requests?create=1')}>＋ {t('create')}</BtnPrimary>} />
@@ -759,7 +760,7 @@ export default function BoardPage() {
 
         {/* Col 2: Chờ Manager duyệt */}
         <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.line}`, overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
-          <ColHdr icon="⏳" iconBg={C.violetSoft} iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length} total={reviewing.length}
+          <ColHdr icon="⏳" iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length} total={reviewing.length}
             countBg={C.violetSoft} countColor={C.violet}
             onExpand={reviewing.length > 0 ? () => setExpanded('reviewing') : null} />
           {reviewing.length > 0 && <FilterBar>{reviewFilterBar}</FilterBar>}
@@ -774,7 +775,7 @@ export default function BoardPage() {
 
         {/* Col 3: Hoàn thành */}
         <div className="brd-col" style={{ flex: '1 1 340px', display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 300, minHeight: 480 }}>
-          <ColHdr icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length} total={completedAll.length}
+          <ColHdr icon="✅" iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length} total={completedAll.length}
             countBg={C.successSoft} countColor={C.success}
             onExpand={completedAll.length > 0 ? () => setExpanded('completed') : null} />
           {completedAll.length > 0 && <FilterBar>{doneFilterBar}</FilterBar>}
@@ -790,21 +791,21 @@ export default function BoardPage() {
 
       {/* ---- Modal mở rộng: dùng CHUNG bộ lọc với cột (lọc ở đâu cũng giữ nguyên) ---- */}
       <ExpandModal open={expanded === 'requests'} onClose={() => setExpanded(null)}
-        icon="📨" iconBg={C.warningSoft} iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length}
+        icon="📨" iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length}
         filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{reqFilterBar}</div>}>
         {filteredRequests.map(tk => <RequestCard key={tk.id} task={tk} myId={myId} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
         {!filteredRequests.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
       </ExpandModal>
 
       <ExpandModal open={expanded === 'reviewing'} onClose={() => setExpanded(null)}
-        icon="⏳" iconBg={C.violetSoft} iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length}
+        icon="⏳" iconColor={C.violet} title={t('board_col_reviewing', 'Chờ Manager duyệt')} count={filteredReviewing.length}
         filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{reviewFilterBar}</div>}>
         {filteredReviewing.map(tk => <ReviewCard key={tk.id} task={tk} canApprove={canApprove} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
         {!filteredReviewing.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
       </ExpandModal>
 
       <ExpandModal open={expanded === 'completed'} onClose={() => setExpanded(null)}
-        icon="✅" iconBg={C.successSoft} iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length}
+        icon="✅" iconColor={C.success} title={t('board_col_completed')} count={filteredCompleted.length}
         filterBar={<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{doneFilterBar}</div>}>
         {filteredCompleted.map(tk => <CompletedCard key={tk.id} task={tk} onNav={() => { setExpanded(null); navigate(`/requests?id=${tk.id}`); }} />)}
         {!filteredCompleted.length && <Empty text={t('board_no_match', 'Không có công việc khớp bộ lọc')} icon="🔍" />}
