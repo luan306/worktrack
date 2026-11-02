@@ -892,10 +892,12 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                       hint={<><b style={{color:C.primary}}>{t('req_ready_for_final_approval')}</b> — {hasPeople
                         ? t('req_rescore_each_hint', { defaultValue: 'kiểm tra / chỉnh điểm từng người rồi duyệt hoàn thành.' })
                         : t('req_rescore_hint')}</>}
-                      actions={collect=>(
+                      actions={collect=>(<>
+                        <button disabled={saving} onClick={()=>save({status:'in_progress',completed_at:null})}
+                          style={{padding:'7px 14px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'var(--wt-surface)',color:'var(--wt-text-3)',fontSize:12,fontWeight:600,cursor:'pointer'}}>↩️ {t('req_send_back')}</button>
                         <button disabled={saving} onClick={()=>{const p=collect(); if(p) save({status:'done',...p});}}
                           style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_approve_done')}</button>
-                      )}/>
+                      </>)}/>
                   ) : (
                     <div style={{display:'flex',alignItems:'center',gap:10,background:'var(--wt-tint-warning)',padding:'14px 16px',borderRadius:10,border:'1.5px solid var(--wt-tint-warning-bd)'}}>
                       <span style={{fontSize:20}}>⏳</span>
