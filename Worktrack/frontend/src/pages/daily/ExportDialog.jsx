@@ -1,7 +1,7 @@
-// Hộp thoại xuất báo cáo Excel (theo tuần / tháng / tùy chọn, 1 người hoặc cả nhóm)
-import { useState } from 'react';
+// Hộp thoại xuất báo cáo Excel (theo tuần / tháng / tùy chọn; 1 người, 1 nhóm hoặc tất cả)
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { downloadFile } from '../../api/client';
+import api, { downloadFile } from '../../api/client';
 import { C, FONT_SANS, FONT_MONO, addDays, dmy, mondayOf, monthRange, inputStyle } from './shared';
 import { Btn, ErrBox } from './ui';
 
@@ -20,9 +20,25 @@ export default function ExportDialog({ onClose, refDate, member, members, viewUs
   const [month, setMonth] = useState(refDate.slice(0, 7));
   const [from, setFrom] = useState(monday);
   const [to, setTo] = useState(addDays(monday, 4));
-  const [who, setWho] = useState(defaultWho);
+  const [who, setWho] = useState(defaultWho); // one | all | group
+  const [groupId, setGroupId] = useState(null);
+  const [groups, setGroups] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+
+  // Nhóm có người mình được xem (Admin/Manager: mọi nhóm; Leader: nhóm của mình)
+  useEffect(() => {
+    if (members.length < 2) return;
+    let alive = true;
+    api.get('/groups').then(r => {
+      if (!alive) return;
+      const ids = new Set(members.map(m => m.id));
+      setGroups((r.data.data || []).map(g => ({ id: g.id, name: g.name, icon: g.icon, n: (g.members || []).filter(m => ids.has(m.id)).length })).filter(g => g.n > 0));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [members]);
+  // chỉ có 1 nhóm và nhóm đó = tất cả người mình xem → nút "Theo nhóm" thừa
+  const showGroups = groups.length > 1 || (groups.length === 1 && groups[0].n < members.length);
 
   const period = range === 'week' ? [monday, addDays(monday, 4)]
     : range === 'month' ? monthRange(`${month}-01`)
@@ -30,10 +46,11 @@ export default function ExportDialog({ onClose, refDate, member, members, viewUs
 
   const download = async () => {
     if (!period[0] || !period[1] || period[0] > period[1]) return setErr(t('wl_export_bad_range', 'Khoảng ngày không hợp lệ'));
+    if (who === 'group' && !groupId) return setErr(t('wl_export_pick_group', 'Chọn nhóm cần xuất'));
     setBusy(true); setErr('');
     try {
       await downloadFile('/worklog/export', {
-        params: { from: period[0], to: period[1], user_id: who === 'all' ? 'all' : viewUserId },
+        params: { from: period[0], to: period[1], user_id: who === 'one' ? viewUserId : 'all', ...(who === 'group' ? { group_id: groupId } : null) },
         fallbackName: `baocao_${period[0]}_${period[1]}.xlsx`,
       });
       onClose();
@@ -80,10 +97,24 @@ export default function ExportDialog({ onClose, refDate, member, members, viewUs
           {members.length > 1 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <span style={label}>{t('wl_export_who', 'Xuất cho')}</span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <ExportOpt on={who === 'one'} onClick={() => setWho('one')}>👤 {member?.full_name || t('wl_me', 'Của tôi')}</ExportOpt>
-                <ExportOpt on={who === 'all'} onClick={() => setWho('all')}>👥 {t('wl_export_all', 'Cả nhóm')} ({members.length})</ExportOpt>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <ExportOpt on={who === 'one'} onClick={() => { setWho('one'); setErr(''); }}>👤 {member?.full_name || t('wl_me', 'Của tôi')}</ExportOpt>
+                {showGroups && <ExportOpt on={who === 'group'} onClick={() => { setWho('group'); setErr(''); }}>🏭 {t('wl_export_by_group', 'Theo nhóm')}</ExportOpt>}
+                <ExportOpt on={who === 'all'} onClick={() => { setWho('all'); setErr(''); }}>👥 {showGroups ? t('wl_export_everyone', 'Tất cả') : t('wl_export_all', 'Cả nhóm')} ({members.length})</ExportOpt>
               </div>
+              {who === 'group' && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 168, overflowY: 'auto', padding: 8, borderRadius: 10, background: C.board }}>
+                  {groups.map(g => {
+                    const on = groupId === g.id;
+                    return (
+                      <button key={g.id} onClick={() => { setGroupId(g.id); setErr(''); }} className="wl-btn" style={{
+                        padding: '6px 11px', borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT_SANS,
+                        border: `1.5px solid ${on ? C.primary : C.line}`, background: on ? C.primary : 'var(--wt-surface)', color: on ? '#fff' : C.sub,
+                      }}>{g.icon ? `${g.icon} ` : ''}{g.name} <span style={{ opacity: .7, fontWeight: 600 }}>({g.n})</span></button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
           <ErrBox>{err}</ErrBox>

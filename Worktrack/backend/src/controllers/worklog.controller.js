@@ -447,9 +447,21 @@ exports.exportReport = async (req, res) => {
     const hol = await holidayMap();
     const workdays = days.filter(d => !isRestDay(d, hol)); // ngày lễ không tính là ngày làm việc
 
-    let users;
-    if (req.query.user_id === 'all') users = await viewableUsers(req);
-    else {
+    let users, groupName = null;
+    if (req.query.user_id === 'all') {
+      users = await viewableUsers(req);
+      // ?group_id= → chỉ thành viên nhóm đó (trong số người mình được xem)
+      if (req.query.group_id) {
+        const [[[g]], [mem]] = await Promise.all([
+          db.query('SELECT name FROM `groups` WHERE id=?', [req.query.group_id]),
+          db.query('SELECT user_id FROM group_members WHERE group_id=?', [req.query.group_id]),
+        ]);
+        if (!g) return fail(res, 404, 'Không tìm thấy nhóm');
+        const inGroup = new Set(mem.map(m => m.user_id));
+        users = users.filter(u => inGroup.has(u.id));
+        groupName = g.name;
+      }
+    } else {
       const uid = +(req.query.user_id || req.user.id);
       if (!(await canView(req, uid))) return fail(res, 403, 'Bạn không có quyền xem người này');
       users = await viewableUsers(req, uid);
@@ -547,7 +559,8 @@ exports.exportReport = async (req, res) => {
     ['i', 'wd', 'off', 'ot', 'logged', 'missing', 'tasks', 'scored', 'unscored'].forEach(k => { sum.getColumn(k).alignment = { horizontal: 'center', vertical: 'middle' }; });
     sum.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }; // getColumn().alignment ghi đè dòng tiêu đề
 
-    const who = users.length === 1 ? (users[0].username || users[0].id) : 'nhom';
+    const noMark = (x) => String(x).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
+    const who = groupName ? `nhom_${noMark(groupName).trim().replace(/\s+/g, '-')}` : users.length === 1 ? (users[0].username || users[0].id) : 'nhom';
     const filename = `baocao_congviec_${who}_${from}_${to}.xlsx`.replace(/[^\w.-]/g, '_');
     await sendXlsx(res, wb, filename);
   } catch (e) { xlsxError(res, e); }
