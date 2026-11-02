@@ -5,19 +5,50 @@ import api from '../../api/client';
 import { C, FONT_SANS, FONT_MONO, dmy, addDays, scoreColor, initialsOf, OFF_KINDS, idLine, offLabel, isWeekendDate, inputStyle } from './shared';
 import { Btn, SectionTitle, ErrBox } from './ui';
 
+/* ---------------- khoảng ngày: Bắt đầu → Kết thúc (thêm mới + sửa) ---------------- */
+// onStart không truyền = ngày bắt đầu cố định (ngày đang mở)
+function SpanRange({ start, end, onStart, onEnd, hint }) {
+  const { t } = useTranslation();
+  const lbl = { fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 4, display: 'block' };
+  const box = { ...inputStyle, width: '100%', minWidth: 0, height: 34, padding: '0 8px', fontSize: 12.5, fontWeight: 700, fontFamily: FONT_MONO, boxSizing: 'border-box' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 10px', borderRadius: 10, background: C.primarySoft, border: `1px solid ${C.primary}33` }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto minmax(0,1fr)', alignItems: 'end', gap: 8 }}>
+        <label style={{ minWidth: 0 }}>
+          <span style={lbl}>📅 {t('wl_span_start', 'Bắt đầu')}</span>
+          {onStart
+            ? <input type="date" value={start} onChange={e => onStart(e.target.value)} style={box} />
+            : <div style={{ ...box, display: 'flex', alignItems: 'center', background: 'var(--wt-surface-2)', color: C.sub }}>{dmy(start)}</div>}
+        </label>
+        <span style={{ color: C.faint, fontWeight: 800, height: 34, display: 'flex', alignItems: 'center' }}>→</span>
+        <label style={{ minWidth: 0 }}>
+          <span style={lbl}>{t('wl_span_end', 'Kết thúc')}</span>
+          <input type="date" value={end} min={start} max={start ? addDays(start, 30) : undefined} onChange={e => onEnd(e.target.value)} style={box} />
+        </label>
+      </div>
+      {hint && <div style={{ fontSize: 11.5, color: C.sub, lineHeight: 1.45 }}>{hint}</div>}
+    </div>
+  );
+}
+
 /* ---------------- 1 dòng công việc trong ghi chú ---------------- */
 function TaskItem({ idx, entry, editable, onChanged }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(entry.title);
   const [desc, setDesc] = useState(entry.description || '');
+  const isSpan = !!(entry.span_start && entry.span_end && entry.span_start !== entry.span_end);
+  const [start, setStart] = useState(isSpan ? entry.span_start : entry.work_date);
+  const [end, setEnd] = useState(isSpan ? entry.span_end : entry.work_date);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const reset = () => { setEditing(false); setTitle(entry.title); setDesc(entry.description || ''); setStart(isSpan ? entry.span_start : entry.work_date); setEnd(isSpan ? entry.span_end : entry.work_date); setErr(''); };
 
   const save = async () => {
     if (!title.trim()) return setErr(t('wl_err_title', 'Vui lòng nhập công việc'));
+    if (!start || !end || end < start) return setErr(t('wl_err_span', 'Ngày kết thúc phải từ ngày bắt đầu trở đi'));
     setBusy(true);
-    try { await api.put(`/worklog/entries/${entry.id}`, { work_date: entry.work_date, title, description: desc }); setEditing(false); onChanged(); }
+    try { await api.put(`/worklog/entries/${entry.id}`, { work_date: start, end_date: end, title, description: desc }); setEditing(false); onChanged(); }
     catch (e) { setErr(e.response?.data?.message || e.message); }
     finally { setBusy(false); }
   };
@@ -32,9 +63,16 @@ function TaskItem({ idx, entry, editable, onChanged }) {
       <div style={{ padding: 10, borderRadius: 10, background: 'var(--wt-surface)', border: `1.5px solid ${C.primary}55`, display: 'flex', flexDirection: 'column', gap: 7 }}>
         <input autoFocus value={title} maxLength={200} onChange={e => { setTitle(e.target.value); setErr(''); }} onKeyDown={e => e.key === 'Enter' && save()} style={inputStyle} />
         <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2} placeholder={t('wl_desc_ph', 'Chi tiết / kết quả (không bắt buộc)')} style={{ ...inputStyle, resize: 'vertical', fontSize: 12.5 }} />
+        {/* Khoảng ngày: việc nhiều ngày thì sửa cho CẢ ĐỢT; chọn cùng 1 ngày = việc 1 ngày */}
+        <SpanRange start={start} end={end}
+          onStart={v => { setStart(v); if (v && end < v) setEnd(v); setErr(''); }}
+          onEnd={v => { setEnd(v); setErr(''); }}
+          hint={isSpan
+            ? t('wl_span_edit_hint', 'Áp dụng cho cả đợt nhiều ngày. Ngày đã được chấm điểm giữ nguyên.')
+            : t('wl_span_hint', 'Việc sẽ được ghi vào từng ngày làm việc trong khoảng này (bỏ Thứ 7, CN, ngày nghỉ, ngày đã chấm).')} />
         <ErrBox>{err}</ErrBox>
         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-          <Btn small onClick={() => { setEditing(false); setTitle(entry.title); setDesc(entry.description || ''); setErr(''); }} disabled={busy}>{t('cancel', 'Hủy')}</Btn>
+          <Btn small onClick={reset} disabled={busy}>{t('cancel', 'Hủy')}</Btn>
           <Btn small kind="primary" onClick={save} disabled={busy}>{busy ? '...' : t('save', 'Lưu')}</Btn>
         </div>
       </div>
@@ -99,17 +137,8 @@ function AddTask({ date, onAdded }) {
       </div>
       {/* Việc làm nhiều ngày: ngày bắt đầu = ngày đang mở, chọn ngày kết thúc */}
       {showSpan && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 10px', borderRadius: 10, background: C.primarySoft, border: `1px solid ${C.primary}33` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, fontWeight: 700, color: C.ink }}>
-            <span style={{ color: C.sub, fontWeight: 600 }}>{t('wl_span_start', 'Bắt đầu')}</span>
-            <span style={{ fontFamily: FONT_MONO }}>{dmy(date)}</span>
-            <span style={{ color: C.faint }}>→</span>
-            <span style={{ color: C.sub, fontWeight: 600 }}>{t('wl_span_end', 'Kết thúc')}</span>
-            <input type="date" value={endDate} min={date} max={addDays(date, 30)} onChange={e => setEndDate(e.target.value)}
-              style={{ ...inputStyle, width: 'auto', padding: '5px 8px', fontSize: 12.5, fontWeight: 700 }} />
-          </div>
-          <div style={{ fontSize: 11.5, color: C.sub, lineHeight: 1.45 }}>{t('wl_span_hint', 'Việc sẽ được ghi vào từng ngày làm việc trong khoảng này (bỏ Thứ 7, CN, ngày nghỉ, ngày đã chấm).')}</div>
-        </div>
+        <SpanRange start={date} end={endDate} onEnd={setEndDate}
+          hint={t('wl_span_hint', 'Việc sẽ được ghi vào từng ngày làm việc trong khoảng này (bỏ Thứ 7, CN, ngày nghỉ, ngày đã chấm).')} />
       )}
       {showDesc && <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2} placeholder={t('wl_desc_ph', 'Chi tiết / kết quả (không bắt buộc)')} style={{ ...inputStyle, resize: 'vertical', fontSize: 12.5 }} />}
       {note && <div style={{ fontSize: 12, fontWeight: 700, color: C.success }}>✓ {note}</div>}

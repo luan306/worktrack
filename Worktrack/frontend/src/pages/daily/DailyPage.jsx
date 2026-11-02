@@ -244,14 +244,14 @@ export default function DailyPage() {
                 opacity: dim ? .4 : 1, position: 'relative', zIndex: today_ ? 1 : 0,
               }}>
                 {/* dòng đầu: số ngày + điểm / trạng thái */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: isMobile ? 'center' : 'space-between', width: '100%' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, rowGap: 3, flexWrap: 'wrap', justifyContent: isMobile ? 'center' : 'space-between', width: '100%' }}>
                   <span style={{
                     minWidth: isMobile ? 24 : 28, height: isMobile ? 24 : 28, padding: '0 4px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     fontFamily: FONT_MONO, fontWeight: 800, fontSize: isMobile ? 12.5 : 14,
                     background: today_ ? C.primary : 'transparent', color: today_ ? '#fff' : m.future || rest ? C.faint : C.ink,
                     boxShadow: today_ ? `0 2px 8px ${C.primary}66` : 'none',
                   }}>{+d.date.slice(8, 10)}</span>
-                  {!isMobile && today_ && <span style={{ fontSize: 9.5, fontWeight: 800, color: C.primary, textTransform: 'uppercase', letterSpacing: .5, marginRight: 'auto' }}>{t('wl_today', 'Hôm nay')}</span>}
+                  {!isMobile && today_ && <span style={{ fontSize: 9.5, fontWeight: 800, color: C.primary, textTransform: 'uppercase', letterSpacing: .5, marginRight: 'auto', whiteSpace: 'nowrap' }}>{t('wl_today', 'Hôm nay')}</span>}
                   {!isMobile && (d.weekend && m.state === 'overtime'
                     ? <span title={t('wl_overtime', 'Tăng ca')} style={{ padding: '1px 7px', borderRadius: 20, background: C.violetSoft, fontSize: 12 }}>⏰</span>
                     : statusBadge(m))}

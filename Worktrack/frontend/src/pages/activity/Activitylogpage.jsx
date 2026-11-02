@@ -46,6 +46,8 @@ const ACTION_META = {
   worklog_day_off:          { icon: '🌴', color: '#0d9488', bg: 'var(--wt-tint-teal)' },
   holiday_set:              { icon: '🎉', color: '#e5384d', bg: 'var(--wt-tint-danger)' },
   holiday_removed:          { icon: '🗑', color: 'var(--wt-text-3)', bg: 'var(--wt-surface-3)' },
+  worklog_entry_updated:    { icon: '✏️', color: C.primary, bg: 'var(--wt-tint-primary)' },
+  worklog_entry_deleted:    { icon: '🗑', color: C.danger,  bg: 'var(--wt-tint-danger)' },
 };
 const defaultMeta = { icon: '📝', color: 'var(--wt-text-3)', bg: 'var(--wt-surface-3)' };
 
@@ -87,6 +89,8 @@ const ACTION_LABELS = {
   worklog_day_off:          'Ngày nghỉ (công việc hằng ngày)',
   holiday_set:              'Đặt ngày nghỉ lễ công ty',
   holiday_removed:          'Xóa ngày nghỉ lễ công ty',
+  worklog_entry_updated:    'Sửa công việc hằng ngày',
+  worklog_entry_deleted:    'Xóa công việc hằng ngày',
 };
 
 // Thao tác do hệ thống tự chạy (VD: tự động chốt kỳ) không có người thực hiện

@@ -37,7 +37,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
   // 📡 Chỉ tải lại khi có thay đổi nằm trong khoảng ngày đang xem
   useEffect(() => onRealtime('worklog:updated', (evs) => {
     if (evs.some(e => !e?.workDate || (e.workDate >= from && e.workDate <= to))) refresh();
-  }), [refresh, from, to]);
+  }, { wait: 3000, jitter: 3000 }), [refresh, from, to]); // cả công ty ghi việc → gộp 3–6 giây / lần
 
   const loading = ov?.key !== key;
   const today = ov?.today || todayStr;

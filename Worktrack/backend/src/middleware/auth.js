@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const db  = require('../config/db');
+const JWT_KEY = require('../utils/jwtKey');
 
 // ── Token đã đăng xuất — giữ trong RAM tới khi token tự hết hạn ──
 const revoked = new Map(); // token → thời điểm hết hạn (ms)
@@ -37,7 +38,7 @@ async function verifyAccessToken(token) {
 
   let decoded;
   try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    decoded = jwt.verify(token, JWT_KEY, { algorithms: ['HS256'] });
   } catch {
     throw fail('Invalid token');
   }

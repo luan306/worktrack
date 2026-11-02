@@ -189,7 +189,7 @@ export default function DashboardPage() {
         .dash-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
 
         /* ── Chặn Safari iOS tự zoom khi focus input/select ── */
-        .dash-root input:focus, .dash-root select:focus { font-size: 16px !important; }
+        @media (hover: none) and (pointer: coarse) { .dash-root input, .dash-root select { font-size: 16px !important; } }
 
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .dash-root ::-webkit-scrollbar { width: 8px; height: 8px; }

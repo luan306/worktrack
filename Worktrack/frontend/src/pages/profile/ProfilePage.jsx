@@ -86,7 +86,7 @@ export default function ProfilePage() {
         .prof-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
 
         /* ── Chặn Safari iOS tự zoom khi focus input ── */
-        .prof-root input:focus { font-size: 16px !important; }
+        @media (hover: none) and (pointer: coarse) { .prof-root input { font-size: 16px !important; } }
 
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .prof-root ::-webkit-scrollbar { width: 8px; height: 8px; }

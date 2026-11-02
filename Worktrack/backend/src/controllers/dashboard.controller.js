@@ -49,29 +49,28 @@ async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart,
   const lower = rangeStart < periodStart ? rangeStart : periodStart;
   const periodDay = periodStart.slice(0, 10);
 
-  // Điểm Daily = điểm Leader chấm CẢ NGÀY trong Công việc hằng ngày
+  // Điểm Daily = điểm Leader chấm CẢ NGÀY trong Công việc hằng ngày.
+  // Mỗi bảng tự cộng dồn trên index của nó (trước đây UNION ALL cả 3 bảng vào 1 bảng tạm rồi mới cộng — chậm gấp ~3 lần)
   const lowerDay = lower.slice(0, 10);
-  let oldDaily = `
-        SELECT dtl.user_id, dtl.log_date AS d, dtl.score, dtl.is_done AS n
-          FROM daily_task_logs dtl
-          JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
-          JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
-         WHERE dtl.user_id IN (?) AND dtl.log_date >= ?`;
-  const od = [memberIds, lowerDay];
-  if (groupId) { oldDaily += ' AND dtg.group_id = ?'; od.push(groupId); }
-  const dailySql = `
-    SELECT x.user_id,
-           SUM(CASE WHEN x.d BETWEEN ? AND ? THEN x.score ELSE 0 END) AS range_score,
-           SUM(CASE WHEN x.d >= ?            THEN x.score ELSE 0 END) AS period_score,
-           SUM(CASE WHEN x.d >= ?            THEN x.n     ELSE 0 END) AS cv_done
-      FROM (${oldDaily}
-        UNION ALL
-        SELECT ds.user_id, ds.work_date, ds.score, 0 FROM daily_day_scores ds WHERE ds.user_id IN (?) AND ds.work_date >= ?
-        UNION ALL
-        SELECT de.user_id, de.work_date, 0, 1 FROM daily_entries de WHERE de.user_id IN (?) AND de.work_date >= ?
-      ) x
-     GROUP BY x.user_id`;
-  const dp = [rangeStart.slice(0, 10), rangeEnd.slice(0, 10), periodDay, periodDay, ...od, memberIds, lowerDay, memberIds, lowerDay];
+  const rs = rangeStart.slice(0, 10), re = rangeEnd.slice(0, 10);
+  let oldSql = `
+    SELECT dtl.user_id,
+           SUM(CASE WHEN dtl.log_date BETWEEN ? AND ? THEN dtl.score ELSE 0 END) AS range_score,
+           SUM(CASE WHEN dtl.log_date >= ?            THEN dtl.score ELSE 0 END) AS period_score,
+           SUM(CASE WHEN dtl.log_date >= ?            THEN dtl.is_done ELSE 0 END) AS cv_done
+      FROM daily_task_logs dtl
+      JOIN daily_tasks dt        ON dt.id  = dtl.daily_task_id
+      JOIN daily_task_groups dtg ON dtg.id = dt.task_group_id
+     WHERE dtl.user_id IN (?) AND dtl.log_date >= ?`;
+  const op = [rs, re, periodDay, periodDay, memberIds, lowerDay];
+  if (groupId) { oldSql += ' AND dtg.group_id = ?'; op.push(groupId); }
+  oldSql += ' GROUP BY dtl.user_id';
+  const dayScoreSql = `
+    SELECT user_id,
+           SUM(CASE WHEN work_date BETWEEN ? AND ? THEN score ELSE 0 END) AS range_score,
+           SUM(CASE WHEN work_date >= ?            THEN score ELSE 0 END) AS period_score
+      FROM daily_day_scores WHERE user_id IN (?) AND work_date >= ? GROUP BY user_id`;
+  const entrySql = 'SELECT user_id, COUNT(*) AS cv_done FROM daily_entries WHERE user_id IN (?) AND work_date >= ? GROUP BY user_id';
 
   let reqSql = `
     SELECT rta.user_id,
@@ -91,7 +90,8 @@ async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart,
   if (groupId) { reqSql += ' AND rt.group_id = ?'; rp.push(groupId); }
   reqSql += ' GROUP BY rta.user_id';
 
-  const [[dailyRows], [reqRows]] = await Promise.all([q.query(dailySql, dp), q.query(reqSql, rp)]);
+  const [[oldRows], [scoreRows], [entryRows], [reqRows]] = await Promise.all([
+    q.query(oldSql, op), q.query(dayScoreSql, [rs, re, periodDay, memberIds, lowerDay]), q.query(entrySql, [memberIds, periodDay]), q.query(reqSql, rp)]);
 
   const stats = {};
   const get = (id) => (stats[id] ??= {
@@ -99,8 +99,9 @@ async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart,
     req_main_range: 0, req_support_range: 0, req_period: 0,
     cv_main: 0, cv_support: 0, cv_ontime: 0, cv_late: 0,
   });
-  for (const r of dailyRows) {
-    Object.assign(get(r.user_id), { daily_range: +r.range_score, daily_period: +r.period_score, cv_daily: +r.cv_done });
+  for (const r of [...oldRows, ...scoreRows, ...entryRows]) {
+    const s = get(r.user_id);
+    s.daily_range += +(r.range_score || 0); s.daily_period += +(r.period_score || 0); s.cv_daily += +(r.cv_done || 0);
   }
   for (const r of reqRows) {
     Object.assign(get(r.user_id), {

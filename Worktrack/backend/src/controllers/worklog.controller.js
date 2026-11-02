@@ -117,13 +117,13 @@ exports.week = async (req, res) => {
 };
 
 // Kiểm tra dữ liệu 1 việc; trả về thông báo lỗi hoặc null
-async function validateEntry(req, { work_date, title }) {
+async function validateEntry(req, { work_date, title }, scoredOk = false) {
   if (!DATE_RE.test(work_date || '')) return 'Ngày không hợp lệ';
   if (!title || !String(title).trim()) return 'Vui lòng nhập công việc';
   if (String(title).length > 200) return 'Tên công việc tối đa 200 ký tự';
   if (work_date > addDays(localDate(), 7)) return 'Chỉ được ghi việc trước tối đa 7 ngày';
   const [scored, off] = await Promise.all([dayScoreOf(req.user.id, work_date), dayOffOf(req.user.id, work_date)]);
-  if (scored) return 'Ngày này đã được Leader chấm điểm — không thể thay đổi';
+  if (scored && !scoredOk) return 'Ngày này đã được Leader chấm điểm — không thể thay đổi';
   if (off?.kind === 'full') return 'Ngày này bạn đã báo nghỉ cả ngày — hủy ngày nghỉ trước khi ghi việc';
   return null;
 }
@@ -137,8 +137,8 @@ exports.createEntry = async (req, res) => {
     const err = await validateEntry(req, body);
     if (err) return fail(res, 400, err);
     const start = body.work_date, end = body.end_date || start;
-    if (!DATE_RE.test(end) || end < start) return fail(res, 400, 'Ngày kết thúc phải từ ngày bắt đầu trở đi');
-    if (end > addDays(start, MAX_SPAN_DAYS - 1)) return fail(res, 400, `Một việc chỉ kéo dài tối đa ${MAX_SPAN_DAYS} ngày`);
+    const spanErr = checkSpan(start, end);
+    if (spanErr) return fail(res, 400, spanErr);
 
     if (end === start) {
       const [r] = await db.query(
@@ -148,18 +148,7 @@ exports.createEntry = async (req, res) => {
       return res.status(201).json({ success: true, data: { id: r.insertId, created: 1, skipped: 0 } });
     }
 
-    const [[scored], [offs]] = await Promise.all([
-      db.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_scores WHERE user_id=? AND work_date BETWEEN ? AND ?`, [req.user.id, start, end]),
-      db.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_offs WHERE user_id=? AND kind='full' AND work_date BETWEEN ? AND ?`, [req.user.id, start, end]),
-    ]);
-    const blocked = new Set([...scored, ...offs].map(r => r.d));
-    const hol = await holidayMap();
-    const days = [start]; // ngày bắt đầu đã qua validateEntry (kể cả khi là ngày tăng ca cuối tuần)
-    let skipped = 0;
-    for (let d = addDays(start, 1); d <= end; d = addDays(d, 1)) {
-      if (isRestDay(d, hol)) continue; // cuối tuần / ngày lễ: không tự ghi (ai tăng ca thì ghi riêng)
-      if (blocked.has(d)) skipped++; else days.push(d);
-    }
+    const { days, skipped } = await planSpanDays(req.user.id, start, end);
     const [r] = await db.query(
       'INSERT INTO daily_entries (user_id, work_date, title, description, span_start, span_end) VALUES ?',
       [days.map(d => [req.user.id, d, body.title, body.description || null, start, end])]);
@@ -168,29 +157,112 @@ exports.createEntry = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
+// Những ngày sẽ ghi của 1 việc nhiều ngày: ngày đầu (đã qua validateEntry) + các ngày làm việc sau đó,
+// bỏ cuối tuần / lễ; ngày đã chấm hoặc nghỉ cả ngày thì bỏ qua và đếm vào `skipped`; `taken`: ngày đã có sẵn
+async function planSpanDays(userId, start, end, taken = new Set(), q = db) {
+  const [[scored], [offs]] = await Promise.all([
+    q.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_scores WHERE user_id=? AND work_date BETWEEN ? AND ?`, [userId, start, end]),
+    q.query(`SELECT DATE_FORMAT(work_date,'%Y-%m-%d') AS d FROM daily_day_offs WHERE user_id=? AND kind='full' AND work_date BETWEEN ? AND ?`, [userId, start, end]),
+  ]);
+  const blocked = new Set([...scored, ...offs].map(r => r.d));
+  const hol = await holidayMap();
+  const days = taken.has(start) || blocked.has(start) ? [] : [start];
+  let skipped = 0;
+  for (let d = addDays(start, 1); d <= end; d = addDays(d, 1)) {
+    if (taken.has(d) || isRestDay(d, hol)) continue;
+    if (blocked.has(d)) skipped++; else days.push(d);
+  }
+  return { days, skipped };
+}
+
+const checkSpan = (start, end) =>
+  !DATE_RE.test(end) || end < start ? 'Ngày kết thúc phải từ ngày bắt đầu trở đi'
+  : end > addDays(start, MAX_SPAN_DAYS - 1) ? `Một việc chỉ kéo dài tối đa ${MAX_SPAN_DAYS} ngày` : null;
+
 async function ownEntry(req, res) {
   const [[entry]] = await db.query(
-    `SELECT id, user_id, DATE_FORMAT(work_date,'%Y-%m-%d') AS work_date FROM daily_entries WHERE id=?`, [req.params.id]);
+    `SELECT id, user_id, title, description, DATE_FORMAT(work_date,'%Y-%m-%d') AS work_date,
+            DATE_FORMAT(span_start,'%Y-%m-%d') AS span_start, DATE_FORMAT(span_end,'%Y-%m-%d') AS span_end
+       FROM daily_entries WHERE id=?`, [req.params.id]);
   if (!entry) { fail(res, 404, 'Không tìm thấy công việc'); return null; }
   if (entry.user_id !== req.user.id) { fail(res, 403, 'Chỉ người ghi mới được sửa/xóa công việc này'); return null; }
   return entry;
 }
 
-// PUT /worklog/entries/:id
+// Log sửa / xóa việc hằng ngày (thêm mới không ghi log: mỗi người ghi nhiều việc mỗi ngày)
+const dm = (d) => d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : '';
+const rangeOf = (a, b) => !a || !b || a === b ? dm(a || b) : `${dm(a)}–${dm(b)}`;
+function logEntryChange(req, actionType, entry, next = null) {
+  const oldRange = rangeOf(entry.span_start || entry.work_date, entry.span_end || entry.work_date);
+  let text;
+  if (!next) text = `${actorOf(req)} đã xóa công việc hằng ngày ngày ${dm(entry.work_date)}: “${entry.title}”`;
+  else {
+    const changes = [];
+    if (next.title !== entry.title) changes.push(`tên: “${entry.title}” → “${next.title}”`);
+    if ((next.description || '') !== (entry.description || '')) changes.push('sửa chi tiết');
+    const newRange = rangeOf(next.start, next.end);
+    if (newRange !== oldRange) changes.push(`ngày: ${oldRange} thành ${newRange}${next.created != null ? ` (ghi ${next.created} ngày)` : ''}`);
+    if (!changes.length) return;
+    text = `${actorOf(req)} đã sửa công việc hằng ngày “${next.title}” (${newRange}): ${changes.join('; ')}`;
+  }
+  logActivity({
+    actorId: req.user.id, actionType, entityType: 'worklog', entityId: req.user.id, description: text,
+    metadata: { work_date: entry.work_date, old: { title: entry.title, range: oldRange }, new: next && { title: next.title, start: next.start, end: next.end } },
+  }).catch(e => console.error('[log worklog entry]', e.message));
+}
+
+// PUT /worklog/entries/:id — { work_date (ngày bắt đầu), end_date?, title, description }
+// Việc nhiều ngày: sửa CẢ ĐỢT (tên, chi tiết, khoảng ngày); ngày đã chấm giữ nguyên
 exports.updateEntry = async (req, res) => {
   try {
     const entry = await ownEntry(req, res); if (!entry) return;
     // Không cho chuyển việc ra khỏi ngày đã chấm (kiểm tra cả ngày cũ lẫn ngày mới)
     if (await dayScoreOf(req.user.id, entry.work_date)) return fail(res, 400, 'Ngày này đã được Leader chấm điểm — không thể thay đổi');
     const body = { ...req.body, title: (req.body.title || '').trim() };
-    const err = await validateEntry(req, body);
+    const wasSpan = !!(entry.span_start && entry.span_end && entry.span_start !== entry.span_end);
+    // Đợt nhiều ngày giữ nguyên ngày đầu đã chấm: ngày đó không đổi, chỉ cập nhật các ngày còn lại
+    const err = await validateEntry(req, body, wasSpan && body.work_date === entry.span_start);
     if (err) return fail(res, 400, err);
-    await db.query(
-      'UPDATE daily_entries SET work_date=?, title=?, description=? WHERE id=?',
-      [body.work_date, body.title, body.description || null, entry.id]);
-    broadcast(req, req.user.id, body.work_date);
-    if (body.work_date !== entry.work_date) broadcast(req, req.user.id, entry.work_date);
-    res.json({ success: true });
+    const start = body.work_date, end = body.end_date || start;
+    const spanErr = checkSpan(start, end);
+    if (spanErr) return fail(res, 400, spanErr);
+
+    if (!wasSpan && end === start) {
+      await db.query(
+        'UPDATE daily_entries SET work_date=?, title=?, description=? WHERE id=?',
+        [start, body.title, body.description || null, entry.id]);
+      broadcast(req, req.user.id, start);
+      if (start !== entry.work_date) broadcast(req, req.user.id, entry.work_date);
+      logEntryChange(req, 'worklog_entry_updated', entry, { title: body.title, description: body.description, start, end });
+      return res.json({ success: true, data: { created: 1, skipped: 0 } });
+    }
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Cả đợt cũ: cùng người, cùng khoảng ngày, cùng tên
+      const [series] = wasSpan
+        ? await conn.query(
+          `SELECT d.id, DATE_FORMAT(d.work_date,'%Y-%m-%d') AS work_date, s.id AS scored
+             FROM daily_entries d LEFT JOIN daily_day_scores s ON s.user_id=d.user_id AND s.work_date=d.work_date
+            WHERE d.user_id=? AND d.span_start=? AND d.span_end=? AND d.title=? FOR UPDATE`,
+          [req.user.id, entry.span_start, entry.span_end, entry.title])
+        : [[{ id: entry.id, work_date: entry.work_date, scored: null }]];
+      const kept = series.filter(r => r.scored); // ngày đã chấm: không đụng tới
+      const drop = series.filter(r => !r.scored).map(r => r.id);
+      if (drop.length) await conn.query('DELETE FROM daily_entries WHERE id IN (?)', [drop]);
+      const { days, skipped } = await planSpanDays(req.user.id, start, end, new Set(kept.map(r => r.work_date)), conn);
+      const span = end === start ? [null, null] : [start, end];
+      if (days.length) await conn.query(
+        'INSERT INTO daily_entries (user_id, work_date, title, description, span_start, span_end) VALUES ?',
+        [days.map(d => [req.user.id, d, body.title, body.description || null, ...span])]);
+      await conn.commit();
+      broadcast(req, req.user.id, start);
+      if (start !== entry.work_date) broadcast(req, req.user.id, entry.work_date);
+      logEntryChange(req, 'worklog_entry_updated', entry, { title: body.title, description: body.description, start, end, created: days.length + kept.length });
+      res.json({ success: true, data: { created: days.length, skipped: skipped + kept.length } });
+    } catch (e) { await conn.rollback(); throw e; }
+    finally { conn.release(); }
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -201,6 +273,7 @@ exports.deleteEntry = async (req, res) => {
     if (await dayScoreOf(req.user.id, entry.work_date)) return fail(res, 400, 'Ngày này đã được Leader chấm điểm — không thể thay đổi');
     await db.query('DELETE FROM daily_entries WHERE id=?', [entry.id]);
     broadcast(req, req.user.id, entry.work_date);
+    logEntryChange(req, 'worklog_entry_deleted', entry);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -517,29 +590,16 @@ exports.pending = async (req, res) => {
     if (req.user.role === 'user') return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
     const people = (await viewableUsers(req)).filter(u => scoresVisible(req, u.id));
     const today = localDate();
-    const days = await pendingScoreDays({ from: addDays(today, -PENDING_DAYS), to: today, userIds: people.map(u => u.id) });
+    // kèm 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở
+    const days = await pendingScoreDays({ from: addDays(today, -PENDING_DAYS), to: today, userIds: people.map(u => u.id), titles: !req.query.count });
     if (req.query.count) return res.json({ success: true, data: { total: days.length } });
-
-    // 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở
-    const titles = new Map();
-    if (days.length) {
-      const [entries] = await db.query(
-        `SELECT user_id, DATE_FORMAT(work_date,'%Y-%m-%d') AS d, title FROM daily_entries
-          WHERE user_id IN (?) AND work_date BETWEEN ? AND ? ORDER BY work_date, id`,
-        [[...new Set(days.map(d => d.user_id))], days[0].work_date, today]);
-      for (const e of entries) {
-        const k = `${e.user_id}|${e.d}`;
-        if (!titles.has(k)) titles.set(k, []);
-        if (titles.get(k).length < 2) titles.get(k).push(e.title);
-      }
-    }
     const byId = new Map(people.map(u => [u.id, u]));
     res.json({ success: true, data: {
       total: days.length, today,
       items: days.map(d => {
         const u = byId.get(d.user_id);
         return { user: { id: u.id, full_name: u.full_name, username: u.username, avatar_color: u.avatar_color, group_names: u.group_names },
-                 work_date: d.work_date, n: d.n, titles: titles.get(`${d.user_id}|${d.work_date}`) || [] };
+                 work_date: d.work_date, n: d.n, titles: d.titles };
       }),
     } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }

@@ -348,7 +348,7 @@ export default function UsersPage(){
         .users-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
 
         /* ── Chặn Safari iOS tự zoom khi focus input/select ── */
-        .users-root input:focus, .users-root select:focus { font-size: 16px !important; }
+        @media (hover: none) and (pointer: coarse) { .users-root input, .users-root select { font-size: 16px !important; } }
 
         /* ── Thanh cuộn mảnh, đẹp trên desktop ── */
         .users-root ::-webkit-scrollbar { width: 8px; height: 8px; }

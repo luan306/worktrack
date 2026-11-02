@@ -23,15 +23,19 @@ const holidaysBetween = async (from, to) =>
  * Dùng chung cho hộp "Chờ chấm" (API /worklog/pending) và cron nhắc leader buổi sáng.
  * @param {string} from  'YYYY-MM-DD' (gồm)
  * @param {string} to    'YYYY-MM-DD' (gồm)
- * @param {number[]|null} userIds  chỉ xét những người này (null = mọi người đang hoạt động)
- * @returns {Promise<{user_id:number, work_date:string, n:number}[]>} sắp ngày cũ → mới
+ * @param {number[]|null} userIds  chỉ xét những người này (đã lọc người đang hoạt động; null = mọi người đang hoạt động)
+ * @param {boolean} titles  kèm 2 tiêu đề việc đầu tiên của ngày
+ * @returns {Promise<{user_id:number, work_date:string, n:number, titles?:string[]}[]>} sắp ngày cũ → mới
  */
-async function pendingScoreDays({ from, to, userIds = null }) {
+const TITLE_SEP = '|~|';
+async function pendingScoreDays({ from, to, userIds = null, titles = false }) {
   if (userIds && !userIds.length) return [];
+  // Có sẵn userIds thì KHÔNG nối bảng users: nối vào làm MySQL đi từ users rồi quét cả lịch sử việc của từng người
   const [rows] = await db.query(
     `SELECT e.user_id, DATE_FORMAT(e.work_date,'%Y-%m-%d') AS work_date, COUNT(*) AS n
+            ${titles ? `, SUBSTRING_INDEX(GROUP_CONCAT(e.title ORDER BY e.id SEPARATOR '${TITLE_SEP}'), '${TITLE_SEP}', 2) AS titles` : ''}
        FROM daily_entries e
-       JOIN users u ON u.id=e.user_id AND u.is_active=1
+       ${userIds ? '' : 'JOIN users u ON u.id=e.user_id AND u.is_active=1'}
        LEFT JOIN daily_day_scores s ON s.user_id=e.user_id AND s.work_date=e.work_date
        LEFT JOIN daily_day_offs  o ON o.user_id=e.user_id AND o.work_date=e.work_date AND o.kind='full'
       WHERE e.work_date BETWEEN ? AND ? AND s.id IS NULL AND o.id IS NULL
@@ -39,7 +43,7 @@ async function pendingScoreDays({ from, to, userIds = null }) {
       GROUP BY e.user_id, e.work_date
       ORDER BY e.work_date, e.user_id`,
     userIds ? [from, to, userIds] : [from, to]);
-  return rows.map(r => ({ ...r, n: Number(r.n) }));
+  return rows.map(r => ({ ...r, n: Number(r.n), ...(titles ? { titles: r.titles ? r.titles.split(TITLE_SEP) : [] } : null) }));
 }
 
 module.exports = { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };

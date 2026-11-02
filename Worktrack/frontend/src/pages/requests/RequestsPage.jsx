@@ -348,7 +348,7 @@ export default function RequestsPage() {
         .req-root .req-list-item { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .req-root .req-list-item:active { background: var(--wt-tint-primary) !important; }
         .req-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
-        .req-root input:focus, .req-root select:focus, .req-root textarea:focus { font-size: 16px !important; }
+        @media (hover: none) and (pointer: coarse) { .req-root input, .req-root select, .req-root textarea { font-size: 16px !important; } }
         .req-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .req-root ::-webkit-scrollbar-track { background: transparent; }
         .req-root ::-webkit-scrollbar-thumb { background: var(--wt-scroll); border-radius: 8px; }
@@ -388,6 +388,7 @@ export default function RequestsPage() {
           .req-root .req-sec-extra { display: none !important; }
         }
         @media (max-width: 480px) {
+          .req-root .req-del-label { display: none; }
           .req-root .req-score-row { flex-wrap: wrap; }
           .req-root .req-quick { gap: 4px !important; }
           .req-root .req-quick > button { width: 34px !important; height: 34px !important; }
@@ -506,6 +507,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [activityTick, setActivityTick] = useState(0);
 
   const isAdmin = ['admin','manager'].includes(user?.role);
+  const isSuper = user?.role === 'admin'; // Admin: xóa CV, đổi trạng thái tùy ý, sửa điểm cả khi đã hoàn thành
 
 
   const loadTask = async()=>{
@@ -611,6 +613,21 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     catch(e){alert(e.response?.data?.message||e.message);}
   };
 
+  const deleteTask = async()=>{
+    const pts = (task.assignees||[]).length && task.score!=null ? `\n${t('req_delete_score_warn','Điểm của người thực hiện trong CV này cũng bị xóa.')}` : '';
+    if (!window.confirm(`${t('req_delete_confirm')}\n"${task.title}"${pts}`)) return;
+    setSaving(true);
+    try { await api.delete(`/requests/${taskId}`); clearApiCache(); await onSaved?.(null); onClose(); }
+    catch(e){ alert(e.response?.data?.message||e.message); }
+    finally { setSaving(false); }
+  };
+  // Admin đổi thẳng trạng thái; quay về chờ / đang làm thì xóa giờ hoàn thành
+  const changeStatus = (status)=>{
+    if (status===task.status) return;
+    if (!window.confirm(t('req_status_change_confirm',{ defaultValue:'Đổi trạng thái CV sang "{{s}}"?', s: t(STATUS[status].key) }))) return;
+    save({ status, ...(['pending','assigned','in_progress'].includes(status) ? { completed_at:null } : null) });
+  };
+
   // ⚠️ Nếu CV do chính MANAGER tạo
   const markDone = async()=>{
     const skipLeaderStep = task.creator_role === 'manager';
@@ -673,6 +690,8 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           }
           return <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'var(--wt-text-4)':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>;
         })()}
+        {isSuper&&<button onClick={deleteTask} disabled={saving} title={t('req_delete_btn','Xóa CV')}
+          style={{padding:'6px 10px',borderRadius:7,border:'1.5px solid var(--wt-tint-danger-bd)',background:'var(--wt-tint-danger)',color:C.danger,fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>🗑 <span className="req-del-label">{t('req_delete_btn','Xóa CV')}</span></button>}
         <button onClick={onClose} style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.border}`,background:'var(--wt-surface)',cursor:'pointer',fontSize:16,color:'var(--wt-text-4)',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
       </div>
 
@@ -739,9 +758,18 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </select>
                   </div>
                   <div style={{flex:'1 1 160px'}}><label style={FL}>{t('status')}</label>
-                    <div style={{...FI,display:'flex',alignItems:'center',background:'var(--wt-surface-2)'}}>
-                      <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color}}>{st.icon} {t(st.key)}</span>
-                    </div>
+                    {isSuper ? (
+                      <select style={FI} value={task.status==='assigned'?'pending':task.status} disabled={saving} onChange={e=>changeStatus(e.target.value)}>
+                        {['pending','in_progress','scoring','reviewing','done','cancelled'].map(k=>(
+                          <option key={k} value={k}>{STATUS[k].icon} {t(STATUS[k].key)}</option>
+                        ))}
+                        {task.status==='archived'&&<option value="archived" disabled>🗄 archived</option>}
+                      </select>
+                    ) : (
+                      <div style={{...FI,display:'flex',alignItems:'center',background:'var(--wt-surface-2)'}}>
+                        <span style={{fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:8,background:st.bg,color:st.color}}>{st.icon} {t(st.key)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -844,7 +872,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </button>
                   </div>
                   <div style={{maxHeight:160,overflowY:'auto'}}>
-                    {users.filter(u=>!existingIds.has(u.id)).map(u=>(
+                    {users.filter(u=>u.role!=='admin'&&!existingIds.has(u.id)).map(u=>(
                       <div key={u.id} onClick={()=>addAssignee(u.id,pendingRole)}
                         style={{display:'flex',alignItems:'center',gap:8,padding:'7px 12px',cursor:'pointer',fontSize:12}}
                         onMouseEnter={e=>e.currentTarget.style.background='var(--wt-tint-primary)'}
@@ -914,13 +942,20 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                   )
                 )}
 
-                {task.status==='done'&&(
+                {['done','archived'].includes(task.status)&&(isSuper ? (
+                  <AssigneeScoring key={`d-${task.id}-${peopleKey}`} task={task} tone={C.success} bg="var(--wt-tint-success)" border="var(--wt-tint-success-bd)"
+                    hint={<><b style={{color:C.success}}>✅ {t('req_status_done')}</b> — {t('req_admin_rescore_hint','Admin có thể sửa lại điểm đã duyệt.')}</>}
+                    actions={collect=>(
+                      <button disabled={saving} onClick={()=>{const p=collect(); if(p) save(p);}}
+                        style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('req_update_score','Cập nhật điểm')}</button>
+                    )}/>
+                ) : (
                   <div>
                     <div style={{fontSize:12,color:C.success,fontWeight:600,marginBottom:8}}>✅ {t('req_status_done')}</div>
                     {personScores}
                   </div>
-                )}
-                {!['scoring','reviewing','done'].includes(task.status)&&(
+                ))}
+                {!['scoring','reviewing','done','archived'].includes(task.status)&&(
                   <div style={{fontSize:12,color:'var(--wt-text-4)'}}>{t('req_waiting_completion')}</div>
                 )}
               </Section>
@@ -1005,6 +1040,14 @@ function CreatePanel({groups,users,onClose,onSaved}){
   const [form,setForm]=useState({title:'',description:'',priority:'medium',deadline:'',group_id:'',assignees:[],score:''});
   const [saving,setSaving]=useState(false);
   const s=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const [pickQ,setPickQ]=useState('');
+  const pickList = users.filter(u=>u.role!=='admin' && !form.assignees.some(a=>a.user_id===u.id)
+    && (!pickQ.trim() || (u.full_name||'').toLowerCase().includes(pickQ.trim().toLowerCase())));
+  const addPerson = (u)=>{
+    const role = form.assignees.some(a=>a.role==='main') ? 'support' : 'main';
+    s('assignees',[...form.assignees,{user_id:u.id,role,full_name:u.full_name,avatar_color:u.avatar_color}]);
+    setPickQ('');
+  };
 
   // Mỗi CV chỉ 1 người làm CHÍNH
   const toggleFormAssigneeRole = (uid)=>{
@@ -1063,11 +1106,7 @@ function CreatePanel({groups,users,onClose,onSaved}){
           </div>
         </Section>
         <Section icon="👥" title={t('req_assign_to')}>
-          <select style={FI} onChange={e=>{ if(!e.target.value) return; const uid=+e.target.value; if(form.assignees.find(a=>a.user_id===uid)) return; const u=users.find(x=>x.id===uid); const role = form.assignees.some(a=>a.role==='main') ? 'support' : 'main'; s('assignees',[...form.assignees,{user_id:uid,role,full_name:u?.full_name,avatar_color:u?.avatar_color}]); e.target.value=''; }}>
-            <option value="">{t('req_choose_person')}</option>
-            {users.filter(u=>!form.assignees.find(a=>a.user_id===u.id)).map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)}
-          </select>
-          <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:8}}>
+          {form.assignees.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
             {form.assignees.map(a=>(
               <span key={a.user_id} style={{display:'flex',alignItems:'center',gap:5,background:'var(--wt-tint-primary)',border:'1px solid var(--wt-tint-primary-bd)',color:C.primary,fontSize:12,padding:'4px 10px',borderRadius:20,fontWeight:600}}>
                 {a.full_name}
@@ -1075,6 +1114,23 @@ function CreatePanel({groups,users,onClose,onSaved}){
                 <span onClick={()=>s('assignees',form.assignees.filter(x=>x.user_id!==a.user_id))} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:14}}>×</span>
               </span>
             ))}
+          </div>}
+          {/* Danh sách tự vẽ thay <select>: popup gốc của trình duyệt có lúc hiện trắng (zoom, dịch trang) */}
+          <div style={{border:`1.5px solid ${C.border}`,borderRadius:8,overflow:'hidden',background:'var(--wt-surface)'}}>
+            <input style={{...FI,border:'none',borderBottom:`1px solid ${C.border}`,borderRadius:0}} value={pickQ} onChange={e=>setPickQ(e.target.value)} placeholder={`🔍 ${t('req_choose_person')}`}/>
+            <div style={{maxHeight:180,overflowY:'auto'}}>
+              {pickList.map(u=>(
+                <div key={u.id} onClick={()=>addPerson(u)}
+                  style={{display:'flex',alignItems:'center',gap:8,padding:'7px 12px',cursor:'pointer',fontSize:12}}
+                  onMouseEnter={e=>e.currentTarget.style.background='var(--wt-tint-primary)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <Chip color={u.avatar_color||C.primary} name={u.full_name} size={22}/>
+                  <span style={{flex:1,color:C.dark,fontWeight:500}}>{u.full_name}</span>
+                  <span style={{color:'var(--wt-text-4)',fontSize:11}}>{u.role}</span>
+                </div>
+              ))}
+              {!pickList.length&&<div style={{padding:'10px 12px',fontSize:12,color:'var(--wt-text-4)'}}>—</div>}
+            </div>
           </div>
         </Section>
       </div>

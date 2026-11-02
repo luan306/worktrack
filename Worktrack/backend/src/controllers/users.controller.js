@@ -6,6 +6,7 @@ const cache = require('../config/cache');
 const { invalidateUser } = require('../middleware/auth');
 const { DEFAULT_PASSWORD } = require('../utils/password');
 const { logActivity, diffFields } = require('../services/activityLogService');
+const { sendCachedJson } = require('../utils/cachedJson');
 
 // ── Lịch sử thay đổi tài khoản ──
 const ROLE_LABEL = { user: 'Nhân viên', leader: 'Leader', manager: 'Manager', admin: 'Admin' };
@@ -38,6 +39,10 @@ const ADMIN_ONLY = { success: false, message: 'Chỉ Admin mới được thao t
 exports.list = async (req, res) => {
   try {
     const { group_id, role, search, is_active } = req.query;
+    // User thường chỉ cần danh sách tên để chọn người
+    const limited = !['admin','manager','leader'].includes(req.user.role);
+    // Trang nào cũng gọi → cache dùng chung; mọi thao tác ghi vào /users, /groups xóa cache 'grp:' (routes/index.js)
+    await sendCachedJson(req, res, 'grp:users:' + JSON.stringify([group_id, role, search, is_active, limited]), 60000, async () => {
 
     // group_concat_max_len đã được set cho mọi connection ở config/db.js
     let sql = `SELECT u.id,u.username,u.email,u.full_name,u.role,u.avatar_color,u.is_active,u.last_login,u.created_at,
@@ -50,8 +55,6 @@ exports.list = async (req, res) => {
     // ⚠️ Trước đây lọc cứng "WHERE u.is_active=1"
     if (is_active !== undefined && is_active !== '') { sql += ' AND u.is_active=?'; p.push(is_active); }
     if (role)     { sql += ' AND u.role=?'; p.push(role); }
-    // User thường chỉ cần danh sách tên để chọn người
-    const limited = !['admin','manager','leader'].includes(req.user.role);
     if (search && limited) { sql += ' AND u.full_name LIKE ?'; p.push(`%${search}%`); }
     else if (search) { sql += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ?)'; const s=`%${search}%`; p.push(s,s,s); }
     if (group_id) { sql += ' AND gm.group_id=?'; p.push(group_id); }
@@ -66,7 +69,8 @@ exports.list = async (req, res) => {
         : [],
       groups_raw: undefined,
     }));
-    res.json({ success: true, data });
+    return data;
+    });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 

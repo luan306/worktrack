@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
+const JWT_KEY = require('../utils/jwtKey');
 const crypto = require('crypto');
 const db     = require('../config/db');
 const { revokeToken, invalidateUser } = require('../middleware/auth');
@@ -12,9 +13,9 @@ const makeTokens = (user) => {
   const payload = { id: user.id, username: user.username, role: user.role, full_name: user.full_name };
   return {
     // jwtid ngẫu nhiên: 2 lần đăng nhập trong cùng 1 giây vẫn ra 2 token KHÁC nhau
-    access:  jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN  || '8h', jwtid: crypto.randomUUID() }),
+    access:  jwt.sign(payload, JWT_KEY, { expiresIn: process.env.JWT_EXPIRES_IN  || '8h', jwtid: crypto.randomUUID() }),
     // type:'refresh' để middleware từ chối nếu ai đó dùng refresh token thay access token
-    refresh: jwt.sign({ id: user.id, type: 'refresh' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d', jwtid: crypto.randomUUID() }),
+    refresh: jwt.sign({ id: user.id, type: 'refresh' }, JWT_KEY, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d', jwtid: crypto.randomUUID() }),
   };
 };
 
@@ -67,7 +68,7 @@ exports.refresh = async (req, res) => {
   try {
     const { refresh_token } = req.body;
     if (!refresh_token) return res.status(400).json({ success: false, message: 'Refresh token required' });
-    const decoded = jwt.verify(refresh_token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    const decoded = jwt.verify(refresh_token, JWT_KEY, { algorithms: ['HS256'] });
     if (decoded.role) throw new Error('access token is not a refresh token');
     const [[row]] = await db.query('SELECT * FROM refresh_tokens WHERE token=? AND expires_at>NOW()', [refresh_token]);
     if (!row) return res.status(401).json({ success: false, message: 'Invalid refresh token' });

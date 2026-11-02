@@ -9,16 +9,18 @@ exports.list = async (req, res) => {
     const limit = Math.min(+req.query.limit || 20, 50);
     const before = req.query.before ? +req.query.before : null;
 
-    const sql = `
+    // MySQL hay chọn nhầm idx_user_unread rồi đọc + sắp xếp TOÀN BỘ thông báo của người đó → chỉ định index (user_id, id)
+    const sql = (hint) => `
       SELECT n.*, u.full_name AS actor_name, u.avatar_color AS actor_avatar_color
-      FROM notifications n
+      FROM notifications n ${hint}
       LEFT JOIN users u ON u.id = n.actor_id
       WHERE n.user_id = ? ${before ? 'AND n.id < ?' : ''}
       ORDER BY n.id DESC
       LIMIT ?
     `;
     const params = before ? [userId, before, limit] : [userId, limit];
-    const [rows] = await db.query(sql, params);
+    const [rows] = await db.query(sql('FORCE INDEX (idx_notif_user_id)'), params)
+      .catch(e => { if (e.errno === 1176) return db.query(sql(''), params); throw e; }); // DB chưa có index này
 
     res.json({
       success: true,

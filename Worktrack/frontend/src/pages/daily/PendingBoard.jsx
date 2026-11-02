@@ -29,7 +29,8 @@ export default function PendingBoard({ isMobile, isNarrow, onOpenPerson }) {
     return () => { alive = false; };
   }, [tick]);
   const refresh = useCallback(() => setTick(n => n + 1), []);
-  useEffect(() => onRealtime('worklog:updated', refresh), [refresh]);
+  // Ai ghi việc cũng phát sự kiện → giờ cao điểm rất dày: gộp 3–6 giây / lần tải lại
+  useEffect(() => onRealtime('worklog:updated', refresh, { wait: 3000, jitter: 3000 }), [refresh]);
 
   const loading = res?.tick !== tick;
   const today = res?.today;

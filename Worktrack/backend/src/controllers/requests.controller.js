@@ -391,6 +391,8 @@ exports.update = async (req, res) => {
         }
         // Manager duyệt → done + tính is_late
         fields.push('status=?'); vals.push('done');
+        // Admin chuyển thẳng sang "done" (không qua nộp) → vẫn phải có giờ hoàn thành để Dashboard tính điểm
+        if (!task.completed_at && completed_at === undefined) { fields.push('completed_at=?'); vals.push(now); }
         const dl = task.deadline || deadline;
         const ct = task.completed_at || now;
         if (dl) { fields.push('is_late=?'); vals.push(new Date(ct) > new Date(dl) ? 1 : 0); }
