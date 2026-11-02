@@ -17,11 +17,18 @@ const EPOCH = '2000-01-01 00:00:00'; // dự phòng khi chưa có kỳ nào đan
 
 // Kỳ đang mở + mốc bắt đầu dạng chuỗi 'YYYY-MM-DD HH:MM:SS'
 async function getOpenPeriod(q = db, forUpdate = false) {
-  const [[period]] = await q.query(
+  const find = () => q.query(
     `SELECT *, DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at_str
        FROM score_periods WHERE is_locked=0 ORDER BY id DESC LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`
   );
-  return period;
+  const [[period]] = await find();
+  if (period) return period;
+  // Luôn phải có 1 kỳ đang mở: DB nạp từ bản sao lưu có thể chỉ toàn kỳ đã chốt → tự mở kỳ nối tiếp kỳ cuối
+  await q.query(
+    `INSERT INTO score_periods (name, started_at, is_locked)
+     SELECT CONCAT('Period ', COALESCE(MAX(id), 0) + 1), COALESCE(MAX(ended_at), ?), 0 FROM score_periods`, [EPOCH]);
+  const [[created]] = await find();
+  return created;
 }
 
 // ⚠️ LEFT JOIN group_members (không phải JOIN)
