@@ -51,8 +51,16 @@ const FL = { display:'block', fontSize:11, fontWeight:700, color:'var(--wt-text-
 
 // Link http(s) trong tin nhắn → bấm được (chỉ http/https, dựng bằng React nên không chèn được HTML)
 const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
+// Link hiện gọn 1 dòng: tên miền + đường dẫn (cắt "…"), rê chuột thấy link đầy đủ
+const shortUrl = (u) => { try { const x = new URL(u); return x.host.replace(/^www\./, '') + (x.pathname === '/' ? '' : x.pathname); } catch { return u; } };
 const Linkify = ({ text }) => String(text).split(URL_RE).map((part, i) =>
-  i % 2 ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{color:C.primary,textDecoration:'underline'}}>{part}</a> : part);
+  i % 2 ? (
+    <a key={i} href={part} target="_blank" rel="noopener noreferrer" title={part}
+      style={{display:'inline-flex',verticalAlign:'middle',alignItems:'center',gap:5,maxWidth:'100%',margin:'2px 0',padding:'4px 9px',borderRadius:8,background:'var(--wt-surface)',border:'1px solid var(--wt-line)',color:C.primary,fontSize:11.5,fontWeight:600,textDecoration:'none',whiteSpace:'nowrap',boxSizing:'border-box'}}>
+      <span style={{flexShrink:0}}>🔗</span>
+      <span style={{overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>{shortUrl(part)}</span>
+    </a>
+  ) : part);
 
 const Chip = ({color=C.primary,name='?',size=28})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
@@ -981,7 +989,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
         <div className="req-chat-panel" style={{width:300,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'var(--wt-surface-2)'}}>
           <div style={{padding:'11px',textAlign:'center',fontSize:12,fontWeight:600,color:C.primary,borderBottom:`2.5px solid ${C.primary}`,flexShrink:0}}>💬 {t('req_messages_tab')}</div>
 
-          <div ref={feedRef} style={{flex:1,overflowY:'auto',padding:12,display:'flex',flexDirection:'column',gap:10}}>
+          <div ref={feedRef} style={{flex:1,overflowY:'auto',overflowX:'hidden',padding:12,display:'flex',flexDirection:'column',gap:10}}>
             {chatItems.length===0&&<div style={{textAlign:'center',padding:20,color:'var(--wt-text-4)',fontSize:12}}>{t('req_no_messages')}</div>}
             {chatItems.map((c,i)=>{
               const isMe=c.user_id===user?.id;
