@@ -49,6 +49,11 @@ const ACTIVITY_DEFAULT_META = { icon:'📝', color:'var(--wt-text-3)', bg:'var(-
 const FI = { width:'100%', padding:'8px 12px', border:'1.5px solid var(--wt-line)', borderRadius:8, fontSize:13, color:C.dark, outline:'none', boxSizing:'border-box', background:'var(--wt-surface)' };
 const FL = { display:'block', fontSize:11, fontWeight:700, color:'var(--wt-text-3)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
 
+// Link http(s) trong tin nhắn → bấm được (chỉ http/https, dựng bằng React nên không chèn được HTML)
+const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
+const Linkify = ({ text }) => String(text).split(URL_RE).map((part, i) =>
+  i % 2 ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{color:C.primary,textDecoration:'underline'}}>{part}</a> : part);
+
 const Chip = ({color=C.primary,name='?',size=28})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:color,color:'#fff',fontSize:size>24?12:9,fontWeight:700}}>{ini}</div>;
@@ -983,18 +988,18 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               return (
                 <div key={i} style={{display:'flex',gap:8,flexDirection:isMe?'row-reverse':'row'}}>
                   <Chip color={c.avatar_color||C.primary} name={c.full_name||'?'} size={26}/>
-                  <div style={{maxWidth:'80%'}}>
+                  <div style={{maxWidth:'80%',minWidth:0}}>
                     <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3,flexDirection:isMe?'row-reverse':'row'}}>
                       <span style={{fontSize:11,fontWeight:700,color:isMe?C.primary:C.dark}}>{c.full_name}</span>
                       <span style={{fontSize:10,color:'var(--wt-text-4)'}}>{fmtDt(c.created_at)}</span>
                     </div>
                     <div style={{background:isMe?'var(--wt-tint-primary)':'var(--wt-surface)',border:`1px solid ${isMe?'var(--wt-tint-primary-bd)':C.border}`,borderRadius:isMe?'12px 4px 12px 12px':'4px 12px 12px 12px',padding:'8px 12px',fontSize:12,color:'var(--wt-ink)',lineHeight:1.5}}>
-                      {(c.content||c.message)&&<div>{c.content||c.message}</div>}
+                      {(c.content||c.message)&&<div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',wordBreak:'break-word'}}><Linkify text={c.content||c.message}/></div>}
                       {(c.file_name||c.filename)&&(
                         <a href={resolveFileUrl(c.file_url||c.url)} target="_blank" rel="noreferrer"
                           style={{display:'flex',alignItems:'center',gap:6,marginTop:(c.content||c.message)?6:0,padding:'6px 9px',borderRadius:8,background:'var(--wt-surface)',border:`1px solid ${C.border}`,textDecoration:'none',color:C.primary,fontSize:11,fontWeight:600}}>
                           <span>{chatFileIcon(c.file_name||c.filename)}</span>
-                          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.file_name||c.filename}</span>
+                          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>{c.file_name||c.filename}</span>
                         </a>
                       )}
                     </div>
