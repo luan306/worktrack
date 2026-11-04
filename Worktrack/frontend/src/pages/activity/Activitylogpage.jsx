@@ -131,7 +131,7 @@ const exportCsv = async (filters) => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `lich_su_thay_doi_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `lich_su_thay_doi_${new Date().toLocaleDateString('sv-SE')}.csv`; // sv-SE = YYYY-MM-DD theo giờ máy (toISOString là giờ UTC)
   a.click();
   URL.revokeObjectURL(url);
 };
