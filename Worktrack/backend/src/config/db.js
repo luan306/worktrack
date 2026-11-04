@@ -20,7 +20,8 @@ const pool = mysql.createPool({
 });
 
 // Áp dụng cho MỌI connection trong pool
-pool.on('connection', c => { c.query('SET SESSION group_concat_max_len = 100000'); });
+// Docker MySQL mặc định UTC → NOW() lệch 7 tiếng so với hạn chót (người dùng nhập theo giờ Việt Nam)
+pool.on('connection', c => { c.query("SET SESSION group_concat_max_len = 100000, time_zone = '+07:00'"); });
 
 pool.getConnection()
   .then(c => { console.log('✅ MySQL connected'); c.release(); })

@@ -7,6 +7,7 @@ const {
   logActivity, diffFields, fmtText, fmtDateTime, fmtScore, STATUS_LABEL, PRIORITY_LABEL,
 } = require('../services/activityLogService');
 const { notify, notifyMany } = require('../services/notificationService');
+const { localDate } = require('../utils/date');
 
 // Danh sách cột của 1 bảng — cache trong bộ nhớ vì schema không đổi khi server đang chạy
 const columnCache = {};
@@ -244,7 +245,7 @@ exports.create = async (req, res) => {
     const fields = ['title','description','priority','status','created_by','group_id','deadline'];
     const vals   = [title, description||null, priority,
                      assignees.length ? 'assigned' : 'pending',
-                     req.user.id, group_id||null, deadline||null];
+                     req.user.id, group_id||null, toMySQL(deadline)];
 
     // Điểm dự kiến nhập lúc tạo — không bắt buộc, để trống nếu không cần
     if (score !== undefined && score !== null && score !== '') {
@@ -307,7 +308,15 @@ exports.create = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
-const toMySQL = (d) => d ? new Date(d).toISOString().slice(0,19).replace('T',' ') : null;
+// 'YYYY-MM-DDTHH:mm' (ô datetime-local) hay ISO → 'YYYY-MM-DD HH:MM:SS' theo GIỜ VIỆT NAM (không dùng toISOString = UTC)
+const toMySQL = (d) => {
+  if (!d) return null;
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/.test(d)) return (d.replace('T', ' ') + ':00').slice(0, 19);
+  const x = new Date(d);
+  if (isNaN(x)) return null;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${localDate(x)} ${p(x.getHours())}:${p(x.getMinutes())}:${p(x.getSeconds())}`;
+};
 
 exports.update = async (req, res) => {
   try {
@@ -393,9 +402,8 @@ exports.update = async (req, res) => {
         fields.push('status=?'); vals.push('done');
         // Admin chuyển thẳng sang "done" (không qua nộp) → vẫn phải có giờ hoàn thành để Dashboard tính điểm
         if (!task.completed_at && completed_at === undefined) { fields.push('completed_at=?'); vals.push(now); }
-        const dl = task.deadline || deadline;
-        const ct = task.completed_at || now;
-        if (dl) { fields.push('is_late=?'); vals.push(new Date(ct) > new Date(dl) ? 1 : 0); }
+        // đặt SAU completed_at / deadline: MySQL gán từ trái sang phải nên thấy giá trị vừa cập nhật
+        fields.push('is_late = (deadline IS NOT NULL AND COALESCE(completed_at, NOW()) > deadline)');
       }
       else {
         fields.push('status=?'); vals.push(status);

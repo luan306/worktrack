@@ -1,3 +1,4 @@
+process.env.TZ = process.env.APP_TZ || 'Asia/Ho_Chi_Minh'; // giờ VN kể cả khi container chạy UTC — đặt TRƯỚC mọi new Date()
 require('dotenv').config();
 const express      = require('express');
 const http         = require('http');

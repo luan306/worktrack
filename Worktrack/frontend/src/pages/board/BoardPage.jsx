@@ -52,12 +52,14 @@ const isTaskNew = (task) => {
   if (!task.created_at) return false;
   return (Date.now() - new Date(task.created_at).getTime()) < NEW_THRESHOLD_MS;
 };
+// Đã nộp (chờ chấm / duyệt / xong) thì không còn "sắp hết hạn" / "quá hạn" — trễ hay không xét theo giờ nộp
+const SUBMITTED = ['scoring', 'reviewing', 'done', 'archived', 'cancelled'];
 const isNearDeadline = (task) => {
-  if (!task.deadline || task.status === 'done') return false;
+  if (!task.deadline || SUBMITTED.includes(task.status)) return false;
   const diff = new Date(task.deadline) - new Date();
   return diff > 0 && diff <= NEAR_DEADLINE_MS;
 };
-const isOverdue = (task) => task.deadline && new Date(task.deadline) < new Date() && task.status !== 'done';
+const isOverdue = (task) => !!task.deadline && !SUBMITTED.includes(task.status) && new Date(task.deadline) < new Date();
 const isUnassigned = (task) => !(task.assignees && task.assignees.length);
 // Chưa có field assigned_at riêng trong API
 const isRecentlyAssigned = (task) => {
@@ -151,9 +153,9 @@ function Pagination({ page, totalPages, onChange }) {
 function Countdown({ deadline, status }) {
   const { t } = useTranslation();
   // Còn > 1 ngày chỉ hiện ngày/giờ → cập nhật mỗi phút là đủ
-  const now = useNow(n => (new Date(deadline) - n > 86400000 ? 60000 : 1000), status !== 'done');
+  const now = useNow(n => (new Date(deadline) - n > 86400000 ? 60000 : 1000), !SUBMITTED.includes(status));
   const diff = new Date(deadline) - now;
-  if (status === 'done') return null;
+  if (SUBMITTED.includes(status)) return null;
   if (diff <= 0) return (
     <span style={{ fontSize: 10.5, fontWeight: 800, color: '#fff', background: C.danger, padding: '3px 8px', borderRadius: 7, fontFamily: FONT_MONO, letterSpacing: .3, display: 'inline-flex', alignItems: 'center', gap: 5, animation: 'brdPulse 1.4s ease-in-out infinite' }}>⚠ {t('late')}</span>
   );

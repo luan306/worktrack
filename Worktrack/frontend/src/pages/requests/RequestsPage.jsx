@@ -49,6 +49,14 @@ const ACTIVITY_DEFAULT_META = { icon:'📝', color:'var(--wt-text-3)', bg:'var(-
 const FI = { width:'100%', padding:'8px 12px', border:'1.5px solid var(--wt-line)', borderRadius:8, fontSize:13, color:C.dark, outline:'none', boxSizing:'border-box', background:'var(--wt-surface)' };
 const FL = { display:'block', fontSize:11, fontWeight:700, color:'var(--wt-text-3)', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:5 };
 
+// Giá trị cho <input type="datetime-local">: giờ ĐỊA PHƯƠNG 'YYYY-MM-DDTHH:mm' (toISOString là giờ UTC → lệch 7 tiếng)
+const toLocalInput = (v) => {
+  if (!v) return '';
+  const d = new Date(v); if (isNaN(d)) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 // Link http(s) trong tin nhắn → bấm được (chỉ http/https, dựng bằng React nên không chèn được HTML)
 const URL_RE = /(https?:\/\/[^\s<>"]+)/g;
 // Link hiện gọn 1 dòng: tên miền + đường dẫn (cắt "…"), rê chuột thấy link đầy đủ
@@ -89,12 +97,23 @@ const makeFmtDt = locale => d => {
 };
 
 // Đếm ngược deadline
-function Countdown({deadline, status}) {
+// Đã nộp (chờ chấm / chờ duyệt / xong): trễ hay không tính theo GIỜ NỘP, không theo giờ hiện tại
+const SUBMITTED = ['scoring','reviewing','done','archived'];
+const isOverdueTask = (t2) => !!t2.deadline && !SUBMITTED.includes(t2.status) && t2.status!=='cancelled' && new Date(t2.deadline) < new Date();
+const submittedLate = (t2) => !!(t2.deadline && t2.completed_at && new Date(t2.completed_at) > new Date(t2.deadline));
+
+function Countdown({deadline, status, completedAt}) {
   const { t } = useTranslation();
-  const ended = ['done','cancelled','archived'].includes(status);
+  const submitted = SUBMITTED.includes(status);
+  const ended = submitted || status==='cancelled';
   // Còn > 1 ngày chỉ hiện ngày/giờ/phút → cập nhật mỗi 30s là đủ
   const now = useNow(n => (new Date(deadline) - n > 86400000 ? 30000 : 1000), !ended);
   const diff = new Date(deadline) - now;
+  if (submitted && completedAt && !['done','archived'].includes(status)) {
+    const late = new Date(completedAt) > new Date(deadline);
+    return <span style={{fontSize:11,fontWeight:700,color:late?C.danger:C.success,background:late?'var(--wt-tint-danger)':'var(--wt-tint-success)',padding:'3px 8px',borderRadius:6}}>
+      {late ? `⚠ ${t('req_submitted_late','Nộp trễ')}` : `✅ ${t('req_submitted_ontime','Nộp đúng hạn')}`}</span>;
+  }
   if (ended) return null;
   if (diff<=0) return <span style={{fontSize:11,fontWeight:700,color:C.danger,background:'var(--wt-tint-danger)',padding:'3px 8px',borderRadius:6}}>⚠ {t('late')}</span>;
   const d=Math.floor(diff/86400000), h=Math.floor(diff%86400000/3600000), m=Math.floor(diff%3600000/60000), s=Math.floor(diff%60000/1000);
@@ -448,9 +467,9 @@ export default function RequestsPage() {
             const st=STATUS[t2.status]||STATUS.pending;
             const pr=PRIORITY[t2.priority]||PRIORITY.medium;
             const isActive=selected?.id===t2.id;
-            const overdue=t2.deadline&&new Date(t2.deadline)<new Date()&&t2.status!=='done';
+            const overdue=isOverdueTask(t2) || (SUBMITTED.includes(t2.status) && submittedLate(t2));
             const timeLeft = t2.deadline ? new Date(t2.deadline)-new Date() : null;
-            const isUrgent = t2.deadline && !['done','cancelled'].includes(t2.status) && timeLeft<3600000;
+            const isUrgent = t2.deadline && !SUBMITTED.includes(t2.status) && t2.status!=='cancelled' && timeLeft<3600000;
             const isNew = t2.created_at && (now-new Date(t2.created_at).getTime()) < 24*60*60*1000;
             return (
               <div key={t2.id} className="req-list-item" onClick={()=>setSelected(t2)}
@@ -474,7 +493,7 @@ export default function RequestsPage() {
                     return b ? <span style={{fontSize:10,fontWeight:800,padding:'1px 7px',borderRadius:6,background:b.bg,color:b.col,whiteSpace:'nowrap'}}>{b.txt}</span> : null; })()}
                   <span>👤 {t2.creator_name}</span>
                   {t2.deadline&&<span style={{color:overdue?C.danger:'var(--wt-text-4)'}}>⏰ {new Date(t2.deadline).toLocaleDateString(currentLocale)}</span>}
-                  {t2.deadline&&<Countdown deadline={t2.deadline} status={t2.status}/>}
+                  {t2.deadline&&<Countdown deadline={t2.deadline} status={t2.status} completedAt={t2.completed_at}/>}
                   {t2.assignees?.length>0&&<div style={{display:'flex',gap:2,marginLeft:'auto'}}>{t2.assignees.slice(0,3).map(a=><Chip key={a.user_id} color={a.avatar_color||C.primary} name={a.full_name||'?'} size={18}/>)}</div>}
                 </div>
               </div>
@@ -655,7 +674,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const isCreator  = task.created_by === user?.id;
   const isAssignee = (task.assignees||[]).some(a=>a.user_id===user?.id);
   const canManageAssignees = (isAdmin||isCreator) && !['done','cancelled'].includes(task.status);
-  const overdue=task.deadline&&new Date(task.deadline)<new Date()&&task.status!=='done';
+  const overdue=isOverdueTask(task) || (SUBMITTED.includes(task.status) && submittedLate(task));
   const existingIds=new Set((task.assignees||[]).map(a=>a.user_id));
   const chatItems=task.comments||[];
   const hasPeople=(task.assignees||[]).length>0;
@@ -812,7 +831,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 <div style={{background:overdue?'var(--wt-tint-danger)':C.bg,borderRadius:8,padding:'9px 12px',border:`1px solid ${overdue?'var(--wt-tint-danger-bd)':C.border}`}}>
                   <div style={{fontSize:10,fontWeight:700,color:'var(--wt-text-4)',textTransform:'uppercase',marginBottom:4}}>{t('req_time_expected')}</div>
                   <div style={{fontSize:13,fontWeight:600,color:overdue?C.danger:C.dark}}>{fmtDt(task.deadline)}</div>
-                  {task.deadline&&<div style={{marginTop:4}}><Countdown deadline={task.deadline} status={task.status}/></div>}
+                  {task.deadline&&<div style={{marginTop:4}}><Countdown deadline={task.deadline} status={task.status} completedAt={task.completed_at}/></div>}
                 </div>
                 <div style={{background:task.completed_at?'var(--wt-tint-success)':C.bg,borderRadius:8,padding:'9px 12px',border:`1px solid ${task.completed_at?'var(--wt-tint-success-bd)':C.border}`}}>
                   <div style={{fontSize:10,fontWeight:700,color:'var(--wt-text-4)',textTransform:'uppercase',marginBottom:4}}>{t('req_time_completed')}</div>
@@ -828,9 +847,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                   </label>
                   <input type="datetime-local"
                     style={{...FI,background:(!isCreator&&!isAdmin)?'var(--wt-surface-2)':'var(--wt-surface)',color:(!isCreator&&!isAdmin)?'var(--wt-text-4)':'var(--wt-ink)'}}
-                    defaultValue={task.deadline?new Date(task.deadline).toISOString().slice(0,16):''}
+                    defaultValue={toLocalInput(task.deadline)}
                     disabled={!isCreator&&!isAdmin}
-                    onBlur={e=>(isCreator||isAdmin)&&save({deadline:e.target.value})}/>
+                    onBlur={e=>(isCreator||isAdmin)&&e.target.value!==toLocalInput(task.deadline)&&save({deadline:e.target.value})}/>
                 </div>
                 <div style={{flex:'1 1 160px'}}><label style={FL}>{t('req_hours_log')}</label>
                   <div style={{...FI,background:'var(--wt-surface-2)',display:'flex',alignItems:'center'}}>

@@ -18,7 +18,7 @@ services:
         # Bộ nhớ đệm của MySQL (mặc định của MySQL chỉ 128MB). Dữ liệu nằm gọn trong bộ đệm thì truy vấn
         # không phải đọc đĩa. Đặt MYSQL_BUFFER_POOL trong file .env theo RAM server: khoảng 25–40% RAM
         # (server 4GB → 1G, 8GB → 2G–3G). Không đặt thì dùng 256M — an toàn cho mọi server.
-        command: --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-256M}
+        command: --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-256M} --default-time-zone=+07:00
         environment:
             # App thật của bạn dùng DB_USER=root trực tiếp (không có user MySQL
             # riêng) — nên ở đây chỉ cần set MYSQL_ROOT_PASSWORD, không cần
