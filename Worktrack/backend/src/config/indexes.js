@@ -114,6 +114,23 @@ async function ensureIndexes() {
       console.log("[indexes] users.role → thêm vai trò 'assistant' (Trợ lý Leader)");
     }
 
+    // Ảnh đại diện tự tải lên (hồ sơ) — để trống = dùng màu + chữ cái như cũ
+    const [[avCol]] = await db.query(
+      `SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users' AND column_name='avatar_url'`);
+    if (!+(avCol?.n ?? avCol?.N)) {
+      await db.query('ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) NULL AFTER avatar_color');
+      console.log('[indexes] users.avatar_url → thêm cột ảnh đại diện');
+    }
+
+    // Email không bắt buộc: nhập từ Excel nhiều nhân viên không có email (UNIQUE vẫn cho nhiều NULL)
+    const [[emailCol]] = await db.query(
+      `SELECT is_nullable AS n FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users' AND column_name='email'`);
+    if ((emailCol?.n || emailCol?.IS_NULLABLE) === 'NO') {
+      await db.query(`ALTER TABLE users MODIFY email VARCHAR(100) COLLATE utf8mb4_unicode_ci NULL`);
+      await db.query(`UPDATE users SET email=NULL WHERE email=''`);
+      console.log('[indexes] users.email → không bắt buộc');
+    }
+
     // Bắt đổi mật khẩu mặc định: 1 = chỉ gọi được API đổi mật khẩu (bật khi đăng nhập bằng mật khẩu mặc định)
     if (!col('users', 'must_change_password')) {
       await db.query('ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0');

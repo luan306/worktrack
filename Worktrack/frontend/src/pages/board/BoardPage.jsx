@@ -433,10 +433,9 @@ function usePageFor(key) {
 
 export default function BoardPage() {
   const { t, i18n } = useTranslation();
-  const { user, can } = useAuth();
+  const { user, hasPerm } = useAuth();
   const navigate = useNavigate();
-  const isLeader = can('admin', 'manager', 'leader');
-  const canCreate = isLeader || can('assistant'); // Trợ lý Leader được tạo CV thay Leader
+  const canCreate = hasPerm('req.create'); // theo trang Phân quyền (mặc định: Manager, Leader, Trợ lý Leader)
   const today = new Date().toLocaleDateString('en-CA');
   const greeting = (() => {
     const h = new Date().getHours();
@@ -521,7 +520,7 @@ export default function BoardPage() {
   };
 
   const myId = user?.id;
-  const canApprove = can('admin', 'manager');
+  const canApprove = hasPerm('req.manager');
   const groupOptions = allGroups.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>);
 
   // ── Cột 1: Yêu cầu ──

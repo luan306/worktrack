@@ -3,17 +3,18 @@ import { useState, useEffect } from 'react';
 import api from '../api/client';
 import { onRealtime } from './socket';
 
-export default function usePendingScoreCount(enabled) {
+// scope='group': chỉ đếm người cùng nhóm (Manager có nhóm riêng)
+export default function usePendingScoreCount(enabled, scope) {
   const [count, setCount] = useState(0);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    api.get('/worklog/pending', { params: { count: 1 } })
+    api.get('/worklog/pending', { params: { count: 1, scope } })
       .then(r => { if (alive) setCount(r.data.data?.total || 0); })
       .catch(() => {});
     return () => { alive = false; };
-  }, [enabled, tick]);
+  }, [enabled, scope, tick]);
   // Con số trên menu không cần tức thì
   useEffect(() => (enabled ? onRealtime('worklog:updated', () => setTick(n => n + 1), { wait: 3000, jitter: 4000 }) : undefined), [enabled]);
   return enabled ? count : 0;

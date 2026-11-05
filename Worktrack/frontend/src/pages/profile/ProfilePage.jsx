@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import api from '../../api/client';
+import api, { clearApiCache } from '../../api/client';
+import { avatarSrc, resizeAvatar } from '../../lib/avatar';
 import useAuth from '../../store/authStore';
 
 const C = {
@@ -26,6 +27,29 @@ export default function ProfilePage() {
   const [pwd,       setPwd]       = useState({ old_password:'', new_password:'', confirm:'' });
   const [savingPwd, setSavingPwd] = useState(false);
   const [pwdMsg,    setPwdMsg]    = useState('');
+  // Ảnh đại diện — Admin bật / tắt ở Quản trị → Cài đặt
+  const canUpload = !!user?.features?.avatar_upload;
+  const fileRef = useRef(null);
+  const [avBusy, setAvBusy] = useState(false);
+  const [avErr,  setAvErr]  = useState('');
+  const pickAvatar = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = '';
+    if (!file) return;
+    setAvBusy(true); setAvErr('');
+    try {
+      const blob = await resizeAvatar(file);
+      const form = new FormData(); form.append('file', blob, 'avatar.jpg');
+      await api.post('/auth/avatar', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      clearApiCache(); await useAuth.getState().refreshMe();
+    } catch (err) { setAvErr(err.response?.data?.message || err.message); }
+    finally { setAvBusy(false); }
+  };
+  const removeAvatar = async () => {
+    setAvBusy(true); setAvErr('');
+    try { await api.delete('/auth/avatar'); clearApiCache(); await useAuth.getState().refreshMe(); }
+    catch (err) { setAvErr(err.response?.data?.message || err.message); }
+    finally { setAvBusy(false); }
+  };
 
   const saveInfo = async () => {
     setSavingInfo(true); setInfoMsg('');
@@ -121,9 +145,33 @@ export default function ProfilePage() {
         {/* Avatar card */}
         <div className="prof-avatar-card" style={{ width:220, flexShrink:0, background:'var(--wt-surface)', borderRadius:14, border:`1.5px solid ${C.border}`, overflow:'hidden' }}>
           <div className="prof-avatar-header" style={{ padding:28, display:'flex', flexDirection:'column', alignItems:'center', gap:12, background:C.dark }}>
-            <div style={{ width:80, height:80, borderRadius:'50%', background:info.avatar_color, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:28, fontWeight:800, boxShadow:'0 0 0 4px rgba(255,255,255,0.2)' }}>
-              {ini}
+            <div style={{ position:'relative' }}>
+              {user.avatar_url
+                ? <img src={avatarSrc(user.avatar_url)} alt="" style={{ width:80, height:80, borderRadius:'50%', objectFit:'cover', display:'block', boxShadow:'0 0 0 4px rgba(255,255,255,0.2)', opacity:avBusy?.5:1 }}/>
+                : <div style={{ width:80, height:80, borderRadius:'50%', background:info.avatar_color, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:28, fontWeight:800, boxShadow:'0 0 0 4px rgba(255,255,255,0.2)', opacity:avBusy?.5:1 }}>{ini}</div>}
+              {canUpload && (
+                <button type="button" onClick={()=>fileRef.current?.click()} disabled={avBusy} title={t('profile_change_photo','Đổi ảnh đại diện')} aria-label={t('profile_change_photo','Đổi ảnh đại diện')}
+                  style={{ position:'absolute', right:-4, bottom:-4, width:30, height:30, borderRadius:'50%', border:'2px solid #0f1729', background:'#fff', cursor:avBusy?'wait':'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 2px 6px rgba(0,0,0,.3)' }}>
+                  {avBusy ? '⏳' : '📷'}
+                </button>
+              )}
+              <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" style={{ display:'none' }} onChange={pickAvatar}/>
             </div>
+            {canUpload && (
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap', justifyContent:'center' }}>
+                <button type="button" onClick={()=>fileRef.current?.click()} disabled={avBusy}
+                  style={{ padding:'5px 11px', borderRadius:8, border:'1px solid rgba(255,255,255,.25)', background:'rgba(255,255,255,.08)', color:'#fff', fontSize:11.5, fontWeight:700, cursor:'pointer' }}>
+                  📷 {user.avatar_url ? t('profile_change_photo','Đổi ảnh') : t('profile_upload_photo','Tải ảnh lên')}
+                </button>
+                {user.avatar_url && (
+                  <button type="button" onClick={removeAvatar} disabled={avBusy}
+                    style={{ padding:'5px 11px', borderRadius:8, border:'1px solid rgba(255,255,255,.25)', background:'transparent', color:'rgba(255,255,255,.8)', fontSize:11.5, fontWeight:700, cursor:'pointer' }}>
+                    {t('profile_remove_photo','Bỏ ảnh')}
+                  </button>
+                )}
+              </div>
+            )}
+            {avErr && <div style={{ fontSize:11, color:'#ffb4bd', textAlign:'center' }}>{avErr}</div>}
             <div style={{ textAlign:'center' }}>
               <div style={{ fontSize:14, fontWeight:700, color:'#fff' }}>{user.full_name}</div>
               <div style={{ fontSize:11, color:'var(--wt-text-3)', marginTop:3 }}>{t(ROLE_KEY[user.role]) || user.role}</div>

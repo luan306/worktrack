@@ -1,7 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import api, { downloadFile } from '../../api/client';
+import api, { downloadFile, clearApiCache } from '../../api/client';
 import useAuthStore from '../../store/authStore';
+import { useReasonDialog } from '../../components/ReasonDialog';
+import ApprovalsPanel from './ApprovalsPanel';
+import { toast } from '../../components/AppToast';
+import { avatarSrc } from '../../lib/avatar';
 
 /* ============================================================
    Cùng ngôn ngữ "control-panel" với BoardPage / Sidebar:
@@ -54,8 +58,10 @@ const RoleBadge = ({role})=>{
   );
 };
 
-const Chip = ({color=C.primary,name='?',size=28,ring=false})=>{
+const Chip = ({color=C.primary,name='?',size=28,ring=false,src})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  if (src) return <img src={avatarSrc(src)} alt="" style={{width:size,height:size,borderRadius:'50%',objectFit:'cover',flexShrink:0,
+    boxShadow: ring ? `0 0 0 2px var(--wt-surface), 0 0 0 3.5px ${color}55` : '0 1px 2px rgba(15,23,41,.15)'}}/>;
   return (
     <div style={{
       width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
@@ -143,7 +149,8 @@ function standardMsnvLength(values) {
 export default function UsersPage(){
   const { t, i18n } = useTranslation();
   const currentLocale = { vi:'vi-VN', en:'en-US', ja:'ja-JP' }[i18n.language] || 'vi-VN';
-  const { user: currentUser } = useAuthStore(); // user đang đăng nhập — dùng để giới hạn quyền trên UI
+  const { user: currentUser, hasPerm } = useAuthStore(); // user đang đăng nhập — dùng để giới hạn quyền trên UI
+  const canManageUsers = hasPerm('user.manage'), canImport = hasPerm('user.import'), canManageGroups = hasPerm('group.manage');
   const [tab,      setTab]      = useState('users');
   const [users,    setUsers]    = useState([]);
   const [groups,   setGroups]   = useState([]);
@@ -163,6 +170,7 @@ export default function UsersPage(){
   const [importPreview, setImportPreview] = useState(null);
   const [padZeros,      setPadZeros]      = useState(true);  // tự thêm số 0 đầu cho MSNV bị Excel cắt
   const [importing,     setImporting]     = useState(false);
+  const [importResult,  setImportResult]  = useState(null);
   const fileRef = useRef();
 
   useEffect(()=>{ fetchUsers(); fetchGroups(); },[search,roleF,groupF]);
@@ -191,22 +199,36 @@ export default function UsersPage(){
     catch(e){ alert(errMsg(e)); }
   };
 
+  // Sửa / khóa tài khoản nhóm khác → server trả 202 "chờ Leader nhóm đó đồng ý"
+  const [approvalTick, setApprovalTick] = useState(0);
+  const afterSave = (data) => {
+    if (!data?.pending) return;
+    const a = data.approval || {};
+    toast({
+      kind: 'info', icon: '📨', title: t('users_approval_sent', 'Đã gửi yêu cầu duyệt'),
+      text: a.target ? `${t('users_approval_sent_for', 'Tài khoản')}: ${a.target}` : undefined,
+      rows: [
+        [t('users_approval_change', 'Thay đổi'), a.what || '—'],
+        [t('users_approval_group', 'Nhóm'), (a.groups || []).join(', ') || '—'],
+        [t('users_approval_by', 'Người duyệt'), (a.approvers || []).join(', ') || '—'],
+      ],
+      note: t('users_approval_note', 'Thay đổi chỉ được áp dụng khi Leader nhóm đồng ý. Theo dõi ở mục "Yêu cầu bạn đã gửi" đầu trang.'),
+    });
+    setApprovalTick(n => n + 1);
+  };
   const updateUser = async(id,form)=>{
-    try { await api.put(`/users/${id}`,form); setEditUser(null); fetchUsers(); }
+    try { const { data } = await api.put(`/users/${id}`,form); setEditUser(null); fetchUsers(); afterSave(data); }
     catch(e){ alert(errMsg(e)); }
   };
 
   const toggleActive = async(u)=>{
-    try { await api.put(`/users/${u.id}`,{is_active:u.is_active?0:1}); fetchUsers(); }
+    try { const { data } = await api.put(`/users/${u.id}`,{is_active:u.is_active?0:1}); fetchUsers(); afterSave(data); }
     catch(e){ alert(errMsg(e)); }
   };
 
-  const resetPwd = async(id)=>{
-    const pw = prompt(t('users_prompt_new_password'));
-    if(!pw) return;
-    try { await api.post(`/users/${id}/reset-password`,{password:pw}); alert(`✅ ${t('users_password_changed')}`); }
-    catch(e){ alert(errMsg(e)); }
-  };
+  // Đặt lại mật khẩu: mở khung riêng (không dùng prompt() của trình duyệt)
+  const [resetUser, setResetUser] = useState(null);
+  const resetPwd = (id) => setResetUser(users.find(u => u.id === id) || { id });
 
   const deleteUser = async(u)=>{
     if(!confirm(t('users_confirm_delete_user',{name:u.full_name}))) return;
@@ -316,12 +338,7 @@ export default function UsersPage(){
         password:   'Welcome00',
       }));
       const {data} = await api.post('/users/import',{users:rows});
-      const res = data.data;
-      let msg = `✅ ${t('users_import_created',{count:res.created})}`;
-      if (res.duplicates?.length) msg += `\n⚠️ ${t('users_import_duplicates',{count:res.duplicates.length})}:`;
-      res.duplicates?.forEach(d => { msg += `\n  • ${t('users_import_duplicate_line',{name:d.name, username:d.username, existing:d.existing})}`; });
-      if (res.errors?.length)     msg += `\n❌ ${t('users_import_errors')}: ${res.errors.map(e=>e.name).join(', ')}`;
-      alert(msg);
+      setImportResult(data.data); // khung kết quả: đã tạo / trùng / lỗi kèm lý do
       setImportPreview(null); setImportFile(null);
       fetchUsers(); fetchGroups();
     } catch(e){ alert(errMsg(e)); }
@@ -413,16 +430,16 @@ export default function UsersPage(){
         </div>
         <div className="users-topbar-actions" style={{display:'flex',gap:8,flexShrink:0}}>
           {tab==='users'&&<>
-            <button onClick={()=>setTab('import')}
+            {canImport&&<button onClick={()=>setTab('import')}
               style={{padding:'7px 15px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:12,fontWeight:700,cursor:'pointer',color:C.sub,display:'flex',alignItems:'center',gap:6,fontFamily:FONT_SANS,whiteSpace:'nowrap'}}>
               📥 {t('users_import_user')}
-            </button>
-            <button onClick={()=>setShowAddUser(true)}
+            </button>}
+            {canManageUsers&&<button onClick={()=>setShowAddUser(true)}
               style={{padding:'7px 15px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontFamily:FONT_SANS,boxShadow:`0 3px 10px ${C.primary}4d`,whiteSpace:'nowrap'}}>
               ➕ {t('users_add_user')}
-            </button>
+            </button>}
           </>}
-          {tab==='groups'&&(
+          {tab==='groups'&&canManageGroups&&(
             <button onClick={()=>setShowAddGroup(true)}
               style={{padding:'7px 15px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',gap:6,fontFamily:FONT_SANS,boxShadow:`0 3px 10px ${C.primary}4d`,whiteSpace:'nowrap'}}>
               ➕ {t('users_create_group')}
@@ -433,7 +450,7 @@ export default function UsersPage(){
 
       {/* Sub tabs */}
       <div className="users-tabs" style={{display:'flex',borderBottom:`1px solid ${C.line}`,background:C.surface,padding:'0 20px',flexShrink:0,gap:4}}>
-        {TABS.map(tabItem=>{
+        {TABS.filter(x=>x.key!=='import'||canImport).map(tabItem=>{
           const active = tab===tabItem.key;
           return (
             <div key={tabItem.key} className="users-tab-item" onClick={()=>setTab(tabItem.key)} style={{
@@ -454,6 +471,8 @@ export default function UsersPage(){
       {/* ═══ PANEL: Users ═══ */}
       {tab==='users'&&(
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          {/* Yêu cầu chờ duyệt (đổi vai trò / khóa / chuyển nhóm tài khoản nhóm khác) */}
+          <ApprovalsPanel key={approvalTick} openMine={approvalTick>0} onChanged={()=>{ fetchUsers(); fetchGroups(); }} focus={new URLSearchParams(location.search).has('approvals')}/>
           {/* Toolbar */}
           <div className="users-toolbar" style={{padding:'10px 20px',background:C.surface,borderBottom:`1px solid ${C.line}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
             <input style={{...FI,width:220,padding:'7px 12px'}} placeholder={`🔍 ${t('users_search_placeholder')}`}
@@ -490,7 +509,7 @@ export default function UsersPage(){
                     onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
                     <td className="u-emp" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',alignItems:'center',gap:10}}>
-                        <Chip color={u.avatar_color||C.primary} name={u.full_name} size={32} ring/>
+                        <Chip color={u.avatar_color||C.primary} name={u.full_name} size={32} ring src={u.avatar_url}/>
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{u.full_name}</div>
                           <div style={{fontSize:11,color:C.faint,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
@@ -761,6 +780,8 @@ export default function UsersPage(){
       <AddUserModal show={showAddUser} groups={groups} currentUserRole={currentUser?.role} onClose={()=>setShowAddUser(false)} onSave={createUser}/>
 
       {/* ══ Modal: Sửa user ══ */}
+      <ResetPasswordModal user={resetUser} onClose={()=>setResetUser(null)}/>
+      <ImportResultModal result={importResult} onClose={()=>setImportResult(null)} onViewUsers={()=>{ setImportResult(null); setTab('users'); }}/>
       <EditUserModal show={!!editUser} user={editUser} groups={groups} currentUserRole={currentUser?.role} onClose={()=>setEditUser(null)} onSave={f=>updateUser(editUser.id,f)}/>
 
       {/* ══ Modal: Tạo nhóm ══ */}
@@ -778,15 +799,14 @@ export default function UsersPage(){
 }
 
 // Modal: Thêm user
-function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
+function AddUserModal({show,groups,onClose,onSave}){
   const { t } = useTranslation();
-  const isLeader = currentUserRole === 'leader';
   const [f,setF]=useState({username:'',email:'',full_name:'',role:'user',password:'',avatar_color:'#3654ff',group_id:''});
   const [showPw,setShowPw]=useState(false);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
     if(!f.username||!f.full_name||!f.password) return alert(t('users_fill_all'));
-    onSave(isLeader ? {...f, role:'user'} : f);
+    onSave(f); // server kiểm tra lại vai trò được phép gán
   };
   return (
     <Modal show={show} title={`➕ ${t('users_add_new_user')}`} onClose={onClose}>
@@ -804,15 +824,7 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
           </div>
         </div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-          {/* Leader không thấy dropdown role — luôn tạo với quyền 'user' */}
-          {!isLeader && (
-            <div style={{flex:'1 1 140px'}}>
-              <label style={FL}>{t('users_th_role_col')}</label>
-              <select style={FI} value={f.role} onChange={e=>s('role',e.target.value)}>
-                {['user','assistant','leader','manager','admin'].map(r=><option key={r} value={r}>{r==='assistant'?`assistant — ${t('role_assistant','Trợ lý Leader')}`:r}</option>)}
-              </select>
-            </div>
-          )}
+          <RoleSelect value={f.role} onChange={v=>s('role',v)}/>
           <div style={{flex:'1 1 140px'}}>
             <label style={FL}>{t('group')}</label>
             <select style={FI} value={f.group_id} onChange={e=>s('group_id',e.target.value)}>
@@ -834,10 +846,310 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
   );
 }
 
+// Công tắc bật/tắt (dùng trong khung quyền của vai trò)
+function Switch({ on, disabled, onClick, title }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} disabled={disabled} onClick={onClick} title={title}
+      style={{width:40,height:22,borderRadius:22,border:'none',padding:2,flexShrink:0,cursor:disabled?'not-allowed':'pointer',
+        background:on?C.success:'var(--wt-line-strong, #c5cbd8)',opacity:disabled?.55:1,transition:'background .15s',display:'flex',alignItems:'center'}}>
+      <span style={{width:18,height:18,borderRadius:'50%',background:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,.25)',transform:`translateX(${on?18:0}px)`,transition:'transform .15s'}}/>
+    </button>
+  );
+}
+
+// Chọn vai trò — chỉ hiện các vai trò người đang đăng nhập GÁN ĐƯỢC (Leader: Nhân viên / Trợ lý Leader)
+// + các quyền cấp Leader dạng CÔNG TẮC cho riêng người đang sửa:
+//   bấm được khi Admin đã bật "⚡ Quyền đặc biệt" (perm.delegate); chưa bật → chỉ xem
+function RoleSelect({ value, onChange, lockedRole, userId, savedRole }) {
+  const { t } = useTranslation();
+  const [info, setInfo] = useState(null);       // { roles, switchable, can_switch }
+  const [member, setMember] = useState(null);   // quyền thực tế của người đang sửa (khi được phân quyền)
+  const [busy, setBusy] = useState(false);
+  const [dialog, ask] = useReasonDialog();
+  const loadMember = useCallback(async () => {
+    try { const { data } = await api.get('/permissions/delegate', { cache: false }); setMember(data.data.members.find(m => +m.id === +userId) || false); }
+    catch { setMember(false); }
+  }, [userId]);
+  useEffect(() => { api.get('/permissions/roles', { cache: false }).then(r => setInfo(r.data.data)).catch(() => setInfo({ roles: [], switchable: [] })); }, []);
+  useEffect(() => { if (userId && info?.can_switch) loadMember(); }, [userId, info?.can_switch, loadMember]);
+  if (!info) return null;
+  const roles = info.roles || [];
+  const cur = roles.find(r => r.role === value);
+  // người đang sửa có vai trò mình không gán được (vd Leader mở tài khoản Leader khác) → chỉ xem
+  if (lockedRole || (value && !cur)) return (
+    <div style={{flex:'1 1 100%'}}>
+      <label style={FL}>{t('users_th_role_col')}</label>
+      <div style={{...FI,background:'var(--wt-surface-2)',color:C.faint}}>🔒 {value}</div>
+    </div>
+  );
+  const roleChangedUnsaved = !!(userId && savedRole && value !== savedRole);
+  const canToggle = !!(userId && info.can_switch && member && !roleChangedUnsaved);
+  // Admin chưa bật "phân quyền cho nhân viên" → ẩn hẳn chỗ phân quyền, chỉ hiện quyền của vai trò
+  const rows = (info.can_switch ? info.switchable || [] : []).map(p => {
+    const mp = member && !roleChangedUnsaved ? member.perms.find(x => x.key === p.key) : null;
+    const byRole = !!cur?.keys?.includes(p.key);
+    return { ...p, on: mp ? mp.effective : byRole, byRole: mp ? mp.by_role : byRole, override: mp ? mp.override : null, locked: !!mp?.locked, set_by: mp?.set_by };
+  });
+  const basicOnly = !(cur?.perms?.length);
+  const toggle = async (row) => {
+    const want = !row.on;
+    // trùng mặc định của vai trò → bỏ ngoại lệ; khác → cấp / thu hồi riêng
+    const allowed = want === row.byRole ? null : want;
+    const reason = await ask(`${want ? 'Bật' : 'Tắt'} quyền cho ${member.full_name}`, [`${want ? '＋ Bật' : '－ Tắt'}: "${row.label}"${allowed === null ? ' (về đúng theo vai trò)' : ''}`]);
+    if (!reason) return;
+    setBusy(true);
+    try { await api.put('/permissions/delegate', { user_id: userId, perm: row.key, allowed, reason }); clearApiCache(); await loadMember(); }
+    catch (e) { alert(errMsg(e)); }
+    finally { setBusy(false); }
+  };
+  const note = !info.can_switch ? '' : !userId ? t('users_perm_after_create', 'Tạo tài khoản xong mới bật / tắt quyền riêng được')
+    : roleChangedUnsaved ? t('users_perm_save_role_first', 'Bấm Lưu vai trò mới trước, rồi mới bật / tắt quyền riêng')
+    : !info.can_switch ? ''
+    : member === false ? t('users_perm_out_scope', 'Bạn chỉ bật / tắt quyền được cho Nhân viên / Trợ lý Leader trong nhóm mình') : '';
+  return (
+    <div style={{flex:'1 1 100%'}}>
+      {dialog}
+      <label style={FL}>{t('users_th_role_col')}</label>
+      <select style={FI} value={value||'user'} onChange={e=>onChange(e.target.value)}>
+        {roles.map(r=><option key={r.role} value={r.role}>{r.label}</option>)}
+      </select>
+      <div style={{marginTop:6,background:'var(--wt-surface)',border:`1px solid ${C.line}`,borderRadius:9,overflow:'hidden'}}>
+        <div style={{padding:'8px 10px',fontSize:11.5,color:C.sub}}>
+          <b style={{color:C.ink}}>{t('users_role_perms','Quyền của vai trò này')}:</b>{' '}
+          {basicOnly ? <span style={{color:C.faint}}>{t('users_role_basic','Chỉ các chức năng cơ bản: ghi việc hằng ngày, nhận & làm CV được giao')}</span>
+            : <span>{cur.perms.join(' · ')}</span>}
+          {note && <div style={{fontSize:10.5,color:C.faint,marginTop:3}}>{note}</div>}
+        </div>
+        {rows.map(r => (
+          <div key={r.key} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',borderTop:`1px solid ${C.lineSoft}`}}>
+            <div style={{flex:1,minWidth:0,fontSize:12,color:r.on?C.ink:C.faint}}>
+              {r.label}
+              {r.override !== null && <span style={{marginLeft:6,fontSize:10,fontWeight:800,padding:'1px 6px',borderRadius:6,background:r.override?'var(--wt-tint-success)':'var(--wt-tint-danger)',color:r.override?C.success:C.danger}}>{r.override?'cấp riêng':'thu hồi riêng'}</span>}
+              {r.set_by && <span style={{marginLeft:6,fontSize:10,color:C.faint}}>{r.locked?'🔒 ':''}do {r.set_by}</span>}
+            </div>
+            <Switch on={r.on} disabled={!canToggle || busy || r.locked} onClick={()=>toggle(r)}
+              title={r.locked ? 'Do cấp cao hơn đặt — bạn không đổi được' : !canToggle ? note : (r.on ? 'Bấm để tắt' : 'Bấm để bật')}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Modal: Kết quả nhập tài khoản từ Excel — tổng kết + từng dòng trùng / lỗi kèm lý do và cách sửa
+function ImportResultModal({ result, onClose, onViewUsers }) {
+  const { t } = useTranslation();
+  if (!result) return null;
+  const dup = result.duplicates || [], err = result.errors || [];
+  const allOk = !dup.length && !err.length;
+  const Stat = ({ n, label, color, bg, icon }) => (
+    <div style={{ flex: '1 1 120px', padding: '12px 14px', borderRadius: 12, background: bg, border: `1px solid ${color}33` }}>
+      <div style={{ fontSize: 24, fontWeight: 900, color, fontFamily: FONT_MONO, lineHeight: 1 }}>{n}</div>
+      <div style={{ fontSize: 11.5, color: C.sub, marginTop: 5, fontWeight: 700 }}>{icon} {label}</div>
+    </div>
+  );
+  const Row = ({ name, msnv, reason, color }) => (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 12px', borderTop: `1px solid ${C.lineSoft}` }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, marginTop: 6, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 700 }}>{name}{msnv ? <span style={{ color: C.faint, fontWeight: 500, fontFamily: FONT_MONO, marginLeft: 6 }}>{msnv}</span> : null}</div>
+        <div style={{ fontSize: 12, color: C.sub, marginTop: 2, overflowWrap: 'anywhere' }}>{reason}</div>
+      </div>
+    </div>
+  );
+  const Section = ({ title, color, bg, hint, children }) => (
+    <div style={{ background: 'var(--wt-surface)', border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '9px 12px', background: bg, fontSize: 12.5, fontWeight: 800, color }}>{title}</div>
+      <div style={{ maxHeight: 220, overflowY: 'auto' }}>{children}</div>
+      {hint && <div style={{ padding: '8px 12px', borderTop: `1px solid ${C.lineSoft}`, fontSize: 11, color: C.faint }}>💡 {hint}</div>}
+    </div>
+  );
+  return (
+    <Modal show title={allOk ? `✅ ${t('users_import_done', 'Nhập tài khoản thành công')}` : `📥 ${t('users_import_result', 'Kết quả nhập tài khoản')}`} onClose={onClose} width={560}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Stat n={result.created} label={t('users_import_stat_created', 'Đã tạo')} color={C.success} bg={C.successSoft} icon="✅" />
+          {dup.length > 0 && <Stat n={dup.length} label={t('users_import_stat_dup', 'Trùng MSNV — bỏ qua')} color={C.warning} bg={C.warningSoft} icon="⚠️" />}
+          {err.length > 0 && <Stat n={err.length} label={t('users_import_stat_err', 'Lỗi — chưa tạo')} color={C.danger} bg={C.dangerSoft} icon="❌" />}
+        </div>
+        {result.created > 0 && (
+          <div style={{ fontSize: 12, color: C.sub, background: C.canvas, padding: '9px 12px', borderRadius: 9, lineHeight: 1.55 }}>
+            🔑 {t('users_import_pw_hint', 'Tài khoản mới đăng nhập bằng MSNV, mật khẩu mặc định Welcome00 — lần đầu đăng nhập sẽ được yêu cầu đổi mật khẩu.')}
+          </div>
+        )}
+        {err.length > 0 && (
+          <Section title={`❌ ${t('users_import_errors', 'Lỗi')} (${err.length})`} color={C.danger} bg={C.dangerSoft}
+            hint={t('users_import_err_hint', 'Sửa các dòng này trong file Excel rồi nhập lại — những dòng đã tạo sẽ tự được bỏ qua (trùng MSNV).')}>
+            {err.map((e, i) => <Row key={i} name={e.name} msnv={e.username} reason={e.error} color={C.danger} />)}
+          </Section>
+        )}
+        {dup.length > 0 && (
+          <Section title={`⚠️ ${t('users_import_dup_title', 'Trùng MSNV — đã có tài khoản')} (${dup.length})`} color={C.warning} bg={C.warningSoft}>
+            {dup.map((d, i) => <Row key={i} name={d.name} msnv={d.username} color={C.warning}
+              reason={t('users_import_dup_reason', { existing: d.existing, defaultValue: `MSNV này đang là tài khoản của "${d.existing}"` })} />)}
+          </Section>
+        )}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {result.created > 0 && (
+            <button onClick={onViewUsers} style={{ padding: '8px 16px', borderRadius: 9, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: C.sub }}>
+              👤 {t('users_import_view', 'Xem danh sách người dùng')}
+            </button>
+          )}
+          <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 9, border: 'none', background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            {t('close', 'Đóng')}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Modal: Đặt lại mật khẩu — chọn về mặc định (bắt đổi khi đăng nhập) hoặc đặt mật khẩu mới; xong hiện mật khẩu để đưa cho nhân viên
+const DEFAULT_PW = 'Welcome00';
+const PW_MIN = 8;
+function randomPassword() {
+  // bỏ ký tự dễ nhầm (0/O, 1/l/I) để đọc cho nhân viên không bị sai
+  const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnpqrstuvwxyz', '23456789', '@#$%&*'];
+  const all = sets.join('');
+  const pick = (str) => str[(crypto.getRandomValues(new Uint32Array(1))[0]) % str.length];
+  const chars = [...sets.map(pick), ...Array.from({ length: 6 }, () => pick(all))];
+  for (let i = chars.length - 1; i > 0; i--) { const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  return chars.join('');
+}
+function ResetPasswordModal({ user, onClose }) {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState('default');
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(null); // mật khẩu đã đặt
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { if (user) { setMode('default'); setPw(''); setPw2(''); setShow(false); setErr(''); setDone(null); setCopied(false); } }, [user]);
+  if (!user) return null;
+  const custom = mode === 'custom';
+  const tooShort = custom && pw.length > 0 && pw.length < PW_MIN;
+  const mismatch = custom && pw2.length > 0 && pw !== pw2;
+  const ready = !custom || (pw.length >= PW_MIN && pw === pw2);
+  const submit = async () => {
+    if (!ready || busy) return;
+    setBusy(true); setErr('');
+    const password = custom ? pw : DEFAULT_PW;
+    try { await api.post(`/users/${user.id}/reset-password`, { password }); setDone(password); }
+    catch (e) { setErr(errMsg(e)); }
+    finally { setBusy(false); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(done); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* trình duyệt chặn → tự bôi đen */ }
+  };
+  const gen = () => { const r = randomPassword(); setPw(r); setPw2(r); setShow(true); setErr(''); };
+  const Option = ({ value, icon, title, desc }) => {
+    const on = mode === value;
+    return (
+      <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '11px 12px', borderRadius: 11, cursor: 'pointer',
+        border: `1.5px solid ${on ? C.primary : C.line}`, background: on ? C.primarySoft : 'var(--wt-surface)' }}>
+        <input type="radio" name="pwmode" checked={on} onChange={() => { setMode(value); setErr(''); }} style={{ marginTop: 3, accentColor: C.primary }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{icon} {title}</div>
+          <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2, lineHeight: 1.5 }}>{desc}</div>
+        </div>
+      </label>
+    );
+  };
+  return (
+    <Modal show title={`🔑 ${t('users_reset_password', 'Đặt lại mật khẩu')}`} onClose={onClose} width={480}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'var(--wt-surface)', borderRadius: 11, border: `1px solid ${C.line}` }}>
+          <span style={{ width: 34, height: 34, borderRadius: '50%', background: user.avatar_color || C.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+            {(user.full_name || '?').split(' ').slice(-1)[0][0]}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 800, color: C.ink, fontSize: 13.5 }}>{user.full_name}</div>
+            <div style={{ fontSize: 11.5, color: C.faint, fontFamily: FONT_MONO }}>{user.username}</div>
+          </div>
+        </div>
+
+        {done ? (
+          <>
+            <div style={{ textAlign: 'center', padding: '6px 0 2px' }}>
+              <div style={{ fontSize: 34 }}>✅</div>
+              <div style={{ fontWeight: 800, color: C.ink, fontSize: 14, marginTop: 4 }}>{t('users_password_changed', 'Đã đặt lại mật khẩu')}</div>
+              <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>Gửi mật khẩu này cho nhân viên:</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input readOnly value={done} onFocus={e => e.target.select()}
+                style={{ ...FI, fontFamily: FONT_MONO, fontSize: 17, fontWeight: 800, letterSpacing: '.08em', textAlign: 'center', background: 'var(--wt-surface)' }} />
+              <button onClick={copy} style={{ padding: '10px 14px', borderRadius: 9, border: `1.5px solid ${copied ? C.success : C.line}`, background: copied ? C.successSoft : 'var(--wt-surface)', color: copied ? C.success : C.sub, fontWeight: 800, fontSize: 12.5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {copied ? '✓ Đã chép' : '📋 Sao chép'}
+              </button>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.sub, background: C.canvas, padding: '9px 12px', borderRadius: 9, lineHeight: 1.55 }}>
+              {done === DEFAULT_PW ? '🔁 Lần đăng nhập tới, nhân viên sẽ được yêu cầu đổi sang mật khẩu riêng.' : '🔐 Nhân viên dùng mật khẩu này để đăng nhập, sau đó có thể tự đổi trong Cài đặt.'}
+              {' '}Người này đã bị đăng xuất khỏi mọi thiết bị.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 9, border: 'none', background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>{t('done', 'Xong')}</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Option value="default" icon="🔁" title={`Về mật khẩu mặc định (${DEFAULT_PW})`}
+                desc="Nên dùng — nhân viên đăng nhập bằng mật khẩu mặc định rồi BẮT BUỘC đổi sang mật khẩu riêng." />
+              <Option value="custom" icon="✏️" title="Đặt mật khẩu mới" desc={`Tự nhập hoặc tạo ngẫu nhiên — ít nhất ${PW_MIN} ký tự.`} />
+            </div>
+
+            {custom && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <label style={{ ...FL, marginBottom: 0 }}>Mật khẩu mới</label>
+                    <button type="button" onClick={gen} style={{ border: 'none', background: 'none', color: C.primary, fontSize: 12, fontWeight: 800, cursor: 'pointer', padding: 2 }}>🎲 Tạo ngẫu nhiên</button>
+                  </div>
+                  <div style={{ position: 'relative' }}>
+                    <input autoFocus type={show ? 'text' : 'password'} autoComplete="new-password" value={pw} onChange={e => { setPw(e.target.value); setErr(''); }}
+                      onKeyDown={e => e.key === 'Enter' && submit()}
+                      style={{ ...FI, paddingRight: 44, fontFamily: show ? FONT_MONO : undefined, borderColor: tooShort ? C.warning : undefined }} />
+                    <button type="button" onClick={() => setShow(v => !v)} aria-label={show ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} aria-pressed={show}
+                      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 32, height: 32, border: 'none', background: 'none', cursor: 'pointer', fontSize: 16, opacity: show ? 1 : .65 }}>{show ? '🙈' : '👁'}</button>
+                  </div>
+                  <div style={{ fontSize: 11, marginTop: 4, color: tooShort ? C.warning : pw.length >= PW_MIN ? C.success : C.faint }}>
+                    {pw.length >= PW_MIN ? `✓ ${pw.length} ký tự` : `${pw.length}/${PW_MIN} ký tự`}
+                  </div>
+                </div>
+                <div>
+                  <label style={FL}>Nhập lại mật khẩu</label>
+                  <input type={show ? 'text' : 'password'} autoComplete="new-password" value={pw2} onChange={e => { setPw2(e.target.value); setErr(''); }}
+                    onKeyDown={e => e.key === 'Enter' && submit()}
+                    style={{ ...FI, fontFamily: show ? FONT_MONO : undefined, borderColor: mismatch ? C.danger : undefined }} />
+                  {mismatch && <div style={{ fontSize: 11, marginTop: 4, color: C.danger }}>Hai mật khẩu chưa khớp</div>}
+                </div>
+              </div>
+            )}
+
+            <div style={{ fontSize: 11.5, color: C.faint, background: C.canvas, padding: '9px 12px', borderRadius: 9 }}>
+              ⚠️ Người này sẽ bị đăng xuất khỏi mọi thiết bị đang dùng.
+            </div>
+            {err && <div style={{ fontSize: 12, color: C.danger, background: C.dangerSoft, padding: '8px 12px', borderRadius: 9 }}>❌ {err}</div>}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 9, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: C.sub }}>{t('cancel')}</button>
+              <button onClick={submit} disabled={!ready || busy}
+                style={{ padding: '8px 16px', borderRadius: 9, border: 'none', background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, color: '#fff', fontSize: 13, fontWeight: 700, cursor: ready && !busy ? 'pointer' : 'not-allowed', opacity: ready && !busy ? 1 : .5 }}>
+                {busy ? '⏳' : '🔑 Đặt lại mật khẩu'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // Modal: Sửa user
 function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   const { t } = useTranslation();
-  const isLeader = currentUserRole === 'leader';
+  const isLeader = !['admin','manager'].includes(currentUserRole); // không phải Admin/Manager: chỉ tạo/sửa nhân viên
   const [f,setF]=useState({});
   useEffect(()=>{
     if(user) setF({
@@ -852,10 +1164,11 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
     if(!f.username||!f.username.trim()) return alert(t('users_missing_msnv','Thiếu MSNV'));
-    onSave(isLeader ? {...f, role:f.role} : f); // leader không có UI đổi role nên giữ nguyên role gốc
+    // Leader mở tài khoản có vai trò mình không gán được → không gửi role (giữ nguyên)
+    onSave(isLeader && !['user','assistant'].includes(user?.role) ? {...f, role: undefined} : f);
   };
   return (
-    <Modal show={show} title={`✏️ ${t('users_edit_employee')}`} onClose={onClose}>
+    <Modal show={show} title={`✏️ ${t('users_edit_employee')}`} onClose={onClose} width={560}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
           <div style={{flex:'1 1 160px'}}><label style={FL}>{t('profile_fullname')}</label><input style={FI} value={f.full_name||''} onChange={e=>s('full_name',e.target.value)}/></div>
@@ -863,14 +1176,7 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
         </div>
         <div><label style={FL}>Email</label><input type="email" style={FI} value={f.email||''} onChange={e=>s('email',e.target.value)}/></div>
         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-          {!isLeader && (
-            <div style={{flex:'1 1 140px'}}>
-              <label style={FL}>{t('users_th_role_col')}</label>
-              <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
-                {['user','assistant','leader','manager','admin'].map(r=><option key={r} value={r}>{r==='assistant'?`assistant — ${t('role_assistant','Trợ lý Leader')}`:r}</option>)}
-              </select>
-            </div>
-          )}
+          <RoleSelect value={f.role} onChange={v=>s('role',v)} userId={user?.id} savedRole={user?.role} lockedRole={isLeader && !['user','assistant'].includes(user?.role)}/>
           <div style={{flex:'1 1 140px'}}>
             <label style={FL}>{t('group')}</label>
             <select style={FI} value={f.group_id||''} onChange={e=>s('group_id',e.target.value)}>
@@ -883,6 +1189,15 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
           <label style={FL}>{t('profile_avatar_color')}</label>
           <input type="color" style={{...FI,height:38,cursor:'pointer',padding:4}} value={f.avatar_color||'#3654ff'} onChange={e=>s('avatar_color',e.target.value)}/>
         </div>
+        {user?.avatar_url && !isLeader && (
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',border:`1px solid ${C.line}`,borderRadius:9,background:'var(--wt-surface)'}}>
+            <img src={avatarSrc(user.avatar_url)} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover'}}/>
+            <span style={{flex:1,fontSize:12,color:C.sub}}>{t('users_has_photo','Người này đang dùng ảnh tự tải lên')}</span>
+            <button type="button" onClick={async()=>{ if(!window.confirm(t('users_remove_photo_confirm','Xóa ảnh đại diện của người này?'))) return;
+                try { await api.delete(`/users/${user.id}/avatar`); onClose(); toast({ kind:'success', title:t('users_photo_removed','Đã xóa ảnh đại diện') }); } catch(e){ alert(errMsg(e)); } }}
+              style={{padding:'6px 11px',borderRadius:8,border:`1.5px solid ${C.danger}55`,background:C.dangerSoft,color:C.danger,fontSize:12,fontWeight:800,cursor:'pointer'}}>🗑 {t('users_remove_photo','Xóa ảnh')}</button>
+          </div>
+        )}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
           <button onClick={onClose} style={{padding:'8px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:13,fontWeight:700,cursor:'pointer',color:C.sub}}>{t('cancel')}</button>
           <button onClick={submit} style={{padding:'8px 16px',borderRadius:9,border:'none',background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`,color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer',boxShadow:`0 3px 10px ${C.primary}4d`}}>💾 {t('save')}</button>
@@ -966,7 +1281,7 @@ function AddMemberModal({show,group,users,onClose,onAdd}){
             <div key={u.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',background:C.canvas,borderRadius:9,cursor:'pointer'}}
               onMouseEnter={e=>e.currentTarget.style.background=C.primarySoft}
               onMouseLeave={e=>e.currentTarget.style.background=C.canvas}>
-              <Chip color={u.avatar_color||C.primary} name={u.full_name} size={28}/>
+              <Chip color={u.avatar_color||C.primary} name={u.full_name} size={28} src={u.avatar_url}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{u.full_name}</div>
                 <div style={{fontSize:11,color:C.faint}}>{u.role} · {u.email}</div>

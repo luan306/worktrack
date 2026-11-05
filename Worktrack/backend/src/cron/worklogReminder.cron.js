@@ -5,6 +5,7 @@ const db   = require('../config/db');
 const { notify, notifyMany } = require('../services/notificationService');
 const { pendingScoreDays, holidayMap, isRestDay } = require('../services/worklogService');
 const { localDate, addDays } = require('../utils/date');
+const settings = require('../config/settings');
 
 const LOOKBACK_DAYS = 30;
 const TOP_PEOPLE = 5; // số người liệt kê trong 1 thông báo gộp
@@ -18,8 +19,10 @@ async function alreadyReminded(type) {
   return new Set(rows.map(r => r.user_id));
 }
 
-// 1) Leader: ngày chờ chấm của người cùng nhóm
+// 1) Leader (và Manager có nhóm riêng nếu Admin bật): ngày chờ chấm của người cùng nhóm
 async function remindUnscored(io, today) {
+  const roles = [...(settings.on('notif.leader_unscored') ? ['leader'] : []), ...(settings.on('notif.manager_group') ? ['manager'] : [])];
+  if (!roles.length) return 0;
   const days = await pendingScoreDays({ from: addDays(today, -LOOKBACK_DAYS), to: addDays(today, -1) });
   if (!days.length) return 0;
   // gộp theo người: số ngày chờ chấm + ngày sớm nhất (danh sách đã sắp ngày cũ → mới)
@@ -37,8 +40,8 @@ async function remindUnscored(io, today) {
     `SELECT DISTINCT m.user_id AS member_id, l.id AS leader_id
        FROM group_members m
        JOIN group_members gl ON gl.group_id=m.group_id AND gl.user_id<>m.user_id
-       JOIN users l ON l.id=gl.user_id AND l.role='leader' AND l.is_active=1
-      WHERE m.user_id IN (?)`, [ids]);
+       JOIN users l ON l.id=gl.user_id AND l.role IN (?) AND l.is_active=1
+      WHERE m.user_id IN (?)`, [roles, ids]);
 
   // người nhận → danh sách người còn ngày chờ chấm
   const byRecipient = new Map();
@@ -70,6 +73,7 @@ async function remindUnscored(io, today) {
 
 // 2) Nhân viên / Leader: chưa ghi việc ngày làm việc trước đó
 async function remindMissing(io, today, hol) {
+  if (!settings.on('notif.staff_missing')) return 0;
   const day = prevWorkday(today, hol);
   const [rows] = await db.query(
     `SELECT u.id FROM users u
@@ -87,6 +91,7 @@ async function remindMissing(io, today, hol) {
 
 // 3) Manager: CV yêu cầu đang chờ Manager duyệt lần cuối
 async function remindReviewing(io) {
+  if (!settings.on('notif.manager_reviewing')) return 0;
   const [rows] = await db.query(
     `SELECT id, title, DATE_FORMAT(COALESCE(completed_at, updated_at),'%Y-%m-%d') AS since
        FROM request_tasks WHERE status='reviewing' ORDER BY COALESCE(completed_at, updated_at)`);
@@ -109,7 +114,7 @@ async function runReminders(io) {
     const hol = await holidayMap();
     if (isRestDay(today, hol)) return; // cuối tuần / công ty nghỉ lễ → không nhắc ai
     const [leaders, staff, managers] = await Promise.all([remindUnscored(io, today), remindMissing(io, today, hol), remindReviewing(io)]);
-    if (leaders || staff || managers) console.log(`[reminder] Nhắc chấm điểm: ${leaders} leader · nhắc ghi việc: ${staff} người · nhắc duyệt CV: ${managers} manager`);
+    if (leaders || staff || managers) console.log(`[reminder] Nhắc chấm điểm: ${leaders} người chấm · nhắc ghi việc: ${staff} người · nhắc duyệt CV: ${managers} manager`);
   } catch (e) {
     console.error('[reminder] lỗi:', e.message);
   }

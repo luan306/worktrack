@@ -65,7 +65,7 @@ function Pagination({ page, totalPages, onChange }) {
 
 export default function CompletedPage() {
   const { t, i18n } = useTranslation();
-  const { user, can } = useAuth();
+  const { user, hasPerm } = useAuth();
   const [tasks, setTasks]     = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter]   = useState('all'); // all | ontime | late
@@ -94,7 +94,7 @@ export default function CompletedPage() {
     try {
       const params = new URLSearchParams({ status:'done' });
       if (search) params.append('search', search);
-      if (!can('admin','manager','leader')) params.append('assigned_to', user.id);
+      if (!hasPerm('req.leader', 'req.manager')) params.append('assigned_to', user.id);
       const { data } = await api.get(`/requests?${params}`);
       let list = data.data;
       if (filter==='ontime') list = list.filter(t => !t.is_late);

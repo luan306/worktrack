@@ -1,3 +1,4 @@
+const { hasPerm } = require('../config/permissions');
 const db   = require('../config/db');
 const cache = require('../config/cache');
 const { sendCachedJson } = require('../utils/cachedJson');
@@ -349,8 +350,9 @@ exports.update = async (req, res) => {
     const [[task]] = await db.query('SELECT * FROM request_tasks WHERE id=?', [id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
 
-    const isAdmin   = ['admin','manager'].includes(req.user.role);
-    const isLeaderRole = ['admin','manager','leader'].includes(req.user.role);
+    // Theo trang Phân quyền: quyền Manager / Leader trong CV
+    const isAdmin   = hasPerm(req.user, 'req.manager');
+    const isLeaderRole = isAdmin || hasPerm(req.user, 'req.leader');
     const isCreator = task.created_by === req.user.id;
     // Trợ lý Leader tạo CV thay Leader: chỉ sửa thông tin CV, không có quyền chấm / duyệt / đổi trạng thái của người tạo
     const creatorPower = isCreator && req.user.role !== 'assistant';
@@ -540,7 +542,7 @@ async function loadAssignableTask(req, res, id, doneMessage = 'CV đã hoàn th�
   const [[task]] = await db.query('SELECT title, status, created_by FROM request_tasks WHERE id=?', [id]);
   if (!task) { res.status(404).json({ success: false, message: 'Not found' }); return null; }
   if (['done', 'cancelled'].includes(task.status)) { res.status(400).json({ success: false, message: doneMessage }); return null; }
-  if (!['admin', 'manager'].includes(req.user.role) && task.created_by !== req.user.id) {
+  if (!hasPerm(req.user, 'req.manager') && task.created_by !== req.user.id) {
     res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được thay đổi người thực hiện' });
     return null;
   }
@@ -825,7 +827,7 @@ exports.remove = async (req, res) => {
     const [[task]] = await db.query('SELECT title, created_by, status FROM request_tasks WHERE id=?', [req.params.id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
     // Trước đây route chỉ cần đăng nhập → user thường xóa được CV của bất kỳ ai
-    const isAdmin = ['admin','manager'].includes(req.user.role);
+    const isAdmin = hasPerm(req.user, 'req.delete');
     if (!isAdmin && (task.created_by !== req.user.id || req.user.role === 'assistant'))
       return res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được xóa CV' });
     if (!isAdmin && ['done', 'archived'].includes(task.status))
@@ -905,7 +907,7 @@ exports.deleteFile = async (req, res) => {
       [req.params.fileId, req.params.id]);
     if (!file) return res.status(404).json({ success: false, message: 'Not found' });
     // Chỉ người tải file lên, người tạo CV hoặc Manager/Admin mới được xóa
-    if (![file.uploaded_by, file.task_creator].includes(req.user.id) && !['admin','manager'].includes(req.user.role))
+    if (![file.uploaded_by, file.task_creator].includes(req.user.id) && !hasPerm(req.user, 'req.delete'))
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa file này' });
     // Xóa file vật lý
     if (file.stored_name) {
@@ -931,7 +933,7 @@ function cleanUrl(raw) {
 
 // Người tạo CV, người thực hiện, Leader/Manager/Admin
 async function canTouchTask(req, task) {
-  if (['admin', 'manager', 'leader'].includes(req.user.role) || task.created_by === req.user.id) return true;
+  if (hasPerm(req.user, 'req.leader') || hasPerm(req.user, 'req.manager') || task.created_by === req.user.id) return true;
   const [[a]] = await db.query('SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND user_id=?', [task.id, req.user.id]);
   return !!a;
 }
@@ -963,7 +965,7 @@ exports.deleteLink = async (req, res) => {
       `SELECT l.*, rt.created_by AS task_creator, rt.title AS task_title FROM request_task_links l
          JOIN request_tasks rt ON rt.id=l.task_id WHERE l.id=? AND l.task_id=?`, [req.params.linkId, req.params.id]);
     if (!link) return res.status(404).json({ success: false, message: 'Not found' });
-    if (![link.added_by, link.task_creator].includes(req.user.id) && !['admin', 'manager'].includes(req.user.role))
+    if (![link.added_by, link.task_creator].includes(req.user.id) && !hasPerm(req.user, 'req.delete'))
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa link này' });
     await db.query('DELETE FROM request_task_links WHERE id=?', [link.id]);
     await logActivity({

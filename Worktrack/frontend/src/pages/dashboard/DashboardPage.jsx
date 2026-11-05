@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import api from '../../api/client';
+import api, { downloadFile } from '../../api/client';
 import useAuthStore from '../../store/authStore';
+import { avatarSrc } from '../../lib/avatar';
 
 /* ============================================================
    DESIGN TOKENS — cùng hệ thống với Board/Daily/Requests/Completed.
@@ -46,8 +47,10 @@ const RANKS = [
 
 const RANK_COLOR = { gold: '#f1c40f', silver: 'var(--wt-text-3)', bronze: '#cd7f32' };
 
-function Chip({ color = C.primary, name = '?', size = 38, ring=false }) {
+function Chip({ color = C.primary, name = '?', size = 38, ring=false, src }) {
   const ini = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  if (src) return <img src={avatarSrc(src)} alt="" loading="lazy" style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0,
+    boxShadow: ring ? `0 0 0 2px var(--wt-surface), 0 0 0 3.5px ${color}55` : '0 1px 3px rgba(15,23,41,.18)' }} />;
   return (
     <div style={{
       background: `linear-gradient(135deg, ${color}, ${color}cc)`, width: size, height: size, borderRadius: '50%', flexShrink: 0,
@@ -61,7 +64,10 @@ function Chip({ color = C.primary, name = '?', size = 38, ring=false }) {
 export default function DashboardPage() {
   const { t, i18n } = useTranslation();
   // Export Excel / Lock & Reset chỉ dành cho admin/manager
-  const canManage = ['admin', 'manager'].includes(useAuthStore(s => s.user?.role));
+  const hasPerm = useAuthStore(s => s.hasPerm);
+  useAuthStore(s => s.user); // vẽ lại khi quyền đổi
+  const canExport = hasPerm('dash.export');
+  const canLock = hasPerm('dash.lock');
   const [data,      setData]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [view,      setView]      = useState('week');
@@ -93,17 +99,8 @@ export default function DashboardPage() {
   };
 
   // Tải file Excel qua endpoint GET /dashboard/excel/:filename
-  const downloadExcelFile = async (filename) => {
-    const fileRes = await api.get(`/dashboard/excel/${filename}`, { responseType: 'blob' });
-    const blobUrl = window.URL.createObjectURL(new Blob([fileRes.data]));
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(blobUrl);
-  };
+  const downloadExcelFile = (filename) =>
+    downloadFile(`/dashboard/excel/${encodeURIComponent(filename)}`, { fallbackName: filename }); // lỗi → thông báo dễ hiểu (api/client)
 
   // Nút "📤 Xuất Excel" ở topbar — mở modal liệt kê TẤT CẢ các kỳ đã CHỐT
   const openExportList = async () => {
@@ -262,16 +259,16 @@ export default function DashboardPage() {
           <span style={{ width:32, height:32, borderRadius:9, background:`linear-gradient(135deg, ${C.primary}, ${C.primaryDeep})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, boxShadow:`0 3px 10px ${C.primary}4d` }}>📊</span>
           {t('dash_title')}
         </div>
-        {canManage && (<>
+        {canExport && (
         <button onClick={openExportList} className="dash-btn-primary"
           style={{ padding: '7px 15px', borderRadius: 9, border: `1.5px solid ${C.line}`, background: 'var(--wt-surface)', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
           📤 {t('dash_export_excel')}
-        </button>
+        </button>)}
+        {canLock && (
         <button onClick={() => setShowLock(true)} className="dash-btn-danger"
           style={{ padding: '7px 15px', borderRadius: 9, border: 'none', background: `linear-gradient(135deg, ${C.danger}, #c72d3f)`, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow:`0 3px 10px ${C.danger}44` }}>
           🔒 {t('dash_lock_reset')}
-        </button>
-        </>)}
+        </button>)}
       </div>
 
       {/* ── Filter bar ── */}
@@ -321,7 +318,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Body: 2 cols ── */}
-      <div className="dash-body" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      <div className="dash-body" style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
 
         {/* LEFT: Ranking */}
         <div className="dash-ranking-panel" style={{ width: 460, flexShrink: 0, borderRight: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
@@ -348,7 +345,7 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Avatar */}
-                <Chip color={s.user.avatar_color} name={s.user.full_name} size={38} ring={i<3} />
+                <Chip color={s.user.avatar_color} name={s.user.full_name} size={38} ring={i<3} src={s.user.avatar_url} />
 
                 {/* Info */}
                 <div className="dash-ranking-info" style={{ flex: 1, minWidth: 0 }}>
@@ -397,10 +394,10 @@ export default function DashboardPage() {
           <div style={{ padding: '12px 18px', borderBottom: `1px solid ${C.line}`, background: 'var(--wt-surface)', flexShrink: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>📨 {t('dash_requests_stats_header')}</div>
           </div>
-          <div style={{ flex: 1, overflowY: 'auto', padding: 15, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 15, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* Stat cards */}
-            <div className="dash-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+            <div className="dash-stats-grid" style={{ flexShrink: 0, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
               {[
                 { num: cvTotal,            lbl: t('dash_stat_total_requests'),    icon:'📨', cls: 'blue'  },
                 { num: cvOntime,           lbl: `✅ ${t('on_time')}`,         icon:'✅', cls: 'green' },
@@ -422,8 +419,8 @@ export default function DashboardPage() {
               })}
             </div>
 
-            {/* Detail table */}
-            <div style={{ background: C.surface, borderRadius: 14, border: `1px solid ${C.line}`, overflow: 'hidden', boxShadow:'0 1px 3px rgba(15,23,41,.03)' }}>
+            {/* Detail table — flexShrink:0: không bị co lại cắt mất dòng, để khung ngoài cuộn */}
+            <div style={{ flexShrink: 0, background: C.surface, borderRadius: 14, border: `1px solid ${C.line}`, overflow: 'hidden', boxShadow:'0 1px 3px rgba(15,23,41,.03)' }}>
               <div style={{ padding: '12px 16px', background: C.canvas, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, flex: 1 }}>👤 {t('dash_detail_header')}</div>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 8, background: C.primarySoft, color: C.primary, fontFamily: FONT_MONO }}>
@@ -451,7 +448,7 @@ export default function DashboardPage() {
                       >
                         <td style={{ padding: '10px 14px', fontSize: 12, whiteSpace: 'nowrap' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Chip color={s.user.avatar_color} name={s.user.full_name} size={22} />
+                            <Chip color={s.user.avatar_color} name={s.user.full_name} size={22} src={s.user.avatar_url} />
                             <strong style={{ color: C.ink, fontFamily: FONT_SANS }}>{s.user.full_name}</strong>
                           </div>
                         </td>
@@ -624,7 +621,7 @@ function DetailModal({ s, onClose }) {
 
         {/* Header — dark control-panel gradient, đồng bộ với header bảng chấm điểm DailyPage */}
         <div className="dash-detail-header" style={{ padding: '17px 20px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, background: `linear-gradient(160deg, ${C.panelDark}, ${C.panelDark2})` }}>
-          <Chip color={s.user.avatar_color} name={s.user.full_name} size={44} />
+          <Chip color={s.user.avatar_color} name={s.user.full_name} size={44} src={s.user.avatar_url} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.user.full_name} — {t('dash_detail_title_suffix')}</div>
             <div style={{ fontSize: 11, color: 'var(--wt-text-3)', marginTop: 2, textTransform: 'capitalize' }}>{s.user.role}</div>

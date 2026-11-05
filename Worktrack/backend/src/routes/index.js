@@ -20,6 +20,11 @@ router.post('/auth/refresh', aC.refresh);
 router.post('/auth/logout',  aC.logout);
 router.get ('/auth/me',      auth(), aC.me);
 router.post('/auth/change-password', auth(), aC.changePassword);
+// Ảnh đại diện (Admin bật / tắt ở Quản trị → Cài đặt) — ảnh đã thu nhỏ ở trình duyệt nên giới hạn 2MB
+const avatarUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+router.post  ('/auth/avatar',        auth(), avatarUpload.single('file'), (req, res) => uC.uploadAvatar(req, res));
+router.delete('/auth/avatar',        auth(), (req, res) => uC.removeAvatar(req, res));
+router.delete('/users/:id/avatar',   auth(['admin', 'manager']), (req, res) => uC.removeAvatar(req, res));
 
 // Mọi thao tác ghi vào nhóm / người dùng làm danh sách nhóm
 const clearGroupCache = (req, res, next) => {
@@ -32,21 +37,29 @@ router.use(['/users', '/groups'], clearGroupCache);
 
 // ── Users — static routes TRƯỚC dynamic :id ──
 router.get   ('/users',                    auth(),                              uC.list);
-router.post  ('/users',                    auth(['admin','manager','leader']), uC.create);
-router.post  ('/users/import',             auth(['admin']),                    uC.importUsers);
-router.get   ('/users/import/template',    auth(['admin']),                    uC.importTemplate);
-router.post  ('/users/import/parse',       auth(['admin']), memUpload.single('file'), uC.parseImportFile);
+router.post  ('/users',                    auth.perm('user.manage'), uC.create);
+// Nhập từ Excel: cùng quyền với "Tạo tài khoản" (Leader chỉ nhân viên — kiểm tra trong importUsers)
+// Yêu cầu chờ Leader nhóm khác duyệt (đổi vai trò / khóa / chuyển nhóm tài khoản nhóm khác)
+router.get   ('/users/approvals',             auth(), uC.listApprovals);
+router.post  ('/users/approvals/:id/approve', auth(), uC.approve);
+router.post  ('/users/approvals/:id/reject',  auth(), uC.reject);
+router.post  ('/users/approvals/:id/cancel',  auth(), uC.cancelApproval);
+router.post  ('/users/approvals/hide-done',   auth(), uC.hideApproval);
+router.post  ('/users/approvals/:id/hide',    auth(), uC.hideApproval);
+router.post  ('/users/import',             auth.perm('user.import'), uC.importUsers);
+router.get   ('/users/import/template',    auth.perm('user.import'), uC.importTemplate);
+router.post  ('/users/import/parse',       auth.perm('user.import'), memUpload.single('file'), uC.parseImportFile);
 router.put   ('/users/:id',                auth(),                              uC.update);
-router.delete('/users/:id',                auth(['admin','manager','leader']), uC.remove);
-router.post  ('/users/:id/reset-password', auth(['admin','manager','leader']),  uC.resetPassword);
+router.delete('/users/:id',                auth.perm('user.manage'), uC.remove);
+router.post  ('/users/:id/reset-password', auth.perm('user.manage'),  uC.resetPassword);
 
 // ── Groups ── Leader KHÔNG có quyền gì ở đây — chỉ được tạo tài khoản user (ở trên)
 router.get   ('/groups',                     auth(),                              gC.list);
-router.post  ('/groups',                     auth(['admin','manager','leader']), gC.create);
+router.post  ('/groups',                     auth.perm('group.manage'), gC.create);
 router.put   ('/groups/:id',                 auth(['admin','manager']),          gC.update);
 router.delete('/groups/:id',                 auth(['admin']),                    gC.remove);
-router.post  ('/groups/:id/members',         auth(['admin','manager','leader']), gC.addMember);
-router.delete('/groups/:id/members/:userId', auth(['admin','manager','leader']), gC.removeMember);
+router.post  ('/groups/:id/members',         auth.perm('group.manage'), gC.addMember);
+router.delete('/groups/:id/members/:userId', auth.perm('group.manage'), gC.removeMember);
 
 // ── Daily Tasks — static routes TRƯỚC dynamic ──
 router.get('/daily/board',                    auth(),                          dC.getBoardData);
@@ -55,15 +68,15 @@ router.get('/daily/logs/week',                auth(),                          d
 // ⚠️ MỚI — lịch sử ghi chú của ĐÚNG 1 ô
 router.get('/daily/note-history',             auth(),                          dC.getNoteHistory);
 router.get('/daily/logs',                     auth(),                          dC.getLogs);
-router.post('/daily/logs',                    auth(['admin','manager','leader']), dC.saveLogs);
+router.post('/daily/logs',                    auth.perm('daily.manage'), dC.saveLogs);
 router.get   ('/daily/task-groups',           auth(),                          dC.listGroups);
-router.post  ('/daily/task-groups',           auth(['admin','manager','leader']), dC.createGroup);
-router.put   ('/daily/task-groups/:id',       auth(['admin','manager','leader']), dC.updateGroup);
-router.delete('/daily/task-groups/:id',       auth(['admin','manager','leader']), dC.deleteGroup);
+router.post  ('/daily/task-groups',           auth.perm('daily.manage'), dC.createGroup);
+router.put   ('/daily/task-groups/:id',       auth.perm('daily.manage'), dC.updateGroup);
+router.delete('/daily/task-groups/:id',       auth.perm('daily.manage'), dC.deleteGroup);
 router.get   ('/daily/task-groups/:groupId/tasks', auth(),                    dC.listTasks);
-router.post  ('/daily/task-groups/:groupId/tasks', auth(['admin','manager','leader']), dC.createTask);
-router.put   ('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.updateTask);
-router.delete('/daily/tasks/:id',             auth(['admin','manager','leader']), dC.deleteTask);
+router.post  ('/daily/task-groups/:groupId/tasks', auth.perm('daily.manage'), dC.createTask);
+router.put   ('/daily/tasks/:id',             auth.perm('daily.manage'), dC.updateTask);
+router.delete('/daily/tasks/:id',             auth.perm('daily.manage'), dC.deleteTask);
 
 // Công việc hằng ngày (user tự ghi việc, Leader chấm cả ngày)
 router.get   ('/worklog/members',       auth(), wlC.members);
@@ -71,7 +84,7 @@ router.get   ('/worklog',               auth(), wlC.week);
 router.post  ('/worklog/entries',       auth(), wlC.createEntry);
 router.put   ('/worklog/entries/:id',   auth(), wlC.updateEntry);
 router.delete('/worklog/entries/:id',   auth(), wlC.deleteEntry);
-router.put   ('/worklog/scores',        auth(['admin','manager','leader']), wlC.scoreDay);
+router.put   ('/worklog/scores',        auth.perm('wl.score'), wlC.scoreDay);
 router.get   ('/worklog/history',       auth(), wlC.history);
 router.put   ('/worklog/offs',          auth(), wlC.setDayOff);
 router.delete('/worklog/offs',          auth(), wlC.removeDayOff);
@@ -79,14 +92,14 @@ router.get   ('/worklog/export',        auth(), wlC.exportReport);
 router.get   ('/worklog/overview',      auth(), wlC.overview);
 router.get   ('/worklog/pending',       auth(), wlC.pending);
 router.get   ('/worklog/holidays',      auth(), wlC.listHolidays);
-router.put   ('/worklog/holidays',      auth(['admin']), wlC.setHolidays);
-router.delete('/worklog/holidays',      auth(['admin']), wlC.removeHolidays);
+router.put   ('/worklog/holidays',      auth.perm('wl.holidays'), wlC.setHolidays);
+router.delete('/worklog/holidays',      auth.perm('wl.holidays'), wlC.removeHolidays);
 
 // ── Requests ──
 router.get   ('/requests',                    auth(), rC.list);
 router.get   ('/requests/:id',                auth(), rC.getOne);
 router.get   ('/requests/:id/activity',       auth(), rC.getActivity);
-router.post  ('/requests',                    auth(['admin','manager','leader','assistant']), rC.create);
+router.post  ('/requests',                    auth.perm('req.create'), rC.create);
 router.put   ('/requests/:id',                auth(), rC.update);
 router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
 router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);
@@ -95,7 +108,7 @@ router.post  ('/requests/:id/claim',          auth(), rC.claim);
 // ⚠️ Thêm upload.single('file') để đọc được multipart/form-data khi frontend gửi kèm tệp đính kèm
 router.post  ('/requests/:id/comments',       auth(), upload.single('file'), rC.addComment);
 // Chấm điểm trực tiếp, bỏ qua luồng scoring
-router.post  ('/requests/:id/score',          auth(['admin','manager']), rC.score);
+router.post  ('/requests/:id/score',          auth.perm('req.manager'), rC.score);
 router.delete('/requests/:id',                auth(), rC.remove);
 
 // File upload
@@ -107,10 +120,10 @@ router.delete('/requests/:id/links/:linkId',  auth(), rC.deleteLink);
 // Dashboard
 router.get ('/dashboard/debug',              auth(['admin','manager']), dbC.debug);
 router.get ('/dashboard/scores',             auth(), dbC.getScores);
-router.post('/dashboard/lock',               auth(['admin','manager']), dbC.lockPeriod);
-router.get ('/dashboard/excel/:filename',    auth(['admin','manager']), dbC.downloadExcel);
-router.get ('/dashboard/last-export',        auth(['admin','manager']), dbC.getLastExport);
-router.get ('/dashboard/exports',            auth(['admin','manager']), dbC.getExportList);
+router.post('/dashboard/lock',               auth.perm('dash.lock'), dbC.lockPeriod);
+router.get ('/dashboard/excel/:filename',    auth.perm('dash.export'), dbC.downloadExcel);
+router.get ('/dashboard/last-export',        auth.perm('dash.export', 'dash.lock'), dbC.getLastExport);
+router.get ('/dashboard/exports',            auth.perm('dash.export'), dbC.getExportList);
 
 // ── Notifications — static routes TRƯỚC dynamic :id ──
 router.get ('/notifications/unread-count', auth(), nC.unreadCount);
@@ -119,9 +132,25 @@ router.get ('/notifications',              auth(), nC.list);
 router.post('/notifications/:id/read',     auth(), nC.markRead);
 router.use('/dashboard', require('./dashboard.routes'));
 
+// ── Quản trị — CHỈ Admin: phân quyền + sửa CV toàn quyền ──
+const adC = require('../controllers/admin.controller');
+router.get ('/admin/permissions',          auth(['admin']), adC.getPermissions);
+router.get ('/admin/permissions/user/:id', auth(['admin']), adC.getUserPermissions);
+router.put ('/admin/permissions/role',     auth(['admin']), adC.setRolePermission);
+router.put ('/admin/permissions/user',     auth(['admin']), adC.setUserPermission);
+router.get ('/admin/requests',             auth(['admin']), adC.searchRequests);
+router.get ('/admin/requests/:id',         auth(['admin']), adC.getRequest);
+router.put ('/admin/requests/:id',         auth(['admin']), adC.updateRequest);
+router.get ('/admin/settings',             auth(['admin']), adC.getSettings);
+router.put ('/admin/settings',             auth(['admin']), adC.setSetting);
+// Ủy quyền: Leader / Manager cấp-thu hồi quyền cấp Leader cho nhân viên nhóm mình (quyền perm.delegate)
+router.get ('/permissions/roles',          auth.perm('user.manage', 'user.import'), adC.roleSummary);
+router.get ('/permissions/delegate',       auth.perm('perm.delegate'), adC.getDelegation);
+router.put ('/permissions/delegate',       auth.perm('perm.delegate'), adC.setDelegation);
+
 // ── Activity Log — LỊCH SỬ THAY ĐỔI, chỉ admin/manager được xem ──
-router.get('/activity-logs',             auth(['admin','manager']), alC.list);
-router.get('/activity-logs/action-types',auth(['admin','manager']), alC.listActionTypes);
+router.get('/activity-logs',             auth.perm('log.view'), alC.list);
+router.get('/activity-logs/action-types',auth.perm('log.view'), alC.listActionTypes);
 
 // Debug: đếm users
 router.get('/debug/users', auth(['admin']), async (req, res) => {

@@ -28,7 +28,7 @@ import usePendingScoreCount from '../../lib/usePendingScoreCount';
    ============================================================ */
 export default function DailyPage() {
   const { t, i18n } = useTranslation();
-  const { user } = useAuth();
+  const { user, hasPerm } = useAuth();
   const [params, setParams] = useSearchParams();
   const isMobile = useMaxWidth(900);
   const isNarrow = useMaxWidth(1280); // tablet: panel đè lên thay vì chen ngang
@@ -51,7 +51,7 @@ export default function DailyPage() {
 
   const viewUserId = userId || user?.id;
   // Chấm được người khác (leader/manager/admin có thành viên) → có tab "Chờ chấm" + "Bảng tổng hợp"
-  const canScoreOthers = user?.role !== 'user' && members.length > 1;
+  const canScoreOthers = hasPerm('wl.score') && members.length > 1;
   const pendingCount = usePendingScoreCount(canScoreOthers);
 
   useEffect(() => { api.get('/worklog/members').then(r => setMembers(r.data.data || [])).catch(() => {}); }, []);

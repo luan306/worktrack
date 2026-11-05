@@ -17,7 +17,8 @@ const TYPE_ICON = {
   daily_scored: '📅', daily_score_edited: '✏️',
   request_activity: '📋',
   worklog_scored: '🗓', worklog_score_edited: '✏️',
-  worklog_unscored_reminder: '⏳', worklog_missing_reminder: '📝',
+  worklog_unscored_reminder: '⏳', worklog_missing_reminder: '📝', worklog_entry_new: '🆕',
+  user_change_request: '📨', user_change_approved: '✅', user_change_rejected: '❌',
   request_review_reminder: '🧾',
 };
 
@@ -74,6 +75,17 @@ function NotificationText({ n, t }) {
     case 'request_review_reminder': {
       const titles = (p.titles || []).map(x => `"${x}"`).join(', ') + (p.more ? ` +${p.more}` : '');
       return t('notif_request_review_reminder', { total: p.total, titles, defaultValue: `🧾 Còn ${p.total} CV chờ Manager duyệt: ${titles}` });
+    }
+    // Leader nhóm khác muốn đổi vai trò / khóa / chuyển nhóm tài khoản trong nhóm mình
+    case 'user_change_request':
+      return t('notif_user_change_request', { actor, target: p.targetName, what: p.what, defaultValue: `📨 ${actor} muốn sửa tài khoản ${p.targetName} (${p.what}) — bấm để đồng ý / từ chối` });
+    case 'user_change_approved':
+      return t('notif_user_change_approved', { actor, target: p.targetName, defaultValue: `✅ ${actor} đã ĐỒNG Ý yêu cầu sửa tài khoản ${p.targetName}${p.what ? `: ${p.what}` : ''}` });
+    case 'user_change_rejected':
+      return t('notif_user_change_rejected', { actor, target: p.targetName, defaultValue: `❌ ${actor} đã TỪ CHỐI yêu cầu sửa tài khoản ${p.targetName} (${p.what})${p.note ? ` — ${p.note}` : ''}` });
+    case 'worklog_entry_new': {
+      const d = (p.workDate || '').split('-').reverse().join('/');
+      return t('notif_worklog_entry_new', { actor, date: d, title: p.title, defaultValue: `🆕 ${actor} đã ghi công việc ngày ${d}${p.title ? `: "${p.title}"` : ''} — chờ bạn chấm điểm` });
     }
     case 'worklog_missing_reminder':
       return t('notif_worklog_missing_reminder', { date: (p.workDate || '').split('-').reverse().join('/'), defaultValue: `📝 Bạn chưa ghi công việc ngày ${(p.workDate || '').split('-').reverse().join('/')} — bấm để ghi bù` });

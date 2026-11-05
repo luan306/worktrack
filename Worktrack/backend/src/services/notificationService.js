@@ -14,6 +14,8 @@ const ENTITY_LINK = {
   worklog_team: () => '/daily?view=pending',
   // Nhắc Manager: mở Board (cột "Chờ Manager duyệt")
   request_review: () => '/board',
+  // Yêu cầu đổi vai trò / khóa / chuyển nhóm cần Leader nhóm khác duyệt → mở Quản lý User (khung duyệt ở trên cùng)
+  user_approval: () => '/users?approvals=1',
 };
 
 /**

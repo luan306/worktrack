@@ -290,7 +290,8 @@ function ActivityTimeline({ taskId }) {
             <div title={item.description} style={{display:'flex',flexDirection:'column',alignItems:'center',width:96,flexShrink:0}}>
               <div style={{width:28,height:28,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,background:meta.bg,flexShrink:0}}>{meta.icon}</div>
               {how && <span style={{marginTop:5,padding:'1px 7px',borderRadius:20,background:how.bg,color:how.color,fontSize:9.5,fontWeight:800,whiteSpace:'nowrap'}}>{how.label}</span>}
-              <div style={{fontSize:10,color:C.dark,textAlign:'center',marginTop:5,lineHeight:1.35,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{item.description}</div>
+              {/* width 100% + ngắt giữa chữ: tên file / link dài không dấu cách không tràn sang bước bên cạnh */}
+              <div style={{width:'100%',overflowWrap:'anywhere',wordBreak:'break-word',fontSize:10,color:C.dark,textAlign:'center',marginTop:5,lineHeight:1.35,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{item.description}</div>
               <div style={{fontSize:9,color:'var(--wt-text-4)',marginTop:3,whiteSpace:'nowrap'}}>{fmtDt(item.created_at)}</div>
             </div>
             {!isLast && <div style={{fontSize:14,color:'var(--wt-text-4)',flexShrink:0,marginTop:5}}>→</div>}
@@ -303,11 +304,11 @@ function ActivityTimeline({ taskId }) {
 
 export default function RequestsPage() {
   const { t, i18n } = useTranslation();
-  const { user, can } = useAuth();
+  const { user, hasPerm } = useAuth();
   const [searchParams] = useSearchParams();
-  const isLeader = can('admin','manager','leader');
+  const isLeader = hasPerm('req.leader','req.manager'); // theo trang Phân quyền
   const isAssistant = user?.role === 'assistant'; // Trợ lý Leader: chỉ tạo CV thay Leader cho nhóm mình
-  const canCreate = isLeader || isAssistant;
+  const canCreate = hasPerm('req.create');
   const currentLocale = LOCALE_MAP[i18n.language] || 'vi-VN';
   const now = useNow(60000); // nhãn "Mới" (tạo trong 24h) tự hết hạn, không gọi Date.now() lúc vẽ
 
@@ -546,8 +547,10 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   // Đếm mỗi lần loadTask() chạy — dùng làm key ép ActivityTimeline tự tải lại
   const [activityTick, setActivityTick] = useState(0);
 
-  const isAdmin = ['admin','manager'].includes(user?.role);
-  const isSuper = user?.role === 'admin'; // Admin: xóa CV, đổi trạng thái tùy ý, sửa điểm cả khi đã hoàn thành
+  const hasPerm = useAuth(s => s.hasPerm);
+  const isAdmin = hasPerm('req.manager'); // quyền Manager trong CV (trang Phân quyền)
+  const isSuper = user?.role === 'admin'; // Admin: đổi trạng thái tùy ý, sửa điểm cả khi đã hoàn thành
+  const canDelete = isSuper || hasPerm('req.delete');
 
 
   const loadTask = async()=>{
@@ -730,7 +733,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           }
           return <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'var(--wt-text-4)':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>;
         })()}
-        {isSuper&&<button onClick={deleteTask} disabled={saving} title={t('req_delete_btn','Xóa CV')}
+        {canDelete&&<button onClick={deleteTask} disabled={saving} title={t('req_delete_btn','Xóa CV')}
           style={{padding:'6px 10px',borderRadius:7,border:'1.5px solid var(--wt-tint-danger-bd)',background:'var(--wt-tint-danger)',color:C.danger,fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>🗑 <span className="req-del-label">{t('req_delete_btn','Xóa CV')}</span></button>}
         <button onClick={onClose} style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.border}`,background:'var(--wt-surface)',cursor:'pointer',fontSize:16,color:'var(--wt-text-4)',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
       </div>
@@ -1054,7 +1057,19 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
             )}
             <textarea value={comment} onChange={e=>setComment(e.target.value)}
               placeholder={t('req_message_placeholder')}
-              onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendComment(); } }}
+              onKeyDown={e=>{
+                if (e.key!=='Enter' || e.nativeEvent.isComposing) return; // đang gõ dấu (IME) thì bỏ qua
+                if (e.shiftKey) return; // Shift+Enter: trình duyệt tự xuống dòng
+                e.preventDefault();
+                if (e.altKey || e.ctrlKey || e.metaKey) {
+                  // Alt+Enter: xuống dòng tại vị trí con trỏ (textarea không tự làm với Alt)
+                  const el=e.currentTarget, a=el.selectionStart, b=el.selectionEnd;
+                  setComment(v=>v.slice(0,a)+'\n'+v.slice(b));
+                  requestAnimationFrame(()=>{ el.selectionStart=el.selectionEnd=a+1; });
+                  return;
+                }
+                sendComment(); // Enter: gửi
+              }}
               style={{width:'100%',padding:'8px 10px',border:`1.5px solid ${C.border}`,borderRadius:8,fontSize:12,resize:'none',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}
               rows={3}/>
             <input ref={chatFileRef} type="file" style={{display:'none'}} onChange={pickChatFile}

@@ -85,7 +85,7 @@ async function canManageGroupMembers(req) {
   const isPrivileged = ['admin','manager'].includes(req.user.role);
   if (isPrivileged) return { ok: true };
 
-  if (req.user.role === 'leader') {
+  {
     const [[group]] = await db.query('SELECT leader_id FROM `groups` WHERE id=?', [req.params.id]);
     if (!group) return { ok: false, status: 404, message: 'Không tìm thấy nhóm' };
     if (group.leader_id === req.user.id) return { ok: true };

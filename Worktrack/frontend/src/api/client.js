@@ -1,4 +1,5 @@
 import axios from 'axios';
+import i18n from '../i18n';
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -34,6 +35,7 @@ api.interceptors.response.use(
     return res;
   },
   async err => {
+    await friendlyError(err);
     const orig = err.config;
     // 401 của chính API đăng nhập = sai mật khẩu, không phải token hết hạn
     if (/\/auth\/(login|refresh)$/.test(orig?.url || '')) return Promise.reject(err);
@@ -61,6 +63,23 @@ api.interceptors.response.use(
   }
 );
 
+// Thông báo lỗi dễ hiểu cho mọi trang (các trang hiện e.response.data.message || e.message)
+//  - file tải về (responseType blob): đọc nội dung JSON lỗi của server
+//  - 403 không có quyền: thêm "Vui lòng liên hệ Admin" (trừ bắt đổi mật khẩu — có màn hình riêng)
+async function friendlyError(err) {
+  const res = err.response;
+  if (!res) return;
+  if (typeof Blob !== 'undefined' && res.data instanceof Blob) {
+    try { res.data = JSON.parse(await res.data.text()); } catch { res.data = {}; }
+  }
+  if (res.status !== 403 || res.data?.code === 'PASSWORD_CHANGE_REQUIRED') return;
+  const raw = res.data?.message;
+  const base = !raw || raw === 'Forbidden' ? i18n.t('err_no_permission') : raw.replace(/[.\s]+$/, '');
+  const msg = /liên hệ|contact|連絡/i.test(base) ? base : `${base}. ${i18n.t('err_contact_admin')}`;
+  res.data = { ...(res.data || {}), message: msg };
+  err.message = msg;
+}
+
 // Wrap get để dùng cache
 const _get = api.get.bind(api);
 api.get = (url, cfg = {}) => {
@@ -77,7 +96,18 @@ api.get = (url, cfg = {}) => {
 
 // Tải 1 file từ API về máy (Excel, CSV...) — lấy tên file từ Content-Disposition nếu có
 export async function downloadFile(url, { params, fallbackName = 'download', timeout = 120000 } = {}) {
-  const r = await api.get(url, { params, responseType: 'blob', timeout });
+  let r;
+  try { r = await api.get(url, { params, responseType: 'blob', timeout }); }
+  catch (e) {
+    // không có quyền → đã có thông báo "liên hệ Admin"; lỗi khác (mạng, server) → báo chung
+    if (e.response?.status !== 403) {
+      const why = e.response?.data?.message;
+      const msg = `${i18n.t('err_download_failed')}${why ? ` (${why})` : ''}. ${i18n.t('err_retry_or_admin')}`;
+      if (e.response) e.response.data = { ...(e.response.data || {}), message: msg };
+      e.message = msg;
+    }
+    throw e;
+  }
   const name = /filename="?([^"]+)"?/.exec(r.headers?.['content-disposition'] || '')?.[1] || fallbackName;
   const href = URL.createObjectURL(new Blob([r.data]));
   const a = Object.assign(document.createElement('a'), { href, download: name });

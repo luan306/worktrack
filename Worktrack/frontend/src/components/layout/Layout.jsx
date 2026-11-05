@@ -5,11 +5,15 @@ import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
 import NotificationBell from '../Notificationbell';
 import NotificationToast from '../NotificationToast';
+import { AppToaster } from '../AppToast';
 import useMaxWidth from '../../lib/useMediaQuery';
 import ForceChangePassword from '../../pages/auth/ForceChangePassword';
 import ConnectionBanner from '../ConnectionBanner';
 import ThemeToggle from '../ThemeToggle';
 import usePendingScoreCount from '../../lib/usePendingScoreCount';
+import { onRealtime } from '../../lib/socket';
+import { clearApiCache } from '../../api/client';
+import { avatarSrc } from '../../lib/avatar';
 
 /* ============================================================
    Ngôn ngữ thiết kế "control-panel": nền tối, mỗi mục nav có
@@ -23,8 +27,9 @@ const NAV = [
   { to: '/completed',    icon: '✅',  key: 'nav_completed',    color: '#17b26a' },
   { divider: true },
   { to: '/dashboard',    icon: '📊',  key: 'nav_dashboard',    color: '#8b5cf6' },
-  { to: '/activity-log', icon: '📜',  key: 'nav_activity_log', roles: ['admin','manager'], color: '#64748b' },
-  { to: '/users',        icon: '👥',  key: 'nav_users',        roles: ['admin','manager','leader'], color: '#ec4899' },
+  { to: '/activity-log', icon: '📜',  key: 'nav_activity_log', perms: ['log.view'], color: '#64748b' },
+  { to: '/users',        icon: '👥',  key: 'nav_users',        perms: ['user.manage','user.import','group.manage','perm.delegate'], color: '#ec4899' },
+  { to: '/admin',        icon: '🛡',  key: 'nav_admin',        roles: ['admin'], color: '#ef4444' },
   { to: '/profile',      icon: '⚙️', key: 'nav_settings',     color: '#6b7280' },
 ];
 
@@ -91,7 +96,7 @@ function NavIcon({ icon, color, active, size = 28, badge = 0 }) {
 export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = false, onNavigate, badges = {} }) {
   const collapsed = drawer ? false : collapsedProp;
   const { t } = useTranslation();
-  const { user, logout } = useAuthStore();
+  const { user, logout, hasPerm } = useAuthStore();
   const { disconnect } = useNotificationStore();
   const navigate = useNavigate();
   const initials = user?.full_name?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'U';
@@ -153,12 +158,16 @@ export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = f
               className={`group/profile flex min-w-0 items-center gap-2.5 rounded-lg transition-colors hover:bg-white/[0.05] ${collapsed ? 'justify-center p-0.5' : 'p-0.5'}`}
             >
               <div className="relative flex-shrink-0">
-                <div
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-bold text-white ring-2 ring-white/10"
-                  style={{ background: `linear-gradient(135deg, ${avatarColor}, ${avatarColor}cc)` }}
-                >
-                  {initials}
-                </div>
+                {user?.avatar_url ? (
+                  <img src={avatarSrc(user.avatar_url)} alt="" className="h-8 w-8 rounded-full object-cover ring-2 ring-white/10" />
+                ) : (
+                  <div
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-bold text-white ring-2 ring-white/10"
+                    style={{ background: `linear-gradient(135deg, ${avatarColor}, ${avatarColor}cc)` }}
+                  >
+                    {initials}
+                  </div>
+                )}
                 <span className="wt-live-dot absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[#17b26a] ring-2 ring-[#0b1220]" />
               </div>
               {!collapsed && (
@@ -187,6 +196,7 @@ export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = f
             </div>
           );
           if (item.roles && !item.roles.includes(user?.role)) return null;
+          if (item.perms && !hasPerm(...item.perms)) return null;
           return (
             <div key={item.to} className="group relative mx-2.5 my-0.5">
               <NavLink
@@ -366,7 +376,11 @@ export function MainLayout() {
 
   const { user } = useAuthStore();
   // Leader: số ngày nhân viên đã ghi việc mà chưa được chấm → chấm đỏ trên menu "CV Hằng ngày"
-  const pendingScore = usePendingScoreCount(user?.role === 'leader');
+  const { hasPerm, refreshMe } = useAuthStore();
+  const managerGroup = user?.role === 'manager' && !!user?.notif?.manager_group; // Admin bật "Manager có nhóm riêng"
+  const pendingScore = usePendingScoreCount(hasPerm('wl.score') && (!['admin','manager'].includes(user?.role) || managerGroup), managerGroup ? 'group' : undefined);
+  // Admin đổi phân quyền → tải lại quyền ngay, không cần đăng nhập lại
+  useEffect(() => onRealtime('permissions:changed', () => { clearApiCache(); refreshMe(); }, { wait: 300, jitter: 1500 }), [refreshMe]);
   const badges = { '/daily': pendingScore };
   const { connect, disconnect } = useNotificationStore();
 
@@ -394,19 +408,21 @@ export function MainLayout() {
       <MobileNav badges={badges} />
       {isPhone && drawerUsed && <MobileDrawer open={drawerOpen} onClose={closeDrawer} badges={badges} />}
       <NotificationToast />
+      <AppToaster />
       <ConnectionBanner />
     </div>
   );
 }
 
-export function ProtectedRoute({ roles = [] }) {
+export function ProtectedRoute({ roles = [], perms = [] }) {
   const { t } = useTranslation();
-  const { authenticated, loading, user } = useAuthStore();
+  const { authenticated, loading, user, hasPerm } = useAuthStore();
 
   if (loading) return <LoadingScreen label={t('loading')} />;
 
   if (!authenticated) { window.location.href = '/login'; return null; }
   if (roles.length && !roles.includes(user?.role)) { window.location.href = '/board'; return null; }
+  if (perms.length && !hasPerm(...perms)) { window.location.href = '/board'; return null; }
   // Còn mật khẩu mặc định → chỉ hiện màn đổi mật khẩu, không dựng menu / trang nào khác
   if (user?.must_change_password) return <ForceChangePassword />;
   return <Outlet />;

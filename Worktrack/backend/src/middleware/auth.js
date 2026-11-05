@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const db  = require('../config/db');
 const JWT_KEY = require('../utils/jwtKey');
+const { hasPerm } = require('../config/permissions');
 
 // ── Token đã đăng xuất — giữ trong RAM tới khi token tự hết hạn ──
 const revoked = new Map(); // token → thời điểm hết hạn (ms)
@@ -71,6 +72,10 @@ const auth = (roles = []) => async (req, res, next) => {
     next(e);
   }
 };
+
+// Chặn theo QUYỀN (trang Phân quyền) thay cho danh sách vai trò cứng: auth.perm('req.create') — có 1 trong các quyền là qua
+auth.perm = (...keys) => [auth(), (req, res, next) => keys.some(k => hasPerm(req.user, k)) ? next()
+  : res.status(403).json({ success: false, message: 'Bạn không có quyền thực hiện thao tác này' })];
 
 module.exports = auth;
 module.exports.revokeToken = revokeToken;

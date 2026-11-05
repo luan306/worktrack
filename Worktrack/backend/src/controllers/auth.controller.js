@@ -97,13 +97,16 @@ exports.logout = async (req, res) => {
 exports.me = async (req, res) => {
   try {
     const [[[user]], [groups]] = await Promise.all([
-      db.query('SELECT id,username,email,full_name,role,avatar_color,last_login FROM users WHERE id=?', [req.user.id]),
+      db.query('SELECT id,username,email,full_name,role,avatar_color,avatar_url,last_login FROM users WHERE id=?', [req.user.id]),
       db.query(
         `SELECT g.id,g.name,g.icon, CASE WHEN g.leader_id=? THEN 1 ELSE 0 END as is_leader
          FROM group_members gm JOIN \`groups\` g ON g.id=gm.group_id
          WHERE gm.user_id=? AND g.is_active=1`, [req.user.id, req.user.id]),
     ]);
-    res.json({ success: true, data: { ...user, groups, must_change_password: !!req.user.must_change_password } });
+    res.json({ success: true, data: { ...user, groups, must_change_password: !!req.user.must_change_password,
+      permissions: require('../config/permissions').permsOf(user),
+      notif: { manager_group: require('../config/settings').on('notif.manager_group') },
+      features: { avatar_upload: require('../config/settings').on('profile.avatar_upload') } } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 

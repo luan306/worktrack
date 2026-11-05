@@ -63,7 +63,11 @@ uploadPaths.forEach(p => {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   app.use('/uploads', express.static(p, {
     maxAge: '1d',
-    setHeaders: (res, filePath) => { if (!INLINE_OK.test(filePath)) res.setHeader('Content-Disposition', 'attachment'); },
+    setHeaders: (res, filePath) => {
+      if (!INLINE_OK.test(filePath)) res.setHeader('Content-Disposition', 'attachment');
+      // helmet mặc định "same-origin" → trang chạy ở cổng/domain khác (dev :5173, hoặc mở qua IP) không hiện được ảnh
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
   }));
 });
 
@@ -169,6 +173,9 @@ server.listen({ port: PORT, backlog: 4096 }, () => {
 require('./cron/scoreAutoLock.cron');
 // ── Bảo trì DB: index cần thiết + dọn token hết hạn / thông báo cũ ──
 require('./config/indexes').ensureIndexes();
+require('./config/permissions').init(); // bảng phân quyền (tự tạo nếu chưa có)
+require('./config/settings').init();    // cài đặt thông báo (Admin bật / tắt)
+require('./services/approvalService').init(); // yêu cầu cần Leader nhóm khác duyệt
 require('./cron/maintenance.cron');
 // ── Nhắc chấm điểm (leader) + nhắc ghi việc (nhân viên) — 08:00 sáng T2–T6 ──
 require('./cron/worklogReminder.cron')(io);

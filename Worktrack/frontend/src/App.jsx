@@ -1,24 +1,44 @@
-import { useEffect, lazy, Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './i18n';
 import useAuth from './store/authStore';
 import { ProtectedRoute, GuestRoute, MainLayout } from './components/layout/Layout';
 import LoginPage from './pages/auth/LoginPage';
 
-const BoardPage       = lazy(() => import('./pages/board/BoardPage'));
-const DailyPage       = lazy(() => import('./pages/daily/DailyPage'));
-const RequestsPage    = lazy(() => import('./pages/requests/RequestsPage'));
-const CompletedPage   = lazy(() => import('./pages/completed/CompletedPage'));
-const DashboardPage   = lazy(() => import('./pages/dashboard/DashboardPage'));
-const UsersPage       = lazy(() => import('./pages/users/UsersPage'));
-const ProfilePage     = lazy(() => import('./pages/profile/ProfilePage.jsx'));
-const ActivityLogPage = lazy(() => import('./pages/activity/Activitylogpage'));
-const NotFoundPage    = lazy(() => import('./pages/NotFoundPage'));
+// Trang tải theo nhu cầu (code-splitting) — NHƯNG tải sẵn trước khi cần:
+// React 19 giữ màn "Loading" tối thiểu ~300ms mỗi lần 1 trang lazy chưa tải xong (Suspense throttle).
+// lazyPage: khi file trang đã tải xong thì vẽ thẳng, không đi qua Suspense → hết 300ms chờ vô ích.
+function lazyPage(load) {
+  let mod = null, promise = null;
+  const preload = () => (promise ||= load().then(m => (mod = m)));
+  const Lazy = lazy(preload);
+  const Page = (props) => (mod ? <mod.default {...props} /> : <Lazy {...props} />);
+  Page.preload = preload;
+  return Page;
+}
+const BoardPage       = lazyPage(() => import('./pages/board/BoardPage'));
+const DailyPage       = lazyPage(() => import('./pages/daily/DailyPage'));
+const RequestsPage    = lazyPage(() => import('./pages/requests/RequestsPage'));
+const CompletedPage   = lazyPage(() => import('./pages/completed/CompletedPage'));
+const DashboardPage   = lazyPage(() => import('./pages/dashboard/DashboardPage'));
+const UsersPage       = lazyPage(() => import('./pages/users/UsersPage'));
+const ProfilePage     = lazyPage(() => import('./pages/profile/ProfilePage.jsx'));
+const ActivityLogPage = lazyPage(() => import('./pages/activity/Activitylogpage'));
+const AdminPage       = lazyPage(() => import('./pages/admin/AdminPage'));
+const NotFoundPage    = lazyPage(() => import('./pages/NotFoundPage'));
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
-});
+const ROUTE_PAGES = {
+  board: BoardPage, daily: DailyPage, requests: RequestsPage, completed: CompletedPage, dashboard: DashboardPage,
+  users: UsersPage, profile: ProfilePage, 'activity-log': ActivityLogPage, admin: AdminPage,
+};
+// 1) Trang đang mở: tải NGAY, song song với /auth/me (không đợi đăng nhập xong mới tải)
+ROUTE_PAGES[location.pathname.split('/')[1]]?.preload();
+// 2) Các trang còn lại: tải ngầm SAU khi trang đang mở đã lấy xong dữ liệu (đợi 2.5s rồi chờ lúc rảnh)
+//    → mạng chậm không bị tranh băng thông với dữ liệu trang chính; bấm menu sau đó là hiện ngay
+const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+window.addEventListener('load', () => setTimeout(() => idle(() => {
+  Object.values(ROUTE_PAGES).reduce((p, page) => p.then(() => page.preload()).catch(() => {}), Promise.resolve());
+}, { timeout: 5000 }), 2500), { once: true });
 
 const Loader = () => (
   <div className="flex-1 flex items-center justify-center bg-[#f0f2f5]">
@@ -40,12 +60,10 @@ function HomeRedirect() {
 }
 
 export default function App() {
-  const fetchMe = useAuth(s => s.fetchMe);
-  useEffect(() => { fetchMe(); }, [fetchMe]);
+  // /auth/me được gọi sớm trong main.jsx (song song với tải ngôn ngữ / file trang)
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+    <BrowserRouter>
         <Suspense fallback={<Loader />}>
           <Routes>
             {/* GuestRoute chặn user đã đăng nhập vào lại /login */}
@@ -69,12 +87,17 @@ export default function App() {
                 <Route path="dashboard" element={<DashboardPage />} />
 
                 {/* Lịch sử thay đổi — CHỈ admin/manager, giống Dashboard */}
-                <Route element={<ProtectedRoute roles={['admin', 'manager']} />}>
+                <Route element={<ProtectedRoute perms={['log.view']} />}>
                   <Route path="activity-log" element={<ActivityLogPage />} />
                 </Route>
 
+                {/* Quản trị — CHỈ Admin: phân quyền + sửa CV toàn quyền */}
+                <Route element={<ProtectedRoute roles={['admin']} />}>
+                  <Route path="admin" element={<AdminPage />} />
+                </Route>
+
                 {/* Users — admin/manager/leader */}
-                <Route element={<ProtectedRoute roles={['admin', 'manager', 'leader']} />}>
+                <Route element={<ProtectedRoute perms={['user.manage', 'user.import', 'group.manage', 'perm.delegate']} />}>
                   <Route path="users" element={<UsersPage />} />
                 </Route>
               </Route>
@@ -84,7 +107,6 @@ export default function App() {
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
-      </BrowserRouter>
-    </QueryClientProvider>
+    </BrowserRouter>
   );
 }

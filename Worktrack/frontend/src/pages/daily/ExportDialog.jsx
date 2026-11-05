@@ -55,9 +55,7 @@ export default function ExportDialog({ onClose, refDate, member, members, viewUs
       });
       onClose();
     } catch (e) {
-      let msg = e.message;
-      try { msg = JSON.parse(await e.response.data.text()).message || msg; } catch { /* không phải JSON */ }
-      setErr(msg);
+      setErr(e.response?.data?.message || e.message); // api/client đã đổi thành thông báo dễ hiểu
     } finally { setBusy(false); }
   };
 

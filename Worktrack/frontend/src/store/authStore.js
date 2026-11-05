@@ -34,6 +34,20 @@ const useAuth = create((set, get) => ({
     }
   },
 
+  // Quyền theo trang Phân quyền (Admin luôn có hết) — server vẫn kiểm tra lại
+  hasPerm: (...keys) => {
+    const user = get().user;
+    if (!user) return false;
+    return user.role === 'admin' || keys.some(k => user.permissions?.includes(k));
+  },
+  // Admin vừa đổi phân quyền → tải lại quyền của mình (không dùng cache 30s của api.get)
+  refreshMe: async () => {
+    try {
+      const { data } = await api.get('/auth/me', { cache: false });
+      set({ user: data.data });
+    } catch { /* giữ nguyên */ }
+  },
+
   can: (...roles) => {
     const user = get().user;
     if (!user) return false;

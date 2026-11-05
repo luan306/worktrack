@@ -1,3 +1,4 @@
+const { hasPerm } = require('../config/permissions');
 const bcrypt = require('bcryptjs');
 const ExcelJS = require('exceljs');
 const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
@@ -7,6 +8,8 @@ const { invalidateUser } = require('../middleware/auth');
 const { DEFAULT_PASSWORD } = require('../utils/password');
 const { logActivity, diffFields } = require('../services/activityLogService');
 const { sendCachedJson } = require('../utils/cachedJson');
+const { shareGroup, groupLeadersOf } = require('../services/approvalService');
+const { notifyMany, notify } = require('../services/notificationService');
 
 // ── Lịch sử thay đổi tài khoản ──
 const ROLE_LABEL = { user: 'Nhân viên', assistant: 'Trợ lý Leader', leader: 'Leader', manager: 'Manager', admin: 'Admin' };
@@ -31,6 +34,8 @@ const USER_FIELDS = {
 const actorOf = (req) => req.user.full_name || req.user.username;
 
 const ROLES = ['user', 'assistant', 'leader', 'manager', 'admin'];
+// Vai trò THẤP HƠN Leader — Leader (và người được quyền quản lý tài khoản, không phải Admin/Manager) chỉ gán được các vai trò này
+const LOWER_ROLES = ['user', 'assistant'];
 const MIN_PASSWORD = 8;
 const weakPassword = (p) => typeof p !== 'string' || p.length < MIN_PASSWORD;
 // Chỉ Admin mới được tạo/nâng quyền Admin hoặc đụng vào tài khoản Admin
@@ -45,7 +50,7 @@ exports.list = async (req, res) => {
     await sendCachedJson(req, res, 'grp:users:' + JSON.stringify([group_id, role, search, is_active, limited]), 60000, async () => {
 
     // group_concat_max_len đã được set cho mọi connection ở config/db.js
-    let sql = `SELECT u.id,u.username,u.email,u.full_name,u.role,u.avatar_color,u.is_active,u.last_login,u.created_at,
+    let sql = `SELECT u.id,u.username,u.email,u.full_name,u.role,u.avatar_color,u.avatar_url,u.is_active,u.last_login,u.created_at,
                GROUP_CONCAT(DISTINCT CONCAT(g.id,':',g.name) ORDER BY g.name SEPARATOR '|') as groups_raw
                FROM users u
                LEFT JOIN group_members gm ON gm.user_id=u.id
@@ -85,9 +90,9 @@ exports.create = async (req, res) => {
       return res.status(400).json({ success: false, message: `Mật khẩu phải có ít nhất ${MIN_PASSWORD} ký tự` });
     if (role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
 
-    // Leader chỉ được tạo tài khoản role 'user' — không được tự gán admin/manager/leader
-    if (req.user.role === 'leader' && role !== 'user')
-      return res.status(403).json({ success: false, message: 'Leader chỉ được tạo tài khoản nhân viên (user)' });
+    // Không phải Admin/Manager (Leader hoặc người được cấp quyền) chỉ tạo được vai trò thấp hơn Leader
+    if (!['admin','manager'].includes(req.user.role) && !LOWER_ROLES.includes(role))
+      return res.status(403).json({ success: false, message: 'Bạn chỉ tạo được tài khoản Nhân viên hoặc Trợ lý Leader' });
 
     const hash = await bcrypt.hash(password, 10);
     const [r] = await db.query(
@@ -112,11 +117,14 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, email, role, avatar_color, is_active, group_id } = req.body;
+    const { full_name, email, avatar_color } = req.body;
+    let { role, is_active, group_id } = req.body;
 
     const isSelf       = req.user.id === +id;
-    const isPrivileged = ['admin','manager'].includes(req.user.role);
-    const isLeader      = req.user.role === 'leader';
+    // Admin/Manager có quyền "Quản lý tài khoản": sửa mọi thứ; người khác có quyền đó: như Leader (chỉ tài khoản nhân viên)
+    const canManage     = hasPerm(req.user, 'user.manage');
+    const isPrivileged = ['admin','manager'].includes(req.user.role) && canManage;
+    const isLeader      = !isPrivileged && canManage;
 
     if (!isSelf && !isPrivileged && !isLeader) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa người dùng khác' });
@@ -134,10 +142,13 @@ exports.update = async (req, res) => {
     // username (MSNV) là tên đăng nhập — chính chủ không tự đổi được
     const username = isSelf && !isPrivileged ? undefined : req.body.username;
 
-    // role là trường nhạy cảm nhất — CHỈ admin/manager được đổi
+    // role là trường nhạy cảm nhất — Admin/Manager đổi tùy ý; Leader chỉ đổi qua lại giữa các vai trò THẤP HƠN Leader
+    // (Nhân viên ⇄ Trợ lý Leader), không tự đổi mình, không đụng tới Leader / Manager / Admin
     const roleChanging = role !== undefined && (isSelf || role !== target.role);
     if (roleChanging && !isPrivileged) {
-      return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
+      if (!isLeader || isSelf) return res.status(403).json({ success: false, message: 'Bạn không có quyền đổi vai trò người dùng' });
+      if (!LOWER_ROLES.includes(target.role) || !LOWER_ROLES.includes(role))
+        return res.status(403).json({ success: false, message: 'Bạn chỉ đổi được vai trò giữa Nhân viên và Trợ lý Leader' });
     }
 
     // Nhóm — admin/manager luôn được
@@ -165,6 +176,30 @@ exports.update = async (req, res) => {
       }
       if (isSelf) {
         return res.status(400).json({ success: false, message: 'Không thể tự khóa/mở khóa chính mình' });
+      }
+    }
+
+    // 🤝 Leader sửa tài khoản thuộc NHÓM KHÁC (không chung nhóm): đổi vai trò / khóa–mở khóa / chuyển nhóm
+    //    phải được Leader nhóm đó đồng ý → tách ra thành yêu cầu chờ duyệt; các trường khác vẫn lưu ngay
+    let pending = null;
+    if (isLeader && !isSelf && !isPrivileged) {
+      const sens = {};
+      if (roleChanging) sens.role = role;
+      if (activeChanging) sens.is_active = +is_active ? 1 : 0;
+      if (group_id !== undefined) {
+        const [cur] = await db.query('SELECT group_id FROM group_members WHERE user_id=?', [id]);
+        const now = new Set(cur.map(r => r.group_id));
+        const same = group_id ? (now.size === 1 && now.has(+group_id)) : now.size === 0;
+        if (!same) sens.group_id = group_id ? +group_id : null;
+      }
+      if (Object.keys(sens).length && !(await shareGroup(req.user.id, +id))) {
+        const { groups, leaders } = await groupLeadersOf(+id, req.user.id);
+        if (groups.length) {
+          if (!leaders.length)
+            return res.status(403).json({ success: false, message: `Nhóm ${groups.map(g => g.name).join(', ')} chưa có Leader để duyệt — nhờ Manager / Admin thực hiện` });
+          pending = { sens, groups, leaders };
+          role = undefined; is_active = undefined; group_id = undefined;
+        }
       }
     }
 
@@ -210,6 +245,167 @@ exports.update = async (req, res) => {
       });
     }
 
+    if (pending) {
+      const r = await createApproval(req, +id, before, pending);
+      return res.status(202).json({ success: true, pending: true, approval_id: r.id, message: r.message,
+        approval: { what: r.what, target: r.target, groups: r.groups, approvers: r.approvers } });
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// ───────────── Yêu cầu chờ Leader nhóm khác duyệt ─────────────
+const describeChanges = async (sens, target) => {
+  const parts = [];
+  if (sens.role !== undefined) parts.push(`vai trò: ${ROLE_LABEL[target.role] || target.role} → ${ROLE_LABEL[sens.role] || sens.role}`);
+  if (sens.is_active !== undefined) parts.push(sens.is_active ? 'MỞ KHÓA tài khoản' : 'KHÓA tài khoản');
+  if (sens.group_id !== undefined) {
+    let to = '(không nhóm)';
+    if (sens.group_id) { const [[g]] = await db.query('SELECT name FROM `groups` WHERE id=?', [sens.group_id]); to = g?.name || `#${sens.group_id}`; }
+    parts.push(`chuyển nhóm: ${target.group_names || '(không nhóm)'} → ${to}`);
+  }
+  return parts.join('; ');
+};
+
+async function createApproval(req, targetId, target, { sens, groups, leaders }) {
+  // gửi lại cho cùng người → thay yêu cầu cũ đang chờ
+  await db.query("UPDATE approval_requests SET status='cancelled', decided_at=NOW(), decision_note='Đã gửi yêu cầu mới thay thế' WHERE status='pending' AND requester_id=? AND target_user_id=?", [req.user.id, targetId]);
+  const what = await describeChanges(sens, target);
+  const [r] = await db.query(
+    'INSERT INTO approval_requests (type, requester_id, target_user_id, changes, summary, approver_ids) VALUES (?,?,?,?,?,?)',
+    ['user_change', req.user.id, targetId, JSON.stringify(sens), what.slice(0, 500), JSON.stringify(leaders.map(l => l.id))]);
+  const groupNames = groups.map(g => g.name).join(', ');
+  await logActivity({
+    actorId: req.user.id, actionType: 'user_change_requested', entityType: 'user', entityId: targetId,
+    description: `${actorOf(req)} đã GỬI YÊU CẦU sửa tài khoản ${target.full_name} (${target.username}, nhóm ${groupNames}): ${what} — chờ ${leaders.map(l => l.full_name).join(' / ')} đồng ý`,
+    metadata: { approval_id: r.insertId, changes: sens },
+  });
+  notifyMany(req.app.get('io'), leaders.map(l => l.id), {
+    actorId: req.user.id, type: 'user_change_request', entityType: 'user_approval', entityId: r.insertId,
+    payload: { actorName: actorOf(req), targetName: target.full_name, what },
+  }).catch(e => console.error('[notify approval]', e.message));
+  return { id: r.insertId, what, target: target.full_name, groups: groups.map(g => g.name), approvers: leaders.map(l => l.full_name),
+    message: `Đã gửi yêu cầu (${what}) tới Leader nhóm ${groupNames}: ${leaders.map(l => l.full_name).join(', ')}. Thay đổi này chỉ được áp dụng khi họ đồng ý.` };
+}
+
+const parseJson = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
+
+// GET /users/approvals — yêu cầu chờ mình duyệt + yêu cầu mình đã gửi (14 ngày gần nhất)
+exports.listApprovals = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT a.*, rq.full_name AS requester_name, t.full_name AS target_name, t.username AS target_username, t.role AS target_role,
+              d.full_name AS decided_by_name
+         FROM approval_requests a
+         JOIN users rq ON rq.id=a.requester_id
+         JOIN users t  ON t.id=a.target_user_id
+         LEFT JOIN users d ON d.id=a.decided_by
+        WHERE a.created_at >= NOW() - INTERVAL 14 DAY
+          AND ((a.requester_id=? AND a.requester_hidden=0) OR (a.status='pending' AND JSON_CONTAINS(a.approver_ids, CAST(? AS JSON))))
+        ORDER BY a.status='pending' DESC, a.id DESC LIMIT 100`, [req.user.id, String(req.user.id)]);
+    const out = [];
+    for (const r of rows) {
+      const sens = parseJson(r.changes);
+      const target = await getUserSnapshot(r.target_user_id);
+      out.push({
+        id: r.id, status: r.status, created_at: r.created_at, decided_at: r.decided_at, decision_note: r.decision_note, decided_by_name: r.decided_by_name,
+        requester_name: r.requester_name, target_name: r.target_name, target_username: r.target_username,
+        what: r.summary || await describeChanges(sens, target || {}), changes: sens,
+        mine: r.requester_id === req.user.id, can_decide: r.status === 'pending' && parseJson(r.approver_ids).includes(req.user.id),
+      });
+    }
+    res.json({ success: true, data: out });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+async function loadPending(req, res) {
+  const [[a]] = await db.query('SELECT * FROM approval_requests WHERE id=?', [req.params.id]);
+  if (!a) { res.status(404).json({ success: false, message: 'Không tìm thấy yêu cầu' }); return null; }
+  if (a.status !== 'pending') { res.status(400).json({ success: false, message: 'Yêu cầu này đã được xử lý rồi' }); return null; }
+  return { ...a, changes: parseJson(a.changes), approver_ids: parseJson(a.approver_ids) };
+}
+
+// POST /users/approvals/:id/approve — Leader nhóm của người bị sửa đồng ý → áp dụng
+exports.approve = async (req, res) => {
+  try {
+    const a = await loadPending(req, res); if (!a) return;
+    // vẫn phải đang là Leader nhóm của người đó (có thể đã đổi nhóm / đổi vai trò sau khi gửi)
+    const { leaders } = await groupLeadersOf(a.target_user_id, a.requester_id);
+    if (!a.approver_ids.includes(req.user.id) || !leaders.some(l => l.id === req.user.id))
+      return res.status(403).json({ success: false, message: 'Bạn không phải Leader nhóm của người này nên không duyệt được' });
+    const [[rq]] = await db.query('SELECT id, role, username, full_name, is_active FROM users WHERE id=?', [a.requester_id]);
+    const [[t]] = await db.query('SELECT role FROM users WHERE id=?', [a.target_user_id]);
+    const fail = (m) => res.status(400).json({ success: false, message: m });
+    if (!rq?.is_active || !hasPerm(rq, 'user.manage')) return fail('Người gửi không còn quyền quản lý tài khoản — yêu cầu không áp dụng được');
+    if (!t || ['admin', 'manager'].includes(t.role)) return fail('Không áp dụng được cho tài khoản Admin / Manager');
+    const s = a.changes;
+    if (s.role !== undefined && (!LOWER_ROLES.includes(t.role) || !LOWER_ROLES.includes(s.role)))
+      return fail('Chỉ đổi được vai trò giữa Nhân viên và Trợ lý Leader');
+
+    const before = await getUserSnapshot(a.target_user_id);
+    if (s.role !== undefined || s.is_active !== undefined)
+      await db.query('UPDATE users SET role=COALESCE(?,role), is_active=COALESCE(?,is_active) WHERE id=?', [s.role ?? null, s.is_active ?? null, a.target_user_id]);
+    if (s.group_id !== undefined) {
+      await db.query('DELETE FROM group_members WHERE user_id=?', [a.target_user_id]);
+      if (s.group_id) await db.query('INSERT IGNORE INTO group_members (group_id,user_id) VALUES (?,?)', [s.group_id, a.target_user_id]);
+    }
+    invalidateUser(a.target_user_id);
+    cache.clear('grp:');
+    await db.query("UPDATE approval_requests SET status='approved', decided_by=?, decided_at=NOW(), decision_note=? WHERE id=?",
+      [req.user.id, String(req.body?.note || '').slice(0, 500) || null, a.id]);
+    const after = await getUserSnapshot(a.target_user_id);
+    const diff = diffFields(before, after, USER_FIELDS);
+    await logActivity({
+      actorId: a.requester_id, actionType: diff.changes.is_active ? (+after.is_active ? 'user_unlocked' : 'user_locked') : diff.changes.role ? 'user_role_changed' : 'user_updated',
+      entityType: 'user', entityId: a.target_user_id,
+      description: `${rq.full_name} đã sửa tài khoản ${before.full_name} (${before.username}): ${diff.text || '(không đổi gì)'} — được ${actorOf(req)} (Leader nhóm) ĐỒNG Ý`,
+      metadata: { approval_id: a.id, approved_by: req.user.id, changes: diff.changes },
+    });
+    notify(req.app.get('io'), { userId: a.requester_id, actorId: req.user.id, type: 'user_change_approved', entityType: 'user_approval', entityId: a.id,
+      payload: { actorName: actorOf(req), targetName: before.full_name, what: diff.text } }).catch(() => {});
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// POST /users/approvals/:id/reject — Leader nhóm từ chối
+exports.reject = async (req, res) => {
+  try {
+    const a = await loadPending(req, res); if (!a) return;
+    if (!a.approver_ids.includes(req.user.id)) return res.status(403).json({ success: false, message: 'Bạn không phải người duyệt yêu cầu này' });
+    const note = String(req.body?.note || '').trim().slice(0, 500) || null;
+    await db.query("UPDATE approval_requests SET status='rejected', decided_by=?, decided_at=NOW(), decision_note=? WHERE id=?", [req.user.id, note, a.id]);
+    const t = await getUserSnapshot(a.target_user_id);
+    const what = await describeChanges(a.changes, t || {});
+    await logActivity({
+      actorId: req.user.id, actionType: 'user_change_rejected', entityType: 'user', entityId: a.target_user_id,
+      description: `${actorOf(req)} đã TỪ CHỐI yêu cầu sửa tài khoản ${t?.full_name} (${what})${note ? ` — Lý do: ${note}` : ''}`,
+      metadata: { approval_id: a.id, note },
+    });
+    notify(req.app.get('io'), { userId: a.requester_id, actorId: req.user.id, type: 'user_change_rejected', entityType: 'user_approval', entityId: a.id,
+      payload: { actorName: actorOf(req), targetName: t?.full_name, what, note } }).catch(() => {});
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// POST /users/approvals/:id/hide — người gửi xóa (ẩn) 1 yêu cầu ĐÃ XỬ LÝ khỏi danh sách của mình (nhật ký vẫn giữ)
+// POST /users/approvals/hide-done — xóa (ẩn) tất cả yêu cầu đã xử lý
+exports.hideApproval = async (req, res) => {
+  try {
+    const all = req.params.id === undefined;
+    const [r] = await db.query(
+      `UPDATE approval_requests SET requester_hidden=1 WHERE requester_id=? AND status<>'pending'${all ? '' : ' AND id=?'}`,
+      all ? [req.user.id] : [req.user.id, req.params.id]);
+    if (!all && !r.affectedRows) return res.status(400).json({ success: false, message: 'Chỉ xóa được yêu cầu của mình đã xử lý xong (yêu cầu đang chờ thì bấm Hủy)' });
+    res.json({ success: true, data: { hidden: r.affectedRows } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// POST /users/approvals/:id/cancel — người gửi tự hủy
+exports.cancelApproval = async (req, res) => {
+  try {
+    const a = await loadPending(req, res); if (!a) return;
+    if (a.requester_id !== req.user.id) return res.status(403).json({ success: false, message: 'Chỉ người gửi mới hủy được yêu cầu' });
+    await db.query("UPDATE approval_requests SET status='cancelled', decided_at=NOW(), decision_note='Người gửi tự hủy' WHERE id=?", [a.id]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -223,7 +419,7 @@ exports.resetPassword = async (req, res) => {
 
     const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [req.params.id]);
     if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-    if (req.user.role === 'leader' && ['admin','manager'].includes(target.role)) {
+    if (!['admin','manager'].includes(req.user.role) && ['admin','manager'].includes(target.role)) {
       return res.status(403).json({ success: false, message: 'Leader không có quyền đổi mật khẩu tài khoản admin/manager' });
     }
     if (target.role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
@@ -247,6 +443,12 @@ exports.resetPassword = async (req, res) => {
 exports.importUsers = async (req, res) => {
   try {
     const { users } = req.body;
+    if (!Array.isArray(users)) return res.status(400).json({ success: false, message: 'Thiếu danh sách tài khoản' });
+    if (users.length > 500) return res.status(400).json({ success: false, message: 'Tối đa 500 dòng mỗi lần nhập' });
+    // Giống "Tạo tài khoản": Leader chỉ tạo nhân viên, chỉ Admin tạo được admin; chỉ Admin được tạo nhóm mới
+    const actorRole = req.user.role;
+    const allowedRoles = actorRole === 'admin' ? ROLES : actorRole === 'manager' ? ROLES.filter(r => r !== 'admin') : LOWER_ROLES;
+    const groupIdCache = new Map();
     const COLORS = ['#3a7bd5','#27ae60','#e67e22','#e74c3c','#8e44ad','#16a085','#2980b9','#c0392b'];
 
 
@@ -266,6 +468,30 @@ exports.importUsers = async (req, res) => {
         if (!uname) { errors.push({ name: u.full_name, error: 'Thiếu MSNV' }); continue; }
         if (uname.length > 50) { errors.push({ name: u.full_name, error: 'MSNV quá dài (tối đa 50 ký tự)' }); continue; }
         const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+        const rawRole = String(u.role || '').trim().toLowerCase();
+        const role = ROLES.includes(rawRole) ? rawRole : 'user';
+        if (!allowedRoles.includes(role)) {
+          errors.push({ name: u.full_name, error: actorRole !== 'manager'
+            ? `Bạn chỉ tạo được Nhân viên (user) hoặc Trợ lý Leader (assistant) — dòng này là "${role}"`
+            : 'Chỉ Admin mới tạo được tài khoản admin' });
+          continue;
+        }
+        // Nhóm: tìm trước khi tạo tài khoản — người không phải Admin không được tạo nhóm mới
+        const gname = String(u.group_name || '').trim();
+        let gid = null;
+        if (gname) {
+          const key = gname.toLowerCase();
+          if (groupIdCache.has(key)) gid = groupIdCache.get(key);
+          else {
+            const [gs] = await db.query('SELECT id FROM `groups` WHERE LOWER(name)=LOWER(?) AND is_active=1 LIMIT 1', [gname]);
+            gid = gs[0]?.id || null;
+            if (gid) groupIdCache.set(key, gid);
+          }
+          if (!gid && actorRole !== 'admin') {
+            errors.push({ name: u.full_name, error: `Nhóm "${gname}" chưa có — nhờ Admin tạo nhóm trước` });
+            continue;
+          }
+        }
 
         console.log('[import] Processing:', u.full_name, '→ username:', uname);
 
@@ -281,25 +507,16 @@ exports.importUsers = async (req, res) => {
         const hash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
         const [r]  = await db.query(
           'INSERT INTO users (username,email,password,full_name,role,avatar_color) VALUES (?,?,?,?,?,?)',
-          [uname, u.email||null, hash, u.full_name.trim(), ROLES.includes(u.role) ? u.role : 'user', color]
+          [uname, u.email||null, hash, u.full_name.trim(), role, color]
         );
         console.log('[import] Insert result:', r.insertId, r.affectedRows);
 
-        if (r.insertId && u.group_name && u.group_name.trim()) {
+        if (r.insertId && gname) {
           try {
-            const [gs] = await db.query(
-              'SELECT id FROM `groups` WHERE LOWER(name)=LOWER(?) AND is_active=1 LIMIT 1',
-              [u.group_name.trim()]
-            );
-            let gid;
-            if (gs.length) {
-              gid = gs[0].id;
-            } else {
-              const [nr] = await db.query(
-                'INSERT INTO `groups` (name, icon, is_active) VALUES (?,?,1)',
-                [u.group_name.trim(), '🏭']
-              );
+            if (!gid) { // chỉ Admin tới được đây: tạo nhóm mới
+              const [nr] = await db.query('INSERT INTO `groups` (name, icon, is_active) VALUES (?,?,1)', [gname, '🏭']);
               gid = nr.insertId;
+              groupIdCache.set(gname.toLowerCase(), gid);
             }
             await db.query(
               'INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?,?)',
@@ -311,7 +528,13 @@ exports.importUsers = async (req, res) => {
         }
 
         created++;
-      } catch (e) { errors.push({ name: u.full_name, error: e.message }); }
+      } catch (e) {
+        // lỗi database → câu dễ hiểu (vd trùng email)
+        const msg = e.code === 'ER_DUP_ENTRY'
+          ? (/email/i.test(e.message) ? `Email ${u.email} đã có tài khoản khác dùng` : `MSNV ${u.username} đã có tài khoản khác dùng`)
+          : e.message;
+        errors.push({ name: u.full_name, error: msg });
+      }
     }
 
     if (created) await logActivity({
@@ -319,6 +542,8 @@ exports.importUsers = async (req, res) => {
       description: `${actorOf(req)} đã nhập ${created} tài khoản từ file${duplicates.length ? ` (${duplicates.length} trùng, bỏ qua)` : ''}`,
       metadata: { created, duplicates: duplicates.length, errors: errors.length },
     });
+    const byName = new Map(users.map(x => [x.full_name, String(x.username ?? '')]));
+    errors.forEach(e => { if (e.username === undefined) e.username = byName.get(e.name) || ''; });
     res.json({ success: true, data: { created, duplicates, errors,
       message: `Đã tạo ${created} user${duplicates.length ? `, ${duplicates.length} trùng username` : ''}${errors.length ? `, ${errors.length} lỗi` : ''}`
     }});
@@ -334,7 +559,7 @@ exports.remove = async (req, res) => {
     const [[target]] = await db.query('SELECT role FROM users WHERE id=?', [id]);
     if (!target) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     // Leader có quyền xóa user, NHƯNG không được xóa tài khoản admin/manager
-    if (req.user.role === 'leader' && ['admin','manager'].includes(target.role)) {
+    if (!['admin','manager'].includes(req.user.role) && ['admin','manager'].includes(target.role)) {
       return res.status(403).json({ success: false, message: 'Leader không có quyền xóa tài khoản admin/manager' });
     }
     if (target.role === 'admin' && req.user.role !== 'admin') return res.status(403).json(ADMIN_ONLY);
@@ -374,14 +599,14 @@ exports.importTemplate = async (req, res) => {
     ws.columns = [
       { header: 'Họ tên', key: 'name', width: 26 },
       { header: 'Email', key: 'email', width: 26 },
-      { header: 'Vai trò (user/assistant/leader/manager/admin)', key: 'role', width: 24 },
+      { header: !['admin','manager'].includes(req.user.role) ? 'Vai trò (user/assistant)' : `Vai trò (${req.user.role === 'admin' ? ROLES.join('/') : ROLES.filter(r => r !== 'admin').join('/')})`, key: 'role', width: 24 },
       { header: 'Nhóm', key: 'group', width: 18 },
       { header: 'MSNV', key: 'msnv', width: 14, style: { numFmt: '@' } },
     ];
     styleHeader(ws);
     [['Nguyễn Văn A', 'nva@smc.com', 'user', 'MES', '019001'],
      ['Trần Thị B', '', 'user', 'MES', '019002'],
-     ['Lê Văn C', 'lvc@smc.com', 'leader', 'Bảo trì', '009003']]
+     ['Lê Văn C', 'lvc@smc.com', !['admin','manager'].includes(req.user.role) ? 'user' : 'leader', 'Bảo trì', '009003']]
       .forEach(([name, email, role, group, msnv]) => ws.addRow({ name, email, role, group, msnv }));
     // Định dạng TEXT cho cả cột MSNV (kể cả các dòng người dùng gõ thêm sau này)
     for (let r = 2; r <= 1000; r++) ws.getCell(`E${r}`).numFmt = '@';
@@ -416,4 +641,58 @@ exports.parseImportFile = async (req, res) => {
     });
     res.json({ success: true, data: rows });
   } catch (e) { res.status(400).json({ success: false, message: `Không đọc được file Excel: ${e.message}` }); }
+};
+
+// ───────────── Ảnh đại diện ─────────────
+// Ảnh đã được trình duyệt cắt vuông + thu nhỏ (256px) trước khi gửi → chỉ kiểm tra loại & dung lượng
+const AVATAR_DIR = require('path').join(__dirname, '../uploads/avatars');
+const AVATAR_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+// nhận diện ảnh thật bằng vài byte đầu file (không tin đuôi / mime trình duyệt gửi)
+const sniff = (b) => (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) ? 'image/jpeg'
+  : (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) ? 'image/png'
+  : (b.slice(0, 4).toString() === 'RIFF' && b.slice(8, 12).toString() === 'WEBP') ? 'image/webp' : null;
+const removeAvatarFile = (url) => {
+  if (!url || !url.startsWith('/uploads/avatars/')) return;
+  const f = require('path').join(AVATAR_DIR, require('path').basename(url));
+  require('fs').promises.unlink(f).catch(() => {});
+};
+
+// POST /auth/avatar (multipart "file") — tự đổi ảnh của mình
+exports.uploadAvatar = async (req, res) => {
+  try {
+    if (!require('../config/settings').on('profile.avatar_upload'))
+      return res.status(403).json({ success: false, message: 'Admin đang tắt chức năng tự đổi ảnh đại diện' });
+    if (!req.file) return res.status(400).json({ success: false, message: 'Chưa chọn ảnh' });
+    const type = sniff(req.file.buffer);
+    if (!type) return res.status(400).json({ success: false, message: 'Chỉ nhận ảnh JPG, PNG hoặc WEBP' });
+    const fs = require('fs');
+    await fs.promises.mkdir(AVATAR_DIR, { recursive: true });
+    const name = `u${req.user.id}-${Date.now()}${AVATAR_TYPES[type]}`;
+    await fs.promises.writeFile(require('path').join(AVATAR_DIR, name), req.file.buffer);
+    const [[old]] = await db.query('SELECT avatar_url FROM users WHERE id=?', [req.user.id]);
+    const url = `/uploads/avatars/${name}`;
+    await db.query('UPDATE users SET avatar_url=? WHERE id=?', [url, req.user.id]);
+    removeAvatarFile(old?.avatar_url);
+    cache.clear('grp:'); cache.clear('dash:');
+    await logActivity({ actorId: req.user.id, actionType: 'user_avatar_changed', entityType: 'user', entityId: req.user.id,
+      description: `${actorOf(req)} đã đổi ảnh đại diện`, metadata: { avatar_url: url } });
+    res.json({ success: true, data: { avatar_url: url } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// DELETE /auth/avatar — bỏ ảnh của mình | DELETE /users/:id/avatar — Admin/Manager bỏ ảnh của người khác (ảnh không phù hợp)
+exports.removeAvatar = async (req, res) => {
+  try {
+    const id = req.params.id ? +req.params.id : req.user.id;
+    if (id !== req.user.id && !['admin', 'manager'].includes(req.user.role))
+      return res.status(403).json({ success: false, message: 'Chỉ Admin / Manager mới xóa ảnh của người khác' });
+    const [[u]] = await db.query('SELECT full_name, avatar_url FROM users WHERE id=?', [id]);
+    if (!u) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    await db.query('UPDATE users SET avatar_url=NULL WHERE id=?', [id]);
+    removeAvatarFile(u.avatar_url);
+    cache.clear('grp:'); cache.clear('dash:');
+    await logActivity({ actorId: req.user.id, actionType: 'user_avatar_changed', entityType: 'user', entityId: id,
+      description: id === req.user.id ? `${actorOf(req)} đã bỏ ảnh đại diện` : `${actorOf(req)} đã XÓA ảnh đại diện của ${u.full_name}` });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

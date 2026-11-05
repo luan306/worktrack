@@ -1,4 +1,6 @@
 // Công việc hằng ngày (thay cho Daily cũ) - Nhân viên ghi chú từng việc mình làm trong ngày
+const { hasPerm } = require('../config/permissions');
+const settings = require('../config/settings');
 const ExcelJS = require('exceljs');
 const db    = require('../config/db');
 const cache = require('../config/cache');
@@ -16,16 +18,37 @@ const fail = (res, status, message) => res.status(status).json({ success: false,
 
 // Leader xem/chấm được người cùng nhóm; Admin/Manager: mọi người; ai cũng xem được chính mình
 async function canView(req, userId) {
-  if (+userId === req.user.id || isPrivileged(req)) return true;
-  if (req.user.role !== 'leader') return false;
+  if (+userId === req.user.id || (isPrivileged(req) && hasPerm(req.user, 'wl.score'))) return true;
+  if (!hasPerm(req.user, 'wl.score')) return false;
   const [[row]] = await db.query(
     `SELECT 1 AS x FROM group_members a JOIN group_members b ON b.group_id=a.group_id
       WHERE a.user_id=? AND b.user_id=? LIMIT 1`, [req.user.id, userId]);
   return !!row;
 }
+// 🔔 Nhân viên vừa ghi việc → báo người chấm của nhóm (Admin bật "Báo ngay khi nhân viên ghi công việc")
+async function notifyNewEntry(req, workDate, title) {
+  if (!settings.on('notif.entry_instant')) return;
+  const roles = ['leader', ...(settings.on('notif.manager_group') ? ['manager'] : [])];
+  const [rows] = await db.query(
+    `SELECT DISTINCT l.id FROM group_members a
+       JOIN group_members b ON b.group_id=a.group_id
+       JOIN users l ON l.id=b.user_id AND l.role IN (?) AND l.is_active=1
+      WHERE a.user_id=? AND l.id<>?`, [roles, req.user.id, req.user.id]);
+  if (!rows.length) return;
+  // chống ngập chuông: mỗi người nhận chỉ 1 thông báo / nhân viên / ngày
+  const [sent] = await db.query(
+    `SELECT user_id FROM notifications WHERE type='worklog_entry_new' AND entity_id=? AND created_at >= CURDATE()`, [req.user.id]);
+  const done = new Set(sent.map(r => r.user_id));
+  const ids = rows.map(r => r.id).filter(id => !done.has(id));
+  if (!ids.length) return;
+  await notifyMany(req.app.get('io'), ids, {
+    actorId: req.user.id, type: 'worklog_entry_new', entityType: 'worklog', entityId: req.user.id,
+    payload: { workDate, title: String(title || '').slice(0, 80), actorName: actorOf(req) },
+  });
+}
+
 // Quyền chấm khi ĐÃ biết xem được: không ai tự chấm cho chính mình, nhân viên thường không chấm
-const STAFF = ['user', 'assistant']; // nhân viên + Trợ lý Leader: không chấm điểm hằng ngày
-const scoresVisible = (req, userId) => +userId !== req.user.id && !STAFF.includes(req.user.role);
+const scoresVisible = (req, userId) => +userId !== req.user.id && hasPerm(req.user, 'wl.score');
 const canScore = async (req, userId) => scoresVisible(req, userId) && canView(req, userId);
 
 const dayScoreOf = async (userId, date) =>
@@ -104,13 +127,13 @@ exports.week = async (req, res) => {
     ]);
     if (!user) return fail(res, 404, 'Không tìm thấy người dùng');
     // Lý do nghỉ là thông tin riêng → chỉ Leader/Manager/Admin thấy; nhân viên chỉ thấy tên + loại nghỉ
-    const seeReason = !STAFF.includes(req.user.role);
+    const seeReason = hasPerm(req.user, 'wl.score');
     // trừ người đang xem (ngày nghỉ của họ đã có ở `offs`)
     const team_offs = teamOffs.filter(o => o.user_id !== userId).map(o => ({ ...o, reason: seeReason ? o.reason : null }));
     const scorer = scoresVisible(req, userId);
     res.json({ success: true, data: {
       user, week_start: start, week_end: end, today: localDate(),
-      entries, scores, offs, team_offs, holidays, can_manage_holidays: req.user.role === 'admin',
+      entries, scores, offs, team_offs, holidays, can_manage_holidays: hasPerm(req.user, 'wl.holidays'),
       can_edit: userId === req.user.id, can_score: scorer,
       can_mark_off: userId === req.user.id || scorer, max_score: MAX_SCORE,
     } });
@@ -146,6 +169,7 @@ exports.createEntry = async (req, res) => {
         'INSERT INTO daily_entries (user_id, work_date, title, description) VALUES (?,?,?,?)',
         [req.user.id, start, body.title, body.description || null]);
       broadcast(req, req.user.id, start);
+      notifyNewEntry(req, start, body.title).catch(e => console.error('[notify entry]', e.message));
       return res.status(201).json({ success: true, data: { id: r.insertId, created: 1, skipped: 0 } });
     }
 
@@ -154,6 +178,7 @@ exports.createEntry = async (req, res) => {
       'INSERT INTO daily_entries (user_id, work_date, title, description, span_start, span_end) VALUES ?',
       [days.map(d => [req.user.id, d, body.title, body.description || null, start, end])]);
     broadcast(req, req.user.id, start);
+    notifyNewEntry(req, start, body.title).catch(e => console.error('[notify entry]', e.message));
     res.status(201).json({ success: true, data: { id: r.insertId, created: days.length, skipped } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -429,11 +454,11 @@ async function viewableUsers(req, onlyId) {
               WHERE u.is_active=1`;
   const p = [];
   if (onlyId) { sql += ' AND u.id=?'; p.push(onlyId); }
-  else if (req.user.role === 'leader') {
+  else if (hasPerm(req.user, 'wl.score') && !isPrivileged(req)) {
     sql += ` AND (u.id=? OR u.id IN (SELECT b.user_id FROM group_members a
                                       JOIN group_members b ON b.group_id=a.group_id WHERE a.user_id=?))`;
     p.push(req.user.id, req.user.id);
-  } else if (!isPrivileged(req)) { sql += ' AND u.id=?'; p.push(req.user.id); }
+  } else if (!(isPrivileged(req) && hasPerm(req.user, 'wl.score'))) { sql += ' AND u.id=?'; p.push(req.user.id); }
   sql += ' GROUP BY u.id ORDER BY u.full_name';
   return (await db.query(sql, p))[0];
 }
@@ -601,8 +626,14 @@ exports.overview = async (req, res) => {
 const PENDING_DAYS = 30;
 exports.pending = async (req, res) => {
   try {
-    if (STAFF.includes(req.user.role)) return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
-    const people = (await viewableUsers(req)).filter(u => scoresVisible(req, u.id));
+    if (!hasPerm(req.user, 'wl.score')) return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
+    let people = (await viewableUsers(req)).filter(u => scoresVisible(req, u.id));
+    if (req.query.scope === 'group') {
+      const [mates] = await db.query(
+        'SELECT DISTINCT b.user_id FROM group_members a JOIN group_members b ON b.group_id=a.group_id WHERE a.user_id=?', [req.user.id]);
+      const ok = new Set(mates.map(m => m.user_id));
+      people = people.filter(u => ok.has(u.id));
+    }
     const today = localDate();
     // kèm 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở
     const days = await pendingScoreDays({ from: addDays(today, -PENDING_DAYS), to: today, userIds: people.map(u => u.id), titles: !req.query.count });

@@ -33,7 +33,7 @@ async function getOpenPeriod(q = db, forUpdate = false) {
 
 // ⚠️ LEFT JOIN group_members (không phải JOIN)
 async function getMembers(groupId, q = db) {
-  let sql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.role
+  let sql = `SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_color, u.avatar_url, u.role
                FROM users u
                LEFT JOIN group_members gm ON gm.user_id = u.id
               WHERE u.is_active = 1 AND u.role NOT IN ('admin','manager')`;
