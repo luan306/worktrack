@@ -436,6 +436,7 @@ export default function BoardPage() {
   const { user, can } = useAuth();
   const navigate = useNavigate();
   const isLeader = can('admin', 'manager', 'leader');
+  const canCreate = isLeader || can('assistant'); // Trợ lý Leader được tạo CV thay Leader
   const today = new Date().toLocaleDateString('en-CA');
   const greeting = (() => {
     const h = new Date().getHours();
@@ -720,7 +721,7 @@ export default function BoardPage() {
           </span>
         </div>
         <div className="brd-date" style={{ fontSize: 11.5, color: C.sub, background: C.canvas, padding: '5px 13px', borderRadius: 20, border: `1px solid ${C.line}`, whiteSpace: 'nowrap', fontFamily: FONT_MONO, flexShrink: 0 }}>📅 {fmtDate(today)}</div>
-        {isLeader && <div className="brd-create-btn" style={{ flexShrink: 0 }}><BtnPrimary onClick={() => navigate('/requests?create=1')}>＋ {t('board_create_request')}</BtnPrimary></div>}
+        {canCreate && <div className="brd-create-btn" style={{ flexShrink: 0 }}><BtnPrimary onClick={() => navigate('/requests?create=1')}>＋ {t('board_create_request')}</BtnPrimary></div>}
       </div>
 
       <div className="brd-hint" style={{ display: 'none', padding: '6px 20px', background: C.canvas, borderBottom: `1px solid ${C.line}`, alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 11, color: C.faint, flexShrink: 0 }}>
@@ -733,7 +734,7 @@ export default function BoardPage() {
           <ColHdr icon="📨" iconColor={C.warning} title={t('board_col_requests')} count={filteredRequests.length} total={requests.length}
             countBg={C.warningSoft} countColor={C.warning}
             onExpand={requests.length > 0 ? () => setExpanded('requests') : null}
-            extra={isLeader && <BtnPrimary small onClick={() => navigate('/requests?create=1')}>＋ {t('create')}</BtnPrimary>} />
+            extra={canCreate && <BtnPrimary small onClick={() => navigate('/requests?create=1')}>＋ {t('create')}</BtnPrimary>} />
 
           <FilterBar>
             {reqCounts.mine > 0 && reqFilter !== 'mine' && (

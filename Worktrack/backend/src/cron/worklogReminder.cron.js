@@ -73,7 +73,7 @@ async function remindMissing(io, today, hol) {
   const day = prevWorkday(today, hol);
   const [rows] = await db.query(
     `SELECT u.id FROM users u
-      WHERE u.is_active=1 AND u.role IN ('user','leader') AND DATE(u.created_at) <= ?
+      WHERE u.is_active=1 AND u.role IN ('user','assistant','leader') AND DATE(u.created_at) <= ?
         AND NOT EXISTS (SELECT 1 FROM daily_entries  e WHERE e.user_id=u.id AND e.work_date=?)
         AND NOT EXISTS (SELECT 1 FROM daily_day_offs o WHERE o.user_id=u.id AND o.work_date=? AND o.kind='full')`,
     [day, day, day]);

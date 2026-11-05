@@ -86,7 +86,7 @@ router.delete('/worklog/holidays',      auth(['admin']), wlC.removeHolidays);
 router.get   ('/requests',                    auth(), rC.list);
 router.get   ('/requests/:id',                auth(), rC.getOne);
 router.get   ('/requests/:id/activity',       auth(), rC.getActivity);
-router.post  ('/requests',                    auth(['admin','manager','leader']), rC.create);
+router.post  ('/requests',                    auth(['admin','manager','leader','assistant']), rC.create);
 router.put   ('/requests/:id',                auth(), rC.update);
 router.post  ('/requests/:id/assign',         auth(), rC.addAssignee);
 router.delete('/requests/:id/assign/:userId', auth(), rC.removeAssignee);

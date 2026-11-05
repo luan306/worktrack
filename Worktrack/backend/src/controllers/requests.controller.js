@@ -237,10 +237,33 @@ exports.getActivity = async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
+// Trợ lý Leader: các nhóm mình thuộc + thành viên (đang hoạt động) của các nhóm đó
+async function assistantScope(userId) {
+  const [rows] = await db.query(
+    `SELECT gm.group_id, m.user_id FROM group_members gm
+       JOIN \`groups\` g ON g.id=gm.group_id AND g.is_active=1
+       JOIN group_members m ON m.group_id=gm.group_id
+       JOIN users u ON u.id=m.user_id AND u.is_active=1
+      WHERE gm.user_id=?`, [userId]);
+  return { groups: new Set(rows.map(r => r.group_id)), members: new Set(rows.map(r => r.user_id)) };
+}
+const ASSISTANT_GROUP_ONLY = 'Trợ lý Leader chỉ giao được cho thành viên trong nhóm mình';
+
 exports.create = async (req, res) => {
   try {
-    const { title, description, priority='medium', group_id, deadline, assignees=[], score } = req.body;
+    const { title, description, priority='medium', deadline, assignees=[] } = req.body;
+    let { group_id, score } = req.body;
     if (!title) return res.status(400).json({ success: false, message: 'title required' });
+
+    // Trợ lý Leader: tạo CV thay Leader — chỉ cho nhóm mình, chỉ giao người trong nhóm, không đặt điểm
+    if (req.user.role === 'assistant') {
+      const scope = await assistantScope(req.user.id);
+      if (!scope.groups.size) return res.status(403).json({ success: false, message: 'Bạn chưa thuộc nhóm nào nên chưa tạo được CV' });
+      if (group_id && !scope.groups.has(+group_id)) return res.status(403).json({ success: false, message: 'Trợ lý Leader chỉ tạo được CV cho nhóm của mình' });
+      if (!group_id) group_id = [...scope.groups][0];
+      if (assignees.some(a => !scope.members.has(+a.user_id))) return res.status(403).json({ success: false, message: ASSISTANT_GROUP_ONLY });
+      score = undefined;
+    }
 
     const fields = ['title','description','priority','status','created_by','group_id','deadline'];
     const vals   = [title, description||null, priority,
@@ -329,6 +352,8 @@ exports.update = async (req, res) => {
     const isAdmin   = ['admin','manager'].includes(req.user.role);
     const isLeaderRole = ['admin','manager','leader'].includes(req.user.role);
     const isCreator = task.created_by === req.user.id;
+    // Trợ lý Leader tạo CV thay Leader: chỉ sửa thông tin CV, không có quyền chấm / duyệt / đổi trạng thái của người tạo
+    const creatorPower = isCreator && req.user.role !== 'assistant';
     const [[assigned]] = await db.query('SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]);
     const isAssignee = !!assigned;
     const statusChanged = status !== undefined && status !== task.status;
@@ -341,11 +366,12 @@ exports.update = async (req, res) => {
       return deny('CV đã hoàn thành — chỉ Manager/Admin mới được chỉnh sửa');
     if ([title, description, priority, deadline, started_at].some(v => v !== undefined) && !isCreator && !isAdmin)
       return deny('Chỉ người tạo CV hoặc Manager/Admin mới được sửa thông tin CV');
-    if (completed_at !== undefined && !isLeaderRole && !isCreator)
+    if (completed_at !== undefined && !isLeaderRole && !creatorPower)
       return deny('Bạn không có quyền sửa thời gian hoàn thành');
 
     // Người thực hiện (không phải leader/người tạo) chỉ được đi đúng luồng
-    if (statusChanged && !isLeaderRole && !isCreator) {
+    if (statusChanged && !isLeaderRole && !creatorPower) {
+      if (!isAssignee) return deny('Chỉ người thực hiện mới được đổi trạng thái CV');
       const FLOW = {
         in_progress: ['pending', 'assigned'],
         scoring:     ['assigned', 'in_progress'],
@@ -413,7 +439,7 @@ exports.update = async (req, res) => {
     // Chấm RIÊNG từng người: assignee_scores = [{ user_id, score }]
     let perPerson = null;
     if (Array.isArray(req.body.assignee_scores) && req.body.assignee_scores.length) {
-      if (!isLeaderRole && !isCreator) return deny('Bạn không có quyền chấm điểm CV này');
+      if (!isLeaderRole && !creatorPower) return deny('Bạn không có quyền chấm điểm CV này');
       const [rows] = await db.query(
         `SELECT a.user_id, a.role, u.full_name AS name FROM request_task_assignees a JOIN users u ON u.id=a.user_id WHERE a.task_id=?`, [id]);
       const byId = new Map(rows.map(r => [r.user_id, r]));
@@ -431,7 +457,7 @@ exports.update = async (req, res) => {
       score = Math.round(perPerson.reduce((s, p) => s + p.score, 0) / perPerson.length * 10) / 10;
     }
 
-    const scoreChanged = score !== undefined && (isLeaderRole||isCreator);
+    const scoreChanged = score !== undefined && (isLeaderRole||creatorPower);
 
     // Score do leader/manager/admin (hoặc creator) chấm
     if (scoreChanged) {
@@ -527,6 +553,8 @@ exports.addAssignee = async (req, res) => {
     const { id } = req.params;
     const task = await loadAssignableTask(req, res, id, 'CV đã hoàn thành, không thể thêm người nữa');
     if (!task) return;
+    if (req.user.role === 'assistant' && !(await assistantScope(req.user.id)).members.has(+user_id))
+      return res.status(403).json({ success: false, message: ASSISTANT_GROUP_ONLY });
 
     if (role === 'main') {
       const [[main]] = await db.query(
@@ -798,7 +826,7 @@ exports.remove = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
     // Trước đây route chỉ cần đăng nhập → user thường xóa được CV của bất kỳ ai
     const isAdmin = ['admin','manager'].includes(req.user.role);
-    if (!isAdmin && task.created_by !== req.user.id)
+    if (!isAdmin && (task.created_by !== req.user.id || req.user.role === 'assistant'))
       return res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được xóa CV' });
     if (!isAdmin && ['done', 'archived'].includes(task.status))
       return res.status(403).json({ success: false, message: 'CV đã hoàn thành (đã tính điểm) — chỉ Manager/Admin mới được xóa' });

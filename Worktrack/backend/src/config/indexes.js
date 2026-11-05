@@ -105,6 +105,15 @@ async function ensureIndexes() {
       console.log('[indexes] request_task_assignees.added_late → đánh dấu người thêm sau khi nộp');
     }
 
+    // Vai trò "Trợ lý Leader" (assistant): chỉ được tạo CV yêu cầu thay Leader cho nhóm mình
+    const [[roleCol]] = await db.query(
+      `SELECT column_type AS t FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='users' AND column_name='role'`);
+    const roleType = roleCol?.t || roleCol?.COLUMN_TYPE || '';
+    if (/^enum\(/i.test(roleType) && !/'assistant'/.test(roleType)) {
+      await db.query(`ALTER TABLE users MODIFY role ENUM('admin','manager','leader','assistant','user') NOT NULL DEFAULT 'user'`);
+      console.log("[indexes] users.role → thêm vai trò 'assistant' (Trợ lý Leader)");
+    }
+
     // Bắt đổi mật khẩu mặc định: 1 = chỉ gọi được API đổi mật khẩu (bật khi đăng nhập bằng mật khẩu mặc định)
     if (!col('users', 'must_change_password')) {
       await db.query('ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0');

@@ -306,6 +306,8 @@ export default function RequestsPage() {
   const { user, can } = useAuth();
   const [searchParams] = useSearchParams();
   const isLeader = can('admin','manager','leader');
+  const isAssistant = user?.role === 'assistant'; // Trợ lý Leader: chỉ tạo CV thay Leader cho nhóm mình
+  const canCreate = isLeader || isAssistant;
   const currentLocale = LOCALE_MAP[i18n.language] || 'vi-VN';
   const now = useNow(60000); // nhãn "Mới" (tạo trong 24h) tự hết hạn, không gọi Date.now() lúc vẽ
 
@@ -319,7 +321,7 @@ export default function RequestsPage() {
   const [scope,   setScope]   = useState('all'); // all | mine (tôi làm) | created (tôi tạo/giao)
   const [search,  setSearch]  = useState('');
   const [selected,setSelected]= useState(
-    isLeader && searchParams.get('create')==='1' ? 'new' :
+    canCreate && searchParams.get('create')==='1' ? 'new' :
     searchParams.get('id') ? {id:+searchParams.get('id')} : null
   );
 
@@ -340,6 +342,12 @@ export default function RequestsPage() {
     if (!user?.id) return;
     return onRealtime('requests:updated', () => { clearApiCache(); reload(); });
   }, [user?.id]);
+
+  // Trợ lý Leader chỉ chọn được nhóm mình thuộc và người trong các nhóm đó (server cũng kiểm tra lại)
+  const myGroupIds = new Set((user?.groups || []).map(g => g.id));
+  const myGroups = isAssistant ? groups.filter(g => myGroupIds.has(g.id)) : groups;
+  const myMemberIds = new Set(myGroups.flatMap(g => (g.members || []).map(m => m.id)));
+  const myUsers = isAssistant ? users.filter(u => myMemberIds.has(u.id)) : users;
 
   // Trang Requests chỉ gồm CV LIÊN QUAN ĐẾN MÌNH (mình làm hoặc mình tạo/giao) — mọi CV của công ty xem ở Board
   const relationOf = (t2) =>
@@ -431,7 +439,7 @@ export default function RequestsPage() {
       <div className={`req-list-panel${selected ? ' req-list-selected' : ''}`} style={{flex:selected?'0 0 300px':'1 1 auto',minWidth:0,display:'flex',flexDirection:'column',borderRight:`1.5px solid ${C.border}`,overflow:'hidden'}}>
         <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:8,background:'var(--wt-surface)',flexShrink:0}}>
           <div style={{fontSize:14,fontWeight:800,color:C.dark,flex:1}}>📨 {t('requests')}</div>
-          {isLeader&&<button onClick={()=>setSelected('new')} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>➕ {t('create')}</button>}
+          {canCreate&&<button onClick={()=>setSelected('new')} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>➕ {t('create')}</button>}
         </div>
 
         <div className="req-filter-toolbar" style={{padding:'8px 12px',borderBottom:`1px solid ${C.border}`,background:C.bg,flexShrink:0}}>
@@ -504,17 +512,17 @@ export default function RequestsPage() {
       </div>
 
       {/* RIGHT: Detail / Create */}
-      {selected==='new'&&<CreatePanel groups={groups} users={users} onClose={()=>setSelected(null)} onSaved={async newId=>{
+      {selected==='new'&&<CreatePanel groups={myGroups} users={myUsers} canScore={!isAssistant} onClose={()=>setSelected(null)} onSaved={async newId=>{
         await reload();
         if(newId){const{data}=await api.get(`/requests/${newId}`);setSelected(data.data);}
         else setSelected(null);
       }}/>}
-      {selected&&selected!=='new'&&<DetailPanel key={selected.id} taskId={selected.id} users={users} isLeader={isLeader} user={user} onClose={()=>setSelected(null)} onSaved={async updated=>{await reload();setSelected(updated||null);}}/>}
+      {selected&&selected!=='new'&&<DetailPanel key={selected.id} taskId={selected.id} users={myUsers} isLeader={isLeader} user={user} onClose={()=>setSelected(null)} onSaved={async updated=>{await reload();setSelected(updated||null);}}/>}
       {!selected&&(
         <div className="req-empty-detail" style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg,flexDirection:'column',gap:10}}>
           <div style={{fontSize:40}}>📨</div>
           <div style={{fontSize:14,color:'var(--wt-text-4)'}}>{t('req_no_task_selected')}</div>
-          {isLeader&&<button onClick={()=>setSelected('new')} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:4}}>➕ {t('req_create_new')}</button>}
+          {canCreate&&<button onClick={()=>setSelected('new')} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:4}}>➕ {t('req_create_new')}</button>}
         </div>
       )}
     </div>
@@ -717,7 +725,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
           if (task.status==='assigned' && isAssignee && !isAdmin) {
             return <button onClick={()=>save({status:'in_progress'})} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>🔄 {t('req_start_work')}</button>;
           }
-          if (task.status==='in_progress' && !isAdmin) {
+          if (task.status==='in_progress' && !isAdmin && (isAssignee || isLeader)) {
             return <button onClick={markDone} style={{padding:'6px 12px',borderRadius:7,border:'none',background:C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>✅ {t('req_mark_done')}</button>;
           }
           return <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 12px',borderRadius:7,border:'none',background:saving?'var(--wt-text-4)':C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>;
@@ -1067,9 +1075,10 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 }
 
 // ── Create Panel ──
-function CreatePanel({groups,users,onClose,onSaved}){
+function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
   const { t } = useTranslation();
-  const [form,setForm]=useState({title:'',description:'',priority:'medium',deadline:'',group_id:'',assignees:[],score:''});
+  // Trợ lý Leader (canScore=false): bắt buộc nhóm của mình, không đặt điểm dự kiến
+  const [form,setForm]=useState({title:'',description:'',priority:'medium',deadline:'',group_id:canScore?'':(groups[0]?.id||''),assignees:[],score:''});
   const [saving,setSaving]=useState(false);
   const s=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [pickQ,setPickQ]=useState('');
@@ -1125,14 +1134,14 @@ function CreatePanel({groups,users,onClose,onSaved}){
               </div>
               <div style={{flex:'1 1 140px'}}><label style={FL}>{t('group')}</label>
                 <select style={FI} value={form.group_id} onChange={e=>s('group_id',e.target.value)}>
-                  <option value="">{t('req_no_group')}</option>
+                  {canScore&&<option value="">{t('req_no_group')}</option>}
                   {groups.map(g=><option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
                 </select>
               </div>
-              <div style={{flex:'1 1 100px'}}><label style={FL}>{t('req_score_rating')}</label>
+              {canScore&&<div style={{flex:'1 1 100px'}}><label style={FL}>{t('req_score_rating')}</label>
                 <input type="number" min="0" max="10" step="0.5" style={FI} value={form.score}
                   onChange={e=>s('score',e.target.value)} placeholder="–"/>
-              </div>
+              </div>}
             </div>
             <div><label style={FL}>{t('deadline')}</label><input type="datetime-local" style={FI} value={form.deadline} onChange={e=>s('deadline',e.target.value)}/></div>
           </div>

@@ -24,7 +24,8 @@ async function canView(req, userId) {
   return !!row;
 }
 // Quyền chấm khi ĐÃ biết xem được: không ai tự chấm cho chính mình, nhân viên thường không chấm
-const scoresVisible = (req, userId) => +userId !== req.user.id && req.user.role !== 'user';
+const STAFF = ['user', 'assistant']; // nhân viên + Trợ lý Leader: không chấm điểm hằng ngày
+const scoresVisible = (req, userId) => +userId !== req.user.id && !STAFF.includes(req.user.role);
 const canScore = async (req, userId) => scoresVisible(req, userId) && canView(req, userId);
 
 const dayScoreOf = async (userId, date) =>
@@ -103,7 +104,7 @@ exports.week = async (req, res) => {
     ]);
     if (!user) return fail(res, 404, 'Không tìm thấy người dùng');
     // Lý do nghỉ là thông tin riêng → chỉ Leader/Manager/Admin thấy; nhân viên chỉ thấy tên + loại nghỉ
-    const seeReason = req.user.role !== 'user';
+    const seeReason = !STAFF.includes(req.user.role);
     // trừ người đang xem (ngày nghỉ của họ đã có ở `offs`)
     const team_offs = teamOffs.filter(o => o.user_id !== userId).map(o => ({ ...o, reason: seeReason ? o.reason : null }));
     const scorer = scoresVisible(req, userId);
@@ -600,7 +601,7 @@ exports.overview = async (req, res) => {
 const PENDING_DAYS = 30;
 exports.pending = async (req, res) => {
   try {
-    if (req.user.role === 'user') return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
+    if (STAFF.includes(req.user.role)) return res.json({ success: true, data: req.query.count ? { total: 0 } : { total: 0, items: [] } });
     const people = (await viewableUsers(req)).filter(u => scoresVisible(req, u.id));
     const today = localDate();
     // kèm 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở

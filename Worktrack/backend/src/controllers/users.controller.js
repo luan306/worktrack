@@ -9,7 +9,7 @@ const { logActivity, diffFields } = require('../services/activityLogService');
 const { sendCachedJson } = require('../utils/cachedJson');
 
 // ── Lịch sử thay đổi tài khoản ──
-const ROLE_LABEL = { user: 'Nhân viên', leader: 'Leader', manager: 'Manager', admin: 'Admin' };
+const ROLE_LABEL = { user: 'Nhân viên', assistant: 'Trợ lý Leader', leader: 'Leader', manager: 'Manager', admin: 'Admin' };
 async function getUserSnapshot(id) {
   const [[u]] = await db.query(
     `SELECT u.id, u.username, u.full_name, u.email, u.role, u.is_active,
@@ -30,7 +30,7 @@ const USER_FIELDS = {
 };
 const actorOf = (req) => req.user.full_name || req.user.username;
 
-const ROLES = ['user', 'leader', 'manager', 'admin'];
+const ROLES = ['user', 'assistant', 'leader', 'manager', 'admin'];
 const MIN_PASSWORD = 8;
 const weakPassword = (p) => typeof p !== 'string' || p.length < MIN_PASSWORD;
 // Chỉ Admin mới được tạo/nâng quyền Admin hoặc đụng vào tài khoản Admin
@@ -374,7 +374,7 @@ exports.importTemplate = async (req, res) => {
     ws.columns = [
       { header: 'Họ tên', key: 'name', width: 26 },
       { header: 'Email', key: 'email', width: 26 },
-      { header: 'Vai trò (user/leader/manager/admin)', key: 'role', width: 20 },
+      { header: 'Vai trò (user/assistant/leader/manager/admin)', key: 'role', width: 24 },
       { header: 'Nhóm', key: 'group', width: 18 },
       { header: 'MSNV', key: 'msnv', width: 14, style: { numFmt: '@' } },
     ];

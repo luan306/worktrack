@@ -464,7 +464,7 @@ export default function UsersPage(){
             </select>
             <select style={{...FI,width:150,padding:'7px 12px'}} value={roleF} onChange={e=>setRoleF(e.target.value)}>
               <option value="">{t('users_all_roles')}</option>
-              {['admin','manager','leader','user'].map(r=><option key={r} value={r}>{r}</option>)}
+              {['admin','manager','leader','assistant','user'].map(r=><option key={r} value={r}>{r==='assistant'?`assistant — ${t('role_assistant','Trợ lý Leader')}`:r}</option>)}
             </select>
             <div style={{flex:1}}/>
             <span className="users-toolbar-count" style={{fontSize:11.5,color:C.faint,fontFamily:FONT_MONO}}>{t('users_people_count',{count:users.length})}</span>
@@ -809,7 +809,7 @@ function AddUserModal({show,groups,currentUserRole,onClose,onSave}){
             <div style={{flex:'1 1 140px'}}>
               <label style={FL}>{t('users_th_role_col')}</label>
               <select style={FI} value={f.role} onChange={e=>s('role',e.target.value)}>
-                {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+                {['user','assistant','leader','manager','admin'].map(r=><option key={r} value={r}>{r==='assistant'?`assistant — ${t('role_assistant','Trợ lý Leader')}`:r}</option>)}
               </select>
             </div>
           )}
@@ -867,7 +867,7 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
             <div style={{flex:'1 1 140px'}}>
               <label style={FL}>{t('users_th_role_col')}</label>
               <select style={FI} value={f.role||'user'} onChange={e=>s('role',e.target.value)}>
-                {['user','leader','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+                {['user','assistant','leader','manager','admin'].map(r=><option key={r} value={r}>{r==='assistant'?`assistant — ${t('role_assistant','Trợ lý Leader')}`:r}</option>)}
               </select>
             </div>
           )}
