@@ -572,7 +572,7 @@ function NotifTab() {
         {list.map((it, i) => [
           (i === 0 || list[i - 1].group !== it.group) && (
             <div key={'g' + it.key} style={{ padding: '8px 16px 4px', fontSize: 11, fontWeight: 800, color: C.primary, background: C.canvas, borderTop: i ? `1px solid ${C.line}` : 'none' }}>
-              {it.group === 'Hồ sơ' ? '👤 ' : '🔔 '}{it.group}
+              {it.group === 'Hồ sơ' ? '👤 ' : it.group === 'Công việc yêu cầu' ? '📋 ' : it.group === 'CV Hằng ngày' ? '📅 ' : '🔔 '}{it.group}
             </div>
           ),
           <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 16px', borderTop: `1px solid ${C.lineSoft}` }}>

@@ -143,7 +143,7 @@ export default function DailyPage() {
   const meta = (d) => {
     const list = byDay(d.date), sc = scoreOf(d.date), off = offOf(d.date), isToday = d.date === today, future = d.date > today;
     const fullOff = off?.kind === 'full';
-    const state = cellState({ off: off?.kind, score: sc?.score, n: list.length }, d.date, today, holidays);
+    const state = cellState({ off: off?.kind, score: sc?.score, n: list.length, wait: data?.waiting_days?.includes(d.date) }, d.date, today, holidays);
     const status = {
       scored:  () => ({ col: scoreColor(+sc.score, maxScore) }),
       off:     () => ({ col: C.teal, soft: C.tealSoft, label: `🌴 ${t('wl_off_short', 'Nghỉ')}` }),
@@ -151,6 +151,7 @@ export default function DailyPage() {
       weekend: () => ({ col: 'transparent' }),
       overtime:() => ({ col: C.violet, soft: C.violetSoft, label: `⏰ ${t('wl_overtime', 'Tăng ca')}` }),
       pending: () => ({ col: C.warning, soft: C.warningSoft, label: t('wl_not_scored', 'Chưa chấm') }),
+      waiting: () => ({ col: C.sub, soft: 'var(--wt-surface-2)', label: `⏳ ${t('wl_wait_leader', 'Chờ Leader chấm')}` }),
       missing: () => isToday ? { col: C.primary, soft: C.primarySoft, label: t('wl_todo_today', 'Chưa ghi') }
                              : { col: C.danger, soft: C.dangerSoft, label: t('wl_missing', 'Chưa ghi') },
     }[state]();

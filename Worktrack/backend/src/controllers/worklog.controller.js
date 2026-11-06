@@ -8,7 +8,8 @@ const { logActivity, fmtScore } = require('../services/activityLogService');
 const { notifyMany } = require('../services/notificationService');
 const { localDate, parseLocalDate, addDays, mondayOf, isWeekend } = require('../utils/date');
 const { styleHeader, sendXlsx, xlsxError } = require('../utils/excel');
-const { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay } = require('../services/worklogService');
+const { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay, leaderGated, membersWithLeader } = require('../services/worklogService');
+const WAIT_LEADER = 'Leader chưa chấm ngày này — Manager chỉ xem và chấm sau khi Leader chấm xong';
 
 const MAX_SCORE = 10;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -29,11 +30,14 @@ async function canView(req, userId) {
 async function notifyNewEntry(req, workDate, title) {
   if (!settings.on('notif.entry_instant')) return;
   const roles = ['leader', ...(settings.on('notif.manager_group') ? ['manager'] : [])];
-  const [rows] = await db.query(
-    `SELECT DISTINCT l.id FROM group_members a
+  let [rows] = await db.query(
+    `SELECT DISTINCT l.id, l.role FROM group_members a
        JOIN group_members b ON b.group_id=a.group_id
        JOIN users l ON l.id=b.user_id AND l.role IN (?) AND l.is_active=1
       WHERE a.user_id=? AND l.id<>?`, [roles, req.user.id, req.user.id]);
+  // Manager chỉ thấy sau khi Leader chấm → không báo Manager khi nhân viên có Leader
+  if (roles.includes('manager') && settings.on('daily.manager_after_leader') && (await membersWithLeader([req.user.id])).size)
+    rows = rows.filter(r => r.role !== 'manager');
   if (!rows.length) return;
   // chống ngập chuông: mỗi người nhận chỉ 1 thông báo / nhân viên / ngày
   const [sent] = await db.query(
@@ -101,7 +105,7 @@ exports.week = async (req, res) => {
       end = addDays(start, 6);
     }
 
-    const [[[user]], [entries], [scores], [offs], teamOffs, holidays] = await Promise.all([
+    let [[[user]], [entries], [scores], [offs], teamOffs, holidays] = await Promise.all([
       db.query(
         `SELECT u.id, u.full_name, u.username, u.avatar_color, u.role,
                 (SELECT GROUP_CONCAT(g.name ORDER BY g.name SEPARATOR ', ') FROM group_members gm
@@ -126,6 +130,13 @@ exports.week = async (req, res) => {
       holidaysBetween(start, end),
     ]);
     if (!user) return fail(res, 404, 'Không tìm thấy người dùng');
+    // Manager chỉ thấy ngày Leader đã chấm (Admin bật) → ngày chưa chấm: ẩn nội dung, chỉ báo "chờ Leader chấm"
+    let waiting_days = [];
+    if ((await leaderGated(req.user, [userId])).has(userId)) {
+      const scoredSet = new Set(scores.map(s => s.work_date));
+      waiting_days = [...new Set(entries.filter(e => !scoredSet.has(e.work_date)).map(e => e.work_date))];
+      entries = entries.filter(e => scoredSet.has(e.work_date));
+    }
     // Lý do nghỉ là thông tin riêng → chỉ Leader/Manager/Admin thấy; nhân viên chỉ thấy tên + loại nghỉ
     const seeReason = hasPerm(req.user, 'wl.score');
     // trừ người đang xem (ngày nghỉ của họ đã có ở `offs`)
@@ -133,7 +144,7 @@ exports.week = async (req, res) => {
     const scorer = scoresVisible(req, userId);
     res.json({ success: true, data: {
       user, week_start: start, week_end: end, today: localDate(),
-      entries, scores, offs, team_offs, holidays, can_manage_holidays: hasPerm(req.user, 'wl.holidays'),
+      entries, scores, offs, team_offs, holidays, can_manage_holidays: hasPerm(req.user, 'wl.holidays'), waiting_days,
       can_edit: userId === req.user.id, can_score: scorer,
       can_mark_off: userId === req.user.id || scorer, max_score: MAX_SCORE,
     } });
@@ -316,6 +327,7 @@ exports.scoreDay = async (req, res) => {
     const [allowed, off, old] = await Promise.all([canScore(req, user_id), dayOffOf(user_id, work_date), dayScoreOf(user_id, work_date)]);
     if (!allowed) return fail(res, 403, 'Bạn chỉ chấm điểm được thành viên nhóm mình');
     if (off?.kind === 'full') return fail(res, 400, 'Người này nghỉ cả ngày — không cần chấm điểm');
+    if (!old && (await leaderGated(req.user, [+user_id])).has(+user_id)) return fail(res, 403, WAIT_LEADER);
 
     const changed = old && (+old.score !== +score);
     if (changed && !(edit_reason && String(edit_reason).trim()))
@@ -510,6 +522,7 @@ exports.exportReport = async (req, res) => {
     scores.forEach(s => scMap.set(key(s.user_id, s.d), s));
     offs.forEach(o => offMap.set(key(o.user_id, o.d), o));
     const today = localDate();
+    const gated = await leaderGated(req.user, ids); // Manager: ngày Leader chưa chấm → không xuất nội dung
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Worktrack';
@@ -552,16 +565,19 @@ exports.exportReport = async (req, res) => {
     users.forEach((u, idx) => {
       let off = 0, ot = 0, logged = 0, missing = 0, tasks = 0, scored = 0, unscored = 0;
       days.forEach(d => {
-        const k = key(u.id, d), list = entMap.get(k) || [], sc = scMap.get(k), o = offMap.get(k);
+        const k = key(u.id, d), sc = scMap.get(k), o = offMap.get(k);
+        const waiting = !sc && gated.has(u.id) && (entMap.get(k) || []).length > 0;
+        const list = waiting ? [] : entMap.get(k) || [];
         const past = d <= today, fullOff = o?.kind === 'full', weekend = isRestDay(d, hol);
-        if (weekend && !list.length && !sc) return;   // T7/CN không tăng ca → ngày nghỉ, không ghi dòng
+        if (weekend && !list.length && !sc && !waiting) return;   // T7/CN không tăng ca → ngày nghỉ, không ghi dòng
         if (weekend) ot++;
         if (o) off += fullOff ? 1 : .5;
-        if (list.length) logged++;
+        if (list.length || waiting) logged++;
         tasks += list.length;
         if (sc) scored++;
         let status = weekend ? 'Tăng ca' : past ? 'Làm việc' : 'Chưa tới';
         if (o) status = OFF_LABEL[o.kind];
+        else if (waiting) status = '⏳ Chờ Leader chấm';
         else if (past && !list.length) { status = 'Chưa ghi việc'; missing++; }
         if (past && !fullOff && list.length && !sc) unscored++;
 
@@ -615,6 +631,9 @@ exports.overview = async (req, res) => {
     counts.forEach(r => { cell(r.user_id, r.d).n = r.n; });
     scores.forEach(r => { cell(r.user_id, r.d).score = +r.score; });
     offs.forEach(r => { Object.assign(cell(r.user_id, r.d), { off: r.kind, reason: r.reason }); });
+    // Manager: ngày Leader chưa chấm → không đếm số việc, chỉ đánh dấu chờ Leader
+    const gated = await leaderGated(req.user, ids);
+    for (const uid of gated) for (const c of Object.values(cells[uid] || {})) if (c.n && c.score == null) { delete c.n; c.wait = 1; }
     res.json({ success: true, data: {
       from, to, today: localDate(), max_score: MAX_SCORE,
       users, cells, holidays: await holidaysBetween(from, to),
@@ -634,6 +653,8 @@ exports.pending = async (req, res) => {
       const ok = new Set(mates.map(m => m.user_id));
       people = people.filter(u => ok.has(u.id));
     }
+    const gated = await leaderGated(req.user, people.map(u => u.id)); // Manager: chỉ chờ chấm sau Leader
+    if (gated.size) people = people.filter(u => !gated.has(u.id));
     const today = localDate();
     // kèm 2 việc đầu của mỗi ngày để leader xem nhanh không cần mở
     const days = await pendingScoreDays({ from: addDays(today, -PENDING_DAYS), to: today, userIds: people.map(u => u.id), titles: !req.query.count });

@@ -347,7 +347,8 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
   const weekend = isWeekendDate(day.date) || !!holiday; // ngày NGHỈ CHUNG: cuối tuần hoặc lễ
   // Cuối tuần / ngày lễ: mặc định nghỉ — chỉ hiện phần ghi việc khi đã có việc hoặc bấm "Ghi tăng ca"
   const [overtimeOpen, setOvertimeOpen] = useState(false);
-  const restDay = weekend && !entries.length && !score && !overtimeOpen;
+  const waiting = !score && (data.waiting_days || []).includes(day.date); // Manager: Leader chưa chấm ngày này
+  const restDay = weekend && !entries.length && !score && !overtimeOpen && !waiting;
   const locked = !!score;
   const fullOff = off?.kind === 'full';
   const editable = data.can_edit && !locked && !fullOff;
@@ -363,7 +364,7 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
         <div style={{ flex: 1, minWidth: 0 }}>
           {!isSelf && <div style={{ fontSize: 13.5, fontWeight: 800, color: C.violet, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{member.full_name}</div>}
           <div style={{ fontSize: isSelf ? 16 : 13, fontWeight: 800, color: isSelf ? C.ink : C.sub, letterSpacing: -.2 }}>{day.full}, <span style={{ fontFamily: FONT_MONO }}>{dmy(day.date)}</span></div>
-          <div style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{isSelf ? `${member.full_name} · ` : ''}{idLine(member) ? `${idLine(member)} · ` : ''}{entries.length} {t('wl_tasks', 'việc')}</div>
+          <div style={{ fontSize: 12, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{isSelf ? `${member.full_name} · ` : ''}{idLine(member) ? `${idLine(member)} · ` : ''}{waiting ? `⏳ ${t('wl_wait_leader', 'Chờ Leader chấm')}` : `${entries.length} ${t('wl_tasks', 'việc')}`}</div>
         </div>
         {restDay
           ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: holiday ? 'var(--wt-tint-danger)' : 'var(--wt-surface-3)', color: holiday ? C.danger : C.sub }}>{holiday ? `🎉 ${t('hol_short', 'Nghỉ lễ')}` : `🛌 ${t('wl_weekend', 'Cuối tuần')}`}</span>
@@ -373,6 +374,7 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
           ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: C.violetSoft, color: C.violet }}>⏰ {t('wl_overtime', 'Tăng ca')}</span>
           : locked
           ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: C.successSoft, color: C.success }}>🔒 {t('wl_locked', 'Đã chấm')}</span>
+          : waiting ? <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: 'var(--wt-surface-2)', color: C.sub, border: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>⏳ {t('wl_wait_leader', 'Chờ Leader chấm')}</span>
           : <span style={{ fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 20, background: C.warningSoft, color: C.warning }}>{t('wl_not_scored', 'Chưa chấm')}</span>}
         {!isMobile && <button className="wl-icon-btn" onClick={onClose} title={t('close', 'Đóng')}>✕</button>}
       </div>
@@ -401,7 +403,19 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
           </div>
         )}
 
-        {!fullOff && !restDay && <>
+        {waiting && !fullOff && (
+          <div style={{ display: 'flex', gap: 12, padding: '16px', borderRadius: 12, background: 'var(--wt-surface-2)', border: `1.5px dashed ${C.line}` }}>
+            <span style={{ fontSize: 24, lineHeight: 1 }}>⏳</span>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 13.5, color: C.ink }}>{t('wl_wait_leader_title', 'Đang chờ Leader chấm điểm')}</div>
+              <div style={{ fontSize: 12.5, color: C.sub, marginTop: 4, lineHeight: 1.55 }}>
+                {t('wl_wait_leader_desc', 'Nhân viên đã ghi công việc ngày này. Nội dung và phần chấm điểm sẽ hiện ra cho Manager ngay khi Leader của nhóm chấm xong.')}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!fullOff && !restDay && !waiting && <>
         <div>
           <SectionTitle icon="📝">{t('wl_done_tasks', 'Công việc đã làm')}</SectionTitle>
           <div style={{ background: C.note, border: `1px solid ${C.noteLine}`, borderRadius: 12, padding: '4px 12px 10px' }}>

@@ -46,4 +46,28 @@ async function pendingScoreDays({ from, to, userIds = null, titles = false }) {
   return rows.map(r => ({ ...r, n: Number(r.n), ...(titles ? { titles: r.titles ? r.titles.split(TITLE_SEP) : [] } : null) }));
 }
 
-module.exports = { pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };
+/**
+ * Trong `userIds`, những ai CÓ Leader (vai trò leader, đang hoạt động, khác chính họ) ở 1 nhóm đang hoạt động
+ * — Leader là thành viên nhóm hoặc là leader_id của nhóm.
+ */
+async function membersWithLeader(userIds) {
+  if (!userIds?.length) return new Set();
+  const [rows] = await db.query(
+    `SELECT DISTINCT gm.user_id FROM group_members gm
+       JOIN \`groups\` g ON g.id=gm.group_id AND g.is_active=1
+       JOIN users l ON l.role='leader' AND l.is_active=1 AND l.id<>gm.user_id
+                   AND (l.id=g.leader_id OR l.id IN (SELECT x.user_id FROM group_members x WHERE x.group_id=gm.group_id))
+      WHERE gm.user_id IN (?)`, [userIds]);
+  return new Set(rows.map(r => r.user_id));
+}
+/**
+ * Admin bật "Manager chỉ thấy CV hằng ngày sau khi Leader chấm": với người xem là Manager, trả về những người
+ * mà ngày CHƯA CHẤM phải ẩn (người có Leader). Không phải Manager / chưa bật → tập rỗng.
+ */
+async function leaderGated(viewer, userIds) {
+  if (viewer.role !== 'manager' || !require('../config/settings').on('daily.manager_after_leader')) return new Set();
+  const s = await membersWithLeader(userIds.filter(id => +id !== viewer.id));
+  return s;
+}
+
+module.exports = { leaderGated, membersWithLeader, pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };

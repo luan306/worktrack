@@ -3,7 +3,7 @@
 const cron = require('node-cron');
 const db   = require('../config/db');
 const { notify, notifyMany } = require('../services/notificationService');
-const { pendingScoreDays, holidayMap, isRestDay } = require('../services/worklogService');
+const { pendingScoreDays, holidayMap, isRestDay, membersWithLeader } = require('../services/worklogService');
 const { localDate, addDays } = require('../utils/date');
 const settings = require('../config/settings');
 
@@ -36,12 +36,17 @@ async function remindUnscored(io, today) {
   names.forEach(u => { perUser.get(u.id).full_name = u.full_name; });
   const pending = [...perUser.values()];
 
-  const [links] = await db.query(
-    `SELECT DISTINCT m.user_id AS member_id, l.id AS leader_id
+  let [links] = await db.query(
+    `SELECT DISTINCT m.user_id AS member_id, l.id AS leader_id, l.role
        FROM group_members m
        JOIN group_members gl ON gl.group_id=m.group_id AND gl.user_id<>m.user_id
        JOIN users l ON l.id=gl.user_id AND l.role IN (?) AND l.is_active=1
       WHERE m.user_id IN (?)`, [roles, ids]);
+  // Manager chỉ thấy sau khi Leader chấm → không nhắc Manager về người có Leader
+  if (roles.includes('manager') && settings.on('daily.manager_after_leader')) {
+    const led = await membersWithLeader(ids);
+    links = links.filter(l => !(l.role === 'manager' && led.has(l.member_id)));
+  }
 
   // người nhận → danh sách người còn ngày chờ chấm
   const byRecipient = new Map();

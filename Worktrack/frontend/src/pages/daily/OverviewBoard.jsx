@@ -55,6 +55,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
 
   const cellOf = (u, d) => ov?.cells?.[u.id]?.[d];
   const holidays = holidayIndex(ov?.holidays); // ngày lễ công ty → coi như cuối tuần
+  const hasWaiting = Object.values(ov?.cells || {}).some(row => Object.values(row).some(c => c.wait));
   const rowStats = (u) => {
     let missing = 0, pending = 0;
     days.forEach(d => {
@@ -114,6 +115,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
             ['pending', t('wl_lg_pending', 'Chờ chấm (số = số việc)')],
             ['overtime', `⏰ ${t('wl_overtime', 'Tăng ca')}`],
             ['weekend', t('wl_weekend', 'Cuối tuần')],
+            ...(hasWaiting ? [['waiting', `⏳ ${t('wl_wait_leader', 'Chờ Leader chấm')}`]] : []),
           ].map(([k, label]) => (
             <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 16, height: 16, borderRadius: 5, background: CELL[k].bg, border: `1.5px solid ${CELL[k].bd}` }} />{label}
@@ -174,7 +176,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
                         const c = cellOf(u, dd), s = cellState(c, dd, today, holidays), on = sel?.userId === u.id && sel?.date === dd;
                         const look = s === 'scored' ? { bg: `${scoreColor(c.score, maxScore)}1f`, fg: scoreColor(c.score, maxScore), bd: `${scoreColor(c.score, maxScore)}55` } : CELL[s];
                         const half = c?.off && c.off !== 'full';
-                        const tip = [WDF[wdOf(dd)] + ' ' + dmy(dd), c?.off ? `${offLabel(t, c.off)}${c.reason ? ` — ${c.reason}` : ''}` : '', c?.n ? `${c.n} ${t('wl_tasks', 'việc')}` : '', c?.score != null ? `★ ${c.score}/${maxScore}` : ''].filter(Boolean).join(' · ');
+                        const tip = [WDF[wdOf(dd)] + ' ' + dmy(dd), c?.off ? `${offLabel(t, c.off)}${c.reason ? ` — ${c.reason}` : ''}` : '', c?.n ? `${c.n} ${t('wl_tasks', 'việc')}` : '', c?.wait ? `⏳ ${t('wl_wait_leader', 'Chờ Leader chấm')}` : '', c?.score != null ? `★ ${c.score}/${maxScore}` : ''].filter(Boolean).join(' · ');
                         return (
                           <td key={dd} style={{ ...td, padding: 3, textAlign: 'center', borderLeft: wdOf(dd) === 1 ? `2px solid ${C.lineSoft}` : 'none' }}>
                             <button onClick={() => setSel({ userId: u.id, date: dd })} title={tip} className="wl-cell" style={{
@@ -182,7 +184,7 @@ export default function OverviewBoard({ isMobile, isNarrow, onOpenPerson, initia
                               fontSize: s === 'scored' ? 12.5 : 11, background: look.bg, color: look.fg, border: `1.5px solid ${on ? C.primary : look.bd}`,
                               boxShadow: on ? `0 0 0 3px ${C.primary}33` : 'none',
                             }}>
-                              {s === 'off' ? '🌴' : s === 'scored' ? +c.score : s === 'pending' ? c.n : s === 'overtime' ? `⏰${c.n}` : ''}
+                              {s === 'off' ? '🌴' : s === 'scored' ? +c.score : s === 'pending' ? c.n : s === 'overtime' ? `⏰${c.n}` : s === 'waiting' ? '⏳' : ''}
                               {half && <span style={{ position: 'absolute', top: -4, right: -4, fontSize: 9, background: C.teal, color: '#fff', borderRadius: 6, padding: '0 3px', lineHeight: '13px' }}>½</span>}
                             </button>
                           </td>

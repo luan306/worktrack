@@ -56,6 +56,7 @@ export const CELL = {
   missing: { bg: 'var(--wt-tint-danger)', fg: C.danger, bd: 'var(--wt-tint-danger-bd)' },
   pending: { bg: 'var(--wt-tint-warning)', fg: 'var(--wt-warn-text)', bd: 'var(--wt-tint-warning-bd)' },
   off:     { bg: C.tealSoft, fg: C.teal, bd: 'var(--wt-tint-teal-bd)' },
+  waiting: { bg: 'var(--wt-surface-2)', fg: C.sub, bd: C.line }, // Manager: Leader chưa chấm → chưa xem được
 };
 // Ngày lễ công ty: mảng [{ work_date, name }] từ API → { 'YYYY-MM-DD': tên }
 export const holidayIndex = (list) => Object.fromEntries((list || []).map(h => [h.work_date, h.name]));
@@ -65,6 +66,7 @@ export const isRestDate = (d, holidays) => isWeekendDate(d) || !!holidays?.[d];
 export const cellState = (c, date, today, holidays) => {
   if (c?.off === 'full') return 'off';
   if (c?.score != null) return 'scored';
+  if (c?.wait) return 'waiting';
   if (isRestDate(date, holidays)) return c?.n ? 'overtime' : 'weekend';
   if (date > today) return 'future';
   return c?.n ? 'pending' : 'missing';

@@ -5,6 +5,10 @@ const db = require('./db');
 const CATALOG = [
   { key: 'profile.avatar_upload', group: 'Hồ sơ', label: 'Cho phép tự đổi ảnh đại diện',
     desc: 'Mọi người tải ảnh của mình lên ở trang Cài đặt (hồ sơ). TẮT → ẩn nút đổi ảnh, ai đã có ảnh vẫn giữ (Admin vẫn xóa được ở Quản lý User).', default: true },
+  { key: 'request.assign_roles', group: 'Công việc yêu cầu', label: 'Người tạo CV được chọn ai làm CHÍNH, ai HỖ TRỢ',
+    desc: 'Leader / Manager / Trợ lý Leader khi tạo hoặc giao CV tự chọn 1 người làm chính và những người hỗ trợ (đổi được sau). TẮT → không chọn được: người được giao đầu tiên tự làm chính, người thêm sau là hỗ trợ (riêng Admin vẫn đổi được).', default: true },
+  { key: 'daily.manager_after_leader', group: 'CV Hằng ngày', label: 'Manager chỉ thấy CV hằng ngày SAU KHI Leader đã chấm',
+    desc: 'Ngày nào Leader chưa chấm → Manager chỉ thấy "⏳ Chờ Leader chấm", chưa xem nội dung, chưa chấm được, không tính vào "Chờ chấm" và không nhận nhắc / báo ngay. Leader chấm xong là hiện ngay. Người không có Leader trong nhóm (vd. chính các Leader) → Manager vẫn xem và chấm như bình thường.', default: false },
   { key: 'notif.leader_unscored', label: 'Nhắc Leader chấm điểm hằng ngày (8:00 sáng T2–T6)',
     desc: 'Leader nhận 1 thông báo gộp: còn bao nhiêu ngày công việc của người cùng nhóm chưa chấm.', default: true },
   { key: 'notif.manager_group', label: 'Manager có nhóm riêng: nhận nhắc chờ chấm như Leader',

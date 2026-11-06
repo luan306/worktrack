@@ -249,6 +249,9 @@ async function assistantScope(userId) {
   return { groups: new Set(rows.map(r => r.group_id)), members: new Set(rows.map(r => r.user_id)) };
 }
 const ASSISTANT_GROUP_ONLY = 'Trợ lý Leader chỉ giao được cho thành viên trong nhóm mình';
+// Admin bật/tắt "người tạo CV được chọn chính / hỗ trợ" — tắt thì chỉ Admin còn chọn được
+const canPickRole = (user) => user.role === 'admin' || require('../config/settings').on('request.assign_roles');
+const PICK_ROLE_OFF = 'Admin đã tắt tính năng chọn người làm chính / hỗ trợ — vui lòng liên hệ Admin';
 
 exports.create = async (req, res) => {
   try {
@@ -284,7 +287,8 @@ exports.create = async (req, res) => {
 
     if (assignees.length) {
       // Mỗi CV chỉ 1 người làm CHÍNH: giữ người "chính" đầu tiên (không có ai thì người đầu tiên), còn lại là hỗ trợ
-      const mainIdx = Math.max(0, assignees.findIndex(a => (a.role || 'main') === 'main'));
+      // Tắt chọn vai trò → người đầu tiên luôn làm chính
+      const mainIdx = canPickRole(req.user) ? Math.max(0, assignees.findIndex(a => (a.role || 'main') === 'main')) : 0;
       await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES ?',
         [assignees.map((a, i) => [taskId, a.user_id, i === mainIdx ? 'main' : 'support'])]);
     }
@@ -551,13 +555,18 @@ async function loadAssignableTask(req, res, id, doneMessage = 'CV đã hoàn th�
 
 exports.addAssignee = async (req, res) => {
   try {
-    const { user_id, role='main' } = req.body;
+    const { user_id } = req.body;
+    let role = req.body.role === 'support' ? 'support' : 'main';
     const { id } = req.params;
     const task = await loadAssignableTask(req, res, id, 'CV đã hoàn thành, không thể thêm người nữa');
     if (!task) return;
     if (req.user.role === 'assistant' && !(await assistantScope(req.user.id)).members.has(+user_id))
       return res.status(403).json({ success: false, message: ASSISTANT_GROUP_ONLY });
 
+    if (!canPickRole(req.user)) { // không được chọn → CV chưa có ai chính thì người này làm chính, có rồi thì hỗ trợ
+      const [[m]] = await db.query("SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND role='main' LIMIT 1", [id]);
+      role = m ? 'support' : 'main';
+    }
     if (role === 'main') {
       const [[main]] = await db.query(
         `SELECT u.full_name FROM request_task_assignees a JOIN users u ON u.id=a.user_id
@@ -607,6 +616,7 @@ exports.setAssigneeRole = async (req, res) => {
   try {
     const { id, userId } = req.params;
     const role = req.body.role === 'support' ? 'support' : 'main';
+    if (!canPickRole(req.user)) return res.status(403).json({ success: false, message: PICK_ROLE_OFF });
     const task = await loadAssignableTask(req, res, id);
     if (!task) return;
 

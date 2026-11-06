@@ -106,7 +106,8 @@ exports.me = async (req, res) => {
     res.json({ success: true, data: { ...user, groups, must_change_password: !!req.user.must_change_password,
       permissions: require('../config/permissions').permsOf(user),
       notif: { manager_group: require('../config/settings').on('notif.manager_group') },
-      features: { avatar_upload: require('../config/settings').on('profile.avatar_upload') } } });
+      features: { avatar_upload: require('../config/settings').on('profile.avatar_upload'),
+                  assign_roles: require('../config/settings').on('request.assign_roles') } } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
