@@ -201,7 +201,8 @@ exports.updateRequest = async (req, res) => {
       if (sc !== null && !(Number.isFinite(sc) && sc >= 0 && sc <= 99999)) return bad(res, 'Điểm người thực hiện không hợp lệ');
       assignees.push({ user_id: uid, role: a.role, score: sc, added_late: a.added_late ? 1 : 0 });
     }
-    if (assignees.filter(a => a.role === 'main').length > 1) return bad(res, 'Chỉ được 1 người Chính');
+    if (!require('../config/settings').on('request.multi_main') && assignees.filter(a => a.role === 'main').length > 1)
+      return bad(res, 'Chỉ được 1 người Chính (Admin đang tắt "Cho phép nhiều người làm chính")');
   }
 
   const conn = await db.getConnection();

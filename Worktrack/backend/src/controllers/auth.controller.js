@@ -107,7 +107,8 @@ exports.me = async (req, res) => {
       permissions: require('../config/permissions').permsOf(user),
       notif: { manager_group: require('../config/settings').on('notif.manager_group') },
       features: { avatar_upload: require('../config/settings').on('profile.avatar_upload'),
-                  assign_roles: require('../config/settings').on('request.assign_roles') } } });
+                  assign_roles: require('../config/settings').on('request.assign_roles'),
+                  multi_main: require('../config/settings').on('request.multi_main') } } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 

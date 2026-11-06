@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import api, { clearApiCache } from '../../api/client';
 import { useReasonDialog } from '../../components/ReasonDialog';
+import useAuth from '../../store/authStore';
 
 const C = {
   ink: 'var(--wt-ink)', sub: 'var(--wt-text-2)', faint: 'var(--wt-text-3)', mute: 'var(--wt-text-4)',
@@ -73,6 +74,7 @@ export default function AdminPage() {
 
 // ═══════════════════════════ SỬA CV ═══════════════════════════
 function RequestEditor() {
+  const multiMain = useAuth(s => !!s.user?.features?.multi_main);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [list, setList] = useState([]);
@@ -293,7 +295,7 @@ function RequestForm({ id, users, groups, onSaved }) {
             <option value="">＋ Thêm người thực hiện…</option>
             {users.filter(u => !usedIds.has(+u.id) && u.is_active).map(u => <option key={u.id} value={u.id}>{u.full_name} ({u.username})</option>)}
           </select>
-          {f.assignees.filter(a => a.role === 'main').length > 1 && <span style={{ color: C.danger, fontSize: 12, fontWeight: 700 }}>⚠️ Chỉ được 1 người Chính</span>}
+          {!multiMain && f.assignees.filter(a => a.role === 'main').length > 1 && <span style={{ color: C.danger, fontSize: 12, fontWeight: 700 }}>⚠️ Chỉ được 1 người Chính</span>}
         </div>
       </Section>
       <div style={{ fontSize: 11.5, color: C.mute, padding: '0 4px 12px' }}>

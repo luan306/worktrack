@@ -251,6 +251,7 @@ async function assistantScope(userId) {
 const ASSISTANT_GROUP_ONLY = 'Trợ lý Leader chỉ giao được cho thành viên trong nhóm mình';
 // Admin bật/tắt "người tạo CV được chọn chính / hỗ trợ" — tắt thì chỉ Admin còn chọn được
 const canPickRole = (user) => user.role === 'admin' || require('../config/settings').on('request.assign_roles');
+const multiMain = () => require('../config/settings').on('request.multi_main'); // nhiều người CHÍNH / CV
 const PICK_ROLE_OFF = 'Admin đã tắt tính năng chọn người làm chính / hỗ trợ — vui lòng liên hệ Admin';
 
 exports.create = async (req, res) => {
@@ -286,11 +287,13 @@ exports.create = async (req, res) => {
     const taskId = r.insertId;
 
     if (assignees.length) {
-      // Mỗi CV chỉ 1 người làm CHÍNH: giữ người "chính" đầu tiên (không có ai thì người đầu tiên), còn lại là hỗ trợ
-      // Tắt chọn vai trò → người đầu tiên luôn làm chính
-      const mainIdx = canPickRole(req.user) ? Math.max(0, assignees.findIndex(a => (a.role || 'main') === 'main')) : 0;
+      // Luôn có ít nhất 1 người CHÍNH (không ai chính → người đầu tiên). Tắt chọn vai trò → chỉ người đầu tiên làm chính.
+      // Cho phép nhiều người chính → giữ đúng vai trò đã chọn; không → chỉ giữ người "chính" đầu tiên
+      const pick = canPickRole(req.user);
+      const firstMain = pick ? Math.max(0, assignees.findIndex(a => (a.role || 'main') === 'main')) : 0;
+      const isMain = (a, i) => i === firstMain || (pick && multiMain() && (a.role || 'main') === 'main');
       await db.query('INSERT IGNORE INTO request_task_assignees (task_id,user_id,role) VALUES ?',
-        [assignees.map((a, i) => [taskId, a.user_id, i === mainIdx ? 'main' : 'support'])]);
+        [assignees.map((a, i) => [taskId, a.user_id, isMain(a, i) ? 'main' : 'support'])]);
     }
 
     // Log system comment — ghi cả `message`
@@ -567,7 +570,7 @@ exports.addAssignee = async (req, res) => {
       const [[m]] = await db.query("SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND role='main' LIMIT 1", [id]);
       role = m ? 'support' : 'main';
     }
-    if (role === 'main') {
+    if (role === 'main' && !multiMain()) {
       const [[main]] = await db.query(
         `SELECT u.full_name FROM request_task_assignees a JOIN users u ON u.id=a.user_id
           WHERE a.task_id=? AND a.role='main' AND a.user_id<>? LIMIT 1`, [id, user_id]);
@@ -626,11 +629,14 @@ exports.setAssigneeRole = async (req, res) => {
     if (!target) return res.status(404).json({ success: false, message: 'Người này không thuộc CV' });
     if (target.role === role) return res.json({ success: true });
     if (role === 'support' && !rows.some(r => r.role === 'main' && r.user_id !== +userId))
-      return res.status(400).json({ success: false, message: 'CV phải có 1 người làm chính — hãy chọn người khác làm chính (người này sẽ tự chuyển sang hỗ trợ)' });
+      return res.status(400).json({ success: false, message: multiMain()
+        ? 'CV phải có ít nhất 1 người làm chính — hãy chọn thêm người khác làm chính trước'
+        : 'CV phải có 1 người làm chính — hãy chọn người khác làm chính (người này sẽ tự chuyển sang hỗ trợ)' });
 
-    const oldMains = role === 'main' ? rows.filter(r => r.role === 'main') : [];
+    // chỉ 1 người chính → người chính cũ tự sang hỗ trợ; nhiều người chính → giữ nguyên
+    const oldMains = role === 'main' && !multiMain() ? rows.filter(r => r.role === 'main') : [];
     await conn.beginTransaction();
-    if (role === 'main') await conn.query("UPDATE request_task_assignees SET role='support' WHERE task_id=? AND role='main'", [id]);
+    if (oldMains.length) await conn.query("UPDATE request_task_assignees SET role='support' WHERE task_id=? AND role='main'", [id]);
     await conn.query('UPDATE request_task_assignees SET role=? WHERE task_id=? AND user_id=?', [role, id, userId]);
     await conn.commit();
 

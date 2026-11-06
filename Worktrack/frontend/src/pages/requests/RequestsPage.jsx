@@ -90,7 +90,7 @@ const RoleBadge = ({role, clickable, onClick}) => {
 };
 
 // 2 nút ⭐ Chính / 🤝 Hỗ trợ — chọn vai trò rõ ràng (thay cho bấm vào nhãn nhỏ)
-const RolePicker = ({value, onChange, mainDisabled, mainTitle, size='md'}) => {
+const RolePicker = ({value, onChange, mainDisabled, mainTitle, supportDisabled, supportTitle, size='md'}) => {
   const { t } = useTranslation();
   const pad = size==='sm' ? '2px 8px' : '4px 11px';
   const btn = (role, active, color, label, disabled, title) => (
@@ -103,7 +103,7 @@ const RolePicker = ({value, onChange, mainDisabled, mainTitle, size='md'}) => {
   return (
     <span style={{display:'inline-flex',gap:2,padding:2,borderRadius:8,background:'var(--wt-surface-2)',border:`1px solid ${C.border}`,flexShrink:0}}>
       {btn('main', value==='main', C.primary, `⭐ ${t('req_role_main','Chính')}`, mainDisabled, mainTitle)}
-      {btn('support', value==='support', C.warning, `🤝 ${t('req_role_support','Hỗ trợ')}`)}
+      {btn('support', value==='support', C.warning, `🤝 ${t('req_role_support','Hỗ trợ')}`, supportDisabled, supportTitle)}
     </span>
   );
 };
@@ -560,6 +560,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [showAddUser, setShowAddUser] = useState(false);
   const [pendingRole, setPendingRole] = useState('main');
   const canPickRole = useAuth(s => s.user?.role==='admin' || !!s.user?.features?.assign_roles);
+  const multiMain = useAuth(s => !!s.user?.features?.multi_main);
   const [attachFile, setAttachFile]   = useState(null);
   const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
@@ -711,6 +712,8 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const hasPeople=(task.assignees||[]).length>0;
   const mainPerson=(task.assignees||[]).find(a=>a.role==='main');
   const hasMain=!!mainPerson;
+  const mainCount=(task.assignees||[]).filter(a=>a.role==='main').length;
+  const mainLocked=hasMain && !multiMain; // chỉ 1 người chính → đã có thì không thêm "chính" được
   const peopleKey=(task.assignees||[]).map(a=>`${a.user_id}:${a.score??''}`).join(',')+`|${task.score??''}`;
   // Điểm từng người (riêng nếu có, không thì điểm chung của CV)
   const personScores = hasPeople && (
@@ -899,7 +902,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     </div>
                     {a.full_name}
                     {canManageAssignees&&canPickRole
-                      ? <RolePicker size="sm" value={a.role} onChange={r=>r!==a.role&&toggleAssigneeRole(a)}/>
+                      ? <RolePicker size="sm" value={a.role} onChange={r=>r!==a.role&&toggleAssigneeRole(a)}
+                          supportDisabled={multiMain && a.role==='main' && mainCount<=1}
+                          supportTitle={t('req_need_one_main','CV cần ít nhất 1 người làm Chính — chọn thêm người khác làm Chính trước')}/>
                       : <RoleBadge role={a.role}/>}
                     {!!a.added_late && <span title={t('req_late_added_tip', 'Người này được thêm vào SAU KHI công việc đã nộp')} style={{display:'inline-flex',alignItems:'center',gap:3,padding:'1px 7px',borderRadius:20,background:'var(--wt-tint-danger)',border:'1px solid var(--wt-tint-danger-bd)',color:C.danger,fontSize:10,fontWeight:800,whiteSpace:'nowrap'}}>⚠️ {t('req_late_added', 'Thêm sau khi nộp')}</span>}
                     {canManageAssignees&&<span onClick={()=>removeAssignee(a.user_id)} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:15,lineHeight:1}} onMouseEnter={e=>e.target.style.color=C.danger} onMouseLeave={e=>e.target.style.color='var(--wt-text-4)'}>×</span>}
@@ -912,7 +917,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 )}
                 {canManageAssignees&&(task.assignees||[]).length<12&&(
                   <div onClick={()=>{
-                      setPendingRole(hasMain ? 'support' : 'main');
+                      setPendingRole(mainLocked ? 'support' : 'main');
                       setShowAddUser(p=>!p);
                     }} style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,border:'1.5px dashed var(--wt-line-strong)',color:'var(--wt-text-3)',fontSize:12,cursor:'pointer'}}
                     onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.color=C.primary;}}
@@ -925,12 +930,12 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 <div style={{marginTop:8,background:'var(--wt-surface)',border:`1.5px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
                   {canPickRole ? <div style={{display:'flex',gap:6,padding:'8px 10px',borderBottom:`1px solid ${C.border}`,background:C.bg}}>
                     <span style={{fontSize:11,color:'var(--wt-text-3)',fontWeight:600,alignSelf:'center'}}>{t('req_role_label')}:</span>
-                    <button onClick={()=>!hasMain&&setPendingRole('main')} disabled={hasMain}
-                      title={hasMain?t('req_main_taken',{name:mainPerson.full_name,defaultValue:`Đã có người làm chính (${mainPerson.full_name}) — bấm vào nhãn vai trò của người khác để đổi`}):''}
-                      style={{padding:'3px 10px',borderRadius:12,border:`1.5px solid ${pendingRole==='main'?C.primary:C.border}`,background:pendingRole==='main'?C.primary:'var(--wt-surface)',color:pendingRole==='main'?'#fff':'var(--wt-text-3)',fontSize:11,fontWeight:600,cursor:hasMain?'not-allowed':'pointer',opacity:hasMain?.45:1}}>
+                    <button onClick={()=>!mainLocked&&setPendingRole('main')} disabled={mainLocked}
+                      title={mainLocked?t('req_main_taken',{name:mainPerson.full_name,defaultValue:`Đã có người làm chính (${mainPerson.full_name}) — bấm vào nhãn vai trò của người khác để đổi`}):''}
+                      style={{padding:'3px 10px',borderRadius:12,border:`1.5px solid ${pendingRole==='main'?C.primary:C.border}`,background:pendingRole==='main'?C.primary:'var(--wt-surface)',color:pendingRole==='main'?'#fff':'var(--wt-text-3)',fontSize:11,fontWeight:600,cursor:mainLocked?'not-allowed':'pointer',opacity:mainLocked?.45:1}}>
                       ⭐ {t('req_role_main')}
                     </button>
-                    {hasMain&&<span style={{fontSize:10.5,color:'var(--wt-text-4)',alignSelf:'center'}}>({t('req_main_is',{name:mainPerson.full_name,defaultValue:`chính: ${mainPerson.full_name}`})})</span>}
+                    {mainLocked&&<span style={{fontSize:10.5,color:'var(--wt-text-4)',alignSelf:'center'}}>({t('req_main_is',{name:mainPerson.full_name,defaultValue:`chính: ${mainPerson.full_name}`})})</span>}
                     <button onClick={()=>setPendingRole('support')}
                       style={{padding:'3px 10px',borderRadius:12,border:`1.5px solid ${pendingRole==='support'?C.warning:C.border}`,background:pendingRole==='support'?C.warning:'var(--wt-surface)',color:pendingRole==='support'?'#fff':'var(--wt-text-3)',fontSize:11,fontWeight:600,cursor:'pointer'}}>
                       🤝 {t('req_role_support')}
@@ -1122,6 +1127,7 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
   const s=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [pickQ,setPickQ]=useState('');
   const canPickRole = useAuth(s => s.user?.role==='admin' || !!s.user?.features?.assign_roles);
+  const multiMain = useAuth(s => !!s.user?.features?.multi_main);
   const [addAs,setAddAs]=useState('main'); // thêm người tiếp theo với vai trò nào
   const hasMainF = form.assignees.some(a=>a.role==='main');
   const pickList = users.filter(u=>u.role!=='admin' && !form.assignees.some(a=>a.user_id===u.id)
@@ -1129,14 +1135,19 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
   const addPerson = (u)=>{
     // chưa có ai chính → người này làm chính; chọn "Chính" khi đã có người chính → người mới làm chính, người cũ sang hỗ trợ
     const role = !hasMainF ? 'main' : (canPickRole && addAs==='main' ? 'main' : 'support');
-    const rest = role==='main' ? form.assignees.map(a=>({...a, role:'support'})) : form.assignees;
+    // chỉ 1 người chính → người chính cũ sang hỗ trợ; nhiều người chính → giữ nguyên
+    const rest = role==='main' && !multiMain ? form.assignees.map(a=>({...a, role:'support'})) : form.assignees;
     s('assignees',[...rest,{user_id:u.id,role,full_name:u.full_name,avatar_color:u.avatar_color}]);
     setPickQ(''); setAddAs('support');
   };
   const setFormRole = (uid, role)=>{
     const target = form.assignees.find(a=>a.user_id===uid);
-    if (target && target.role!==role) toggleFormAssigneeRole(uid);
+    if (!target || target.role===role) return;
+    if (!multiMain) return toggleFormAssigneeRole(uid);
+    if (role==='support' && mainCountF<=1) return; // phải còn ít nhất 1 người chính
+    s('assignees', form.assignees.map(a=>a.user_id===uid ? {...a, role} : a));
   };
+  const mainCountF = form.assignees.filter(a=>a.role==='main').length;
   const removePerson = (uid)=>{
     const left = form.assignees.filter(x=>x.user_id!==uid);
     // bỏ người chính → người đầu tiên còn lại lên làm chính
@@ -1210,14 +1221,17 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
                 <span style={{flex:1,minWidth:0,fontSize:12.5,fontWeight:700,color:C.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.full_name}</span>
                 {canPickRole
                   ? <RolePicker size="sm" value={a.role} onChange={r=>setFormRole(a.user_id,r)}
-                      mainDisabled={false} />
+                      supportDisabled={multiMain && a.role==='main' && mainCountF<=1}
+                      supportTitle={t('req_need_one_main','CV cần ít nhất 1 người làm Chính — chọn thêm người khác làm Chính trước')} />
                   : <RoleBadge role={a.role}/>}
                 <span onClick={()=>removePerson(a.user_id)} title={t('remove','Bỏ')} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:16,lineHeight:1,padding:'0 2px'}}>×</span>
               </div>
             ))}
             <div style={{fontSize:11,color:'var(--wt-text-4)'}}>
               {canPickRole
-                ? `💡 ${t('req_role_hint','Mỗi CV có 1 người làm Chính (chịu trách nhiệm chính), còn lại là Hỗ trợ. Chọn người khác làm Chính thì người cũ tự chuyển sang Hỗ trợ.')}`
+                ? multiMain
+                  ? `💡 ${t('req_role_hint_multi','Chọn được nhiều người làm Chính (chịu trách nhiệm chính), còn lại là Hỗ trợ. Mỗi CV cần ít nhất 1 người Chính.')}`
+                  : `💡 ${t('req_role_hint','Mỗi CV có 1 người làm Chính (chịu trách nhiệm chính), còn lại là Hỗ trợ. Chọn người khác làm Chính thì người cũ tự chuyển sang Hỗ trợ.')}`
                 : `💡 ${t('req_role_auto_hint','Người được chọn đầu tiên làm Chính, người thêm sau là Hỗ trợ.')}`}
             </div>
           </div>}
