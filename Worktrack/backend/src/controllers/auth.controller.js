@@ -104,11 +104,12 @@ exports.me = async (req, res) => {
          WHERE gm.user_id=? AND g.is_active=1`, [req.user.id, req.user.id]),
     ]);
     res.json({ success: true, data: { ...user, groups, must_change_password: !!req.user.must_change_password,
-      permissions: require('../config/permissions').permsOf(user),
+      permissions: require('../config/access').uiPerms(user, require('../config/permissions').permsOf(user)),
       notif: { manager_group: require('../config/settings').on('notif.manager_group') },
       features: { avatar_upload: require('../config/settings').on('profile.avatar_upload'),
                   assign_roles: require('../config/settings').on('request.assign_roles'),
-                  multi_main: require('../config/settings').on('request.multi_main') } } });
+                  multi_main: require('../config/settings').on('request.multi_main'),
+                  req_flow: require('../config/workflow').req() } } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 

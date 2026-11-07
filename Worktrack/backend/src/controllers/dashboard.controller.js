@@ -71,6 +71,15 @@ async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart,
            SUM(CASE WHEN work_date >= ?            THEN score ELSE 0 END) AS period_score
       FROM daily_day_scores WHERE user_id IN (?) AND work_date >= ? GROUP BY user_id`;
   const entrySql = 'SELECT user_id, COUNT(*) AS cv_done FROM daily_entries WHERE user_id IN (?) AND work_date >= ? GROUP BY user_id';
+  // 🔀 Quy trình "điểm tính sau khi Manager duyệt": người có Leader → chỉ ngày đã duyệt (hoặc chấm trước lúc bật)
+  const wfd = require('../config/workflow').dailyFlags();
+  let dayScoreWhere = '';
+  const dsp = [rs, re, periodDay, memberIds, lowerDay];
+  if (wfd.countReviewed) {
+    const led = [...await require('../services/worklogService').membersWithLeader(memberIds)];
+    dayScoreWhere = ' AND (reviewed_by IS NOT NULL OR scored_at < ? OR user_id NOT IN (?))';
+    dsp.push(wfd.countSince || EPOCH, led.length ? led : [0]);
+  }
 
   let reqSql = `
     SELECT rta.user_id,
@@ -91,7 +100,7 @@ async function getMemberStats(q, memberIds, { rangeStart, rangeEnd, periodStart,
   reqSql += ' GROUP BY rta.user_id';
 
   const [[oldRows], [scoreRows], [entryRows], [reqRows]] = await Promise.all([
-    q.query(oldSql, op), q.query(dayScoreSql, [rs, re, periodDay, memberIds, lowerDay]), q.query(entrySql, [memberIds, periodDay]), q.query(reqSql, rp)]);
+    q.query(oldSql, op), q.query(dayScoreSql.replace(' GROUP BY user_id', dayScoreWhere + ' GROUP BY user_id'), dsp), q.query(entrySql, [memberIds, periodDay]), q.query(reqSql, rp)]);
 
   const stats = {};
   const get = (id) => (stats[id] ??= {

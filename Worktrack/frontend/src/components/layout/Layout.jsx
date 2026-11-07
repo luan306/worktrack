@@ -14,6 +14,8 @@ import usePendingScoreCount from '../../lib/usePendingScoreCount';
 import { onRealtime } from '../../lib/socket';
 import { clearApiCache } from '../../api/client';
 import { avatarSrc } from '../../lib/avatar';
+import { usePresenceTracker } from '../../lib/presence';
+import { PresenceDot } from '../PresenceDot';
 
 /* ============================================================
    Ngôn ngữ thiết kế "control-panel": nền tối, mỗi mục nav có
@@ -168,7 +170,7 @@ export default function Sidebar({ collapsed: collapsedProp, onToggle, drawer = f
                     {initials}
                   </div>
                 )}
-                <span className="wt-live-dot absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[#17b26a] ring-2 ring-[#0b1220]" />
+                <PresenceDot userId={user?.id} size={10} ring="#0b1220" className="wt-live-dot" />
               </div>
               {!collapsed && (
                 <div className="min-w-0 flex-1">
@@ -384,6 +386,7 @@ export function MainLayout() {
   const badges = { '/daily': pendingScore };
   const { connect, disconnect } = useNotificationStore();
 
+  usePresenceTracker(user?.id); // 🟢 online / 🟡 treo / ⚪ offline
   // ⚠️ KHÔNG disconnect() trong cleanup của effect này
   useEffect(() => {
     if (!user?.id) return;

@@ -6,6 +6,7 @@ import api, { downloadFile } from '../../api/client';
 import useAuthStore from '../../store/authStore';
 import { avatarSrc } from '../../lib/avatar';
 
+import { notify } from '../../components/AppToast';
 /* ============================================================
    DESIGN TOKENS — cùng hệ thống với Board/Daily/Requests/Completed.
    ============================================================ */
@@ -110,7 +111,7 @@ export default function DashboardPage() {
       const r = await api.get('/dashboard/exports');
       setExportList(r.data.data || []);
     } catch (e) {
-      alert(e.response?.data?.message || e.message);
+      notify(e);
     } finally { setLoadingExportList(false); }
   };
 
@@ -119,7 +120,7 @@ export default function DashboardPage() {
     try {
       await downloadExcelFile(filename);
     } catch (e) {
-      alert(e.response?.data?.message || e.message);
+      notify(e);
     } finally { setDownloadingFile(null); }
   };
 
@@ -134,14 +135,14 @@ export default function DashboardPage() {
           await downloadExcelFile(filename);
         } catch (dlErr) {
           console.error('[download excel]', dlErr);
-          alert(t('dash_lock_download_failed', { filename, defaultValue: `Đã chốt kỳ thành công nhưng tải file "${filename}" thất bại — vui lòng thử tải lại.` }));
+          notify(t('dash_lock_download_failed', { filename, defaultValue: `Đã chốt kỳ thành công nhưng tải file "${filename}" thất bại — vui lòng thử tải lại.` }));
         }
       }
 
-      alert(t('dash_lock_success', { filename }));
+      notify(t('dash_lock_success', { filename }), 'success');
       setShowLock(false);
       fetchScores();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { notify(e); }
     finally { setLocking(false); }
   };
 

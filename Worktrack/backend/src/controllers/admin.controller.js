@@ -262,7 +262,7 @@ exports.updateRequest = async (req, res) => {
       metadata: { before, after, reason },
     });
     cache.clear('req:'); cache.clear('dash:');
-    req.app.get('io')?.emit('requests:updated', { id, action: 'admin_edit' });
+    req.app.get('io')?.emit('requests:updated', { id, taskId: +id, action: 'admin_edit' }); // taskId: khung chi tiết CV đang mở tự tải lại
     res.json({ success: true, data: after, changed: !!all });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -367,7 +367,7 @@ exports.roleSummary = async (req, res) => {
       })),
       // các quyền cấp Leader mà người đang đăng nhập có → hiện thành công tắc trong khung Sửa nhân viên
       switchable: grantable(req).map(p => ({ key: p.key, label: p.label })),
-      can_switch: perm.hasPerm(req.user, 'perm.delegate'),
+      can_switch: await require('../config/access').decide('perm.delegate', req.user, {}, perm.hasPerm(req.user, 'perm.delegate')),
     } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -394,5 +394,141 @@ exports.setSetting = async (req, res) => {
     });
     req.app.get('io')?.emit('permissions:changed'); // giao diện tải lại /auth/me (chấm đỏ "Chờ chấm" của Manager)
     res.json({ success: true, data: settings.list() });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// ═══ PHÂN QUYỀN THEO HÀNH ĐỘNG (Quản trị → 🔐 Phân quyền) ═══
+const access = require('../config/access');
+// GET /admin/access — danh mục + giá trị từng vai trò + số liệu so sánh song song
+exports.getAccess = async (req, res) => {
+  try { res.json({ success: true, data: { ...access.catalog(), mismatches: await access.mismatches(30) } }); }
+  catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// GET /admin/access/user/:id — quyền đang áp dụng cho 1 người (kèm nguồn: vai trò / chỉnh riêng)
+exports.getAccessUser = async (req, res) => {
+  try {
+    const [[u]] = await db.query('SELECT id, role, full_name, username FROM users WHERE id=?', [req.params.id]);
+    if (!u) return bad(res, 'Không tìm thấy người dùng', 404);
+    res.json({ success: true, data: { user: u, values: u.role === 'admin' ? null : access.forUser(u) } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// PUT /admin/access { changes: [{ type:'role'|'user', subject, action, value|null }], reason }
+exports.setAccess = async (req, res) => {
+  try {
+    const reason = reasonOf(req);
+    if (reasonError(reason)) return bad(res, reasonError(reason));
+    const changes = Array.isArray(req.body.changes) ? req.body.changes.slice(0, 200) : [];
+    if (!changes.length) return bad(res, 'Chưa có thay đổi nào');
+    let applied;
+    try { applied = await access.setRules(changes, req.user.id); } catch (e) { return bad(res, e.message); }
+    // ghi nhật ký: ai, cho ai, việc gì, cũ → mới
+    const ids = [...new Set(applied.filter(c => c.type === 'user').map(c => +c.subject))];
+    const [names] = ids.length ? await db.query('SELECT id, full_name FROM users WHERE id IN (?)', [ids]) : [[]];
+    const who = (c) => c.type === 'role' ? `vai trò ${access.roleName(c.subject)}` : (names.find(n => n.id === +c.subject)?.full_name || `#${c.subject}`);
+    const lines = applied.map(c => `${who(c)} · ${c.label}: ${access.labelOf(c.action, c.from)} → ${access.labelOf(c.action, c.to)}${c.reset ? ' (mặc định)' : ''}`);
+    await logActivity({
+      actorId: req.user.id, actionType: 'access_changed', entityType: 'setting',
+      description: withReason(`${actorOf(req)} đã chỉnh phân quyền: ${lines.join('; ')}`, reason),
+      metadata: { changes: applied, reason },
+    });
+    req.app.get('io')?.emit('permissions:changed'); // giao diện mọi người tải lại quyền (menu / nút)
+    res.json({ success: true, data: access.catalog() });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// POST /admin/access/check { user_id, action, target_user_id? } — được hay không, vì sao
+exports.checkAccess = async (req, res) => {
+  try {
+    const { user_id, action, target_user_id } = req.body || {};
+    const ids = [user_id, target_user_id].filter(Boolean).map(Number);
+    const [rows] = ids.length ? await db.query('SELECT id, role, full_name FROM users WHERE id IN (?)', [ids]) : [[]];
+    const user = rows.find(r => r.id === +user_id);
+    if (!user) return bad(res, 'Chọn người cần kiểm tra');
+    const target = target_user_id ? rows.find(r => r.id === +target_user_id) : null;
+    const result = await access.can(user, action, target ? { targetUserId: target.id, targetRole: target.role } : {});
+    // chưa chỉnh → so với code cũ (CV hằng ngày) để chắc chắn mặc định hiển thị đúng
+    const legacyFn = !access.isTuned(user, action) && require('./worklog.controller')._legacy[action];
+    const legacy = legacyFn && target ? await legacyFn({ user }, target.id) : null;
+    res.json({ success: true, data: { ...result, legacy, same: legacy === null ? null : legacy === result.ok } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+// ═══ QUY TRÌNH (Quản trị → 🔀 Quy trình) ═══
+const workflow = require('../config/workflow');
+// GET /admin/workflow — cấu hình hiện tại + nhóm chưa có Leader (bước 1 "chỉ Leader" sẽ do Manager chấm thay)
+exports.getWorkflow = async (req, res) => {
+  try {
+    const [noLeader] = await db.query(
+      `SELECT g.id, g.name, COUNT(gm.user_id) AS members FROM \`groups\` g LEFT JOIN group_members gm ON gm.group_id=g.id
+        WHERE g.is_active=1 AND NOT EXISTS (SELECT 1 FROM users l WHERE l.role='leader' AND l.is_active=1
+              AND (l.id=g.leader_id OR l.id IN (SELECT user_id FROM group_members WHERE group_id=g.id)))
+        GROUP BY g.id ORDER BY g.name`);
+    const [[{ managers }]] = await db.query("SELECT COUNT(*) AS managers FROM users WHERE role='manager' AND is_active=1");
+    const c = workflow.daily(), r = workflow.req();
+    res.json({ success: true, data: { daily: c, text: workflow.describeDaily(c), meta: workflow.dailyMeta(), groups_without_leader: noLeader, managers,
+      req: r, req_text: workflow.describeReq(r), req_meta: workflow.reqMeta(),
+      acct: workflow.acct(), acct_text: workflow.describeAcct(workflow.acct()), acct_meta: workflow.acctMeta() } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// PUT /admin/workflow { daily: {...} | req: {...}, reason } — reset: true → về mặc định
+exports.setWorkflow = async (req, res) => {
+  try {
+    const reason = reasonOf(req);
+    if (reasonError(reason)) return bad(res, reasonError(reason));
+    if (req.body.acct !== undefined || req.body.reset_acct) { // quy trình duyệt thay đổi tài khoản
+      const before = workflow.acct();
+      const after = await workflow.setAcct(req.body.reset_acct ? null : req.body.acct, req.user.id);
+      await logActivity({
+        actorId: req.user.id, actionType: 'workflow_changed', entityType: 'setting',
+        description: withReason(`${actorOf(req)} đã đổi quy trình duyệt thay đổi tài khoản: ${workflow.describeAcct(before)} → ${workflow.describeAcct(after)}`, reason),
+        metadata: { flow: 'acct', before, after, reason },
+      });
+      return res.json({ success: true, data: { acct: after, acct_text: workflow.describeAcct(after), acct_meta: workflow.acctMeta() } });
+    }
+    if (req.body.req !== undefined || req.body.reset_req) { // quy trình CV yêu cầu
+      const before = workflow.req();
+      const after = await workflow.setReq(req.body.reset_req ? null : req.body.req, req.user.id);
+      await logActivity({
+        actorId: req.user.id, actionType: 'workflow_changed', entityType: 'setting',
+        description: withReason(`${actorOf(req)} đã đổi quy trình CV yêu cầu: ${workflow.describeReq(before)} → ${workflow.describeReq(after)}`, reason),
+        metadata: { flow: 'req', before, after, reason },
+      });
+      req.app.get('io')?.emit('permissions:changed');
+      return res.json({ success: true, data: { req: after, req_text: workflow.describeReq(after), req_meta: workflow.reqMeta() } });
+    }
+    const before = workflow.daily();
+    const after = await workflow.setDaily(req.body.reset ? null : req.body.daily, req.user.id);
+    await logActivity({
+      actorId: req.user.id, actionType: 'workflow_changed', entityType: 'setting',
+      description: withReason(`${actorOf(req)} đã đổi quy trình chấm CV hằng ngày: ${workflow.describeDaily(before)} → ${workflow.describeDaily(after)}`, reason),
+      metadata: { before, after, reason },
+    });
+    const io = req.app.get('io');
+    io?.emit('permissions:changed');
+    cache.clear('dash:'); // cách tính điểm vào Bảng điều khiển có thể đã đổi
+    io?.emit('worklog:updated', { flow: true }); // trang CV hằng ngày đang mở tải lại
+    res.json({ success: true, data: { daily: after, text: workflow.describeDaily(after), meta: workflow.dailyMeta() } });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+// POST /admin/workflow/preview { user_id, daily? } — "việc của người này sẽ đi qua ai"
+exports.previewWorkflow = async (req, res) => {
+  try {
+    const c = workflow.normalize(req.body.daily || workflow.daily());
+    const [[u]] = await db.query('SELECT id, full_name, role FROM users WHERE id=?', [req.body.user_id]);
+    if (!u) return bad(res, 'Chọn người cần xem');
+    const { groups, leaders } = await require('../services/approvalService').groupLeadersOf(u.id, u.id);
+    const [mgr] = await db.query("SELECT full_name FROM users WHERE role='manager' AND is_active=1 AND id<>? ORDER BY full_name", [u.id]);
+    const managers = mgr.map(m => m.full_name);
+    const leaderNames = leaders.map(l => l.full_name);
+    const steps = [{ who: u.full_name, what: 'Ghi công việc hằng ngày' }];
+    if (!leaderNames.length) {
+      steps.push({ who: managers.join(', ') || 'Admin', what: 'Chấm điểm', note: groups.length ? `Nhóm ${groups.map(g => g.name).join(', ')} chưa có Leader → Manager chấm thẳng` : 'Chưa thuộc nhóm nào → Manager chấm thẳng' });
+    } else if (c.first === 'any') {
+      steps.push({ who: [...leaderNames, ...managers].join(', '), what: 'Chấm điểm', note: 'Leader hoặc Manager — ai chấm trước cũng được' });
+    } else {
+      steps.push({ who: leaderNames.join(', '), what: 'Chấm điểm', note: c.review && c.see === 'after' ? 'Manager chưa thấy nội dung ở bước này' : 'Manager thấy nhưng chưa chấm được' });
+      if (c.review) steps.push({ who: managers.join(', ') || 'Admin', what: c.approve ? 'Duyệt điểm (bấm Duyệt)' : 'Xem lại, sửa điểm khi cần', note: c.approve ? 'Duyệt xong Leader không sửa được nữa' : '' });
+    }
+    steps.push({ who: '', what: 'Xong' });
+    res.json({ success: true, data: { user: u, groups: groups.map(g => g.name), steps } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

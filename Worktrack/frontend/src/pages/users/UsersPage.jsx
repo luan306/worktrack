@@ -4,8 +4,9 @@ import api, { downloadFile, clearApiCache } from '../../api/client';
 import useAuthStore from '../../store/authStore';
 import { useReasonDialog } from '../../components/ReasonDialog';
 import ApprovalsPanel from './ApprovalsPanel';
-import { toast } from '../../components/AppToast';
+import { toast, notify } from '../../components/AppToast';
 import { avatarSrc } from '../../lib/avatar';
+import { WithPresence } from '../../components/PresenceDot';
 
 /* ============================================================
    Cùng ngôn ngữ "control-panel" với BoardPage / Sidebar:
@@ -58,7 +59,9 @@ const RoleBadge = ({role})=>{
   );
 };
 
-const Chip = ({color=C.primary,name='?',size=28,ring=false,src})=>{
+// uid: kèm chấm 🟢 online / 🟡 treo / ⚪ offline ở góc avatar
+const Chip = ({color=C.primary,name='?',size=28,ring=false,src,uid})=>{
+  if (uid) return <WithPresence userId={uid} size={Math.max(7, Math.round(size*.32))}><Chip color={color} name={name} size={size} ring={ring} src={src}/></WithPresence>;
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   if (src) return <img src={avatarSrc(src)} alt="" style={{width:size,height:size,borderRadius:'50%',objectFit:'cover',flexShrink:0,
     boxShadow: ring ? `0 0 0 2px var(--wt-surface), 0 0 0 3.5px ${color}55` : '0 1px 2px rgba(15,23,41,.15)'}}/>;
@@ -196,7 +199,7 @@ export default function UsersPage(){
   // ── User CRUD ──
   const createUser = async(form)=>{
     try { await api.post('/users',form); setShowAddUser(false); fetchUsers(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   // Sửa / khóa tài khoản nhóm khác → server trả 202 "chờ Leader nhóm đó đồng ý"
@@ -218,12 +221,12 @@ export default function UsersPage(){
   };
   const updateUser = async(id,form)=>{
     try { const { data } = await api.put(`/users/${id}`,form); setEditUser(null); fetchUsers(); afterSave(data); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   const toggleActive = async(u)=>{
     try { const { data } = await api.put(`/users/${u.id}`,{is_active:u.is_active?0:1}); fetchUsers(); afterSave(data); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   // Đặt lại mật khẩu: mở khung riêng (không dùng prompt() của trình duyệt)
@@ -233,34 +236,34 @@ export default function UsersPage(){
   const deleteUser = async(u)=>{
     if(!confirm(t('users_confirm_delete_user',{name:u.full_name}))) return;
     try { await api.delete(`/users/${u.id}`); fetchUsers(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   // ── Group CRUD ──
   const createGroup = async(form)=>{
     try { await api.post('/groups',form); setShowAddGroup(false); fetchGroups(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   const updateGroup = async(id,form)=>{
     try { await api.put(`/groups/${id}`,form); setEditGroup(null); fetchGroups(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   const deleteGroup = async(id)=>{
     if(!confirm(t('users_confirm_delete_group'))) return;
     try { await api.delete(`/groups/${id}`); fetchGroups(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   const addMember = async(groupId,userId)=>{
     try { await api.post(`/groups/${groupId}/members`,{user_id:userId}); fetchGroups(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   const removeMember = async(groupId,userId)=>{
     try { await api.delete(`/groups/${groupId}/members/${userId}`); fetchGroups(); }
-    catch(e){ alert(errMsg(e)); }
+    catch(e){ notify(e); }
   };
 
   // ── Import ──
@@ -290,7 +293,7 @@ export default function UsersPage(){
         text = text.replace(/^\uFEFF/, '');
         table = text.split(/\r?\n/).filter(l => l.trim()).slice(0, 501).map(parseCsvLine);
       }
-    } catch (err) { alert(errMsg(err)); setImportFile(null); return; }
+    } catch (err) { notify(err); setImportFile(null); return; }
 
     // Bỏ dòng tiêu đề
     const isHeader = cells => /^(h[oọ]\s*t[eê]n|full.?name|name|email|stt)/i.test((cells[0] || '').trim());
@@ -341,7 +344,7 @@ export default function UsersPage(){
       setImportResult(data.data); // khung kết quả: đã tạo / trùng / lỗi kèm lý do
       setImportPreview(null); setImportFile(null);
       fetchUsers(); fetchGroups();
-    } catch(e){ alert(errMsg(e)); }
+    } catch(e){ notify(e); }
     finally{ setImporting(false); }
   };
 
@@ -509,7 +512,7 @@ export default function UsersPage(){
                     onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
                     <td className="u-emp" style={{padding:'11px 16px'}}>
                       <div style={{display:'flex',alignItems:'center',gap:10}}>
-                        <Chip color={u.avatar_color||C.primary} name={u.full_name} size={32} ring src={u.avatar_url}/>
+                        <Chip color={u.avatar_color||C.primary} name={u.full_name} size={32} ring src={u.avatar_url} uid={u.id}/>
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{u.full_name}</div>
                           <div style={{fontSize:11,color:C.faint,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
@@ -699,7 +702,7 @@ export default function UsersPage(){
             </div>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{display:'none'}} onChange={handleFileChange}/>
 
-            <button onClick={()=>downloadFile('/users/import/template', { fallbackName: 'mau_import_user.xlsx' }).catch(e=>alert(errMsg(e)))}
+            <button onClick={()=>downloadFile('/users/import/template', { fallbackName: 'mau_import_user.xlsx' }).catch(e=>notify(e))}
               style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 16px',borderRadius:9,border:`1.5px solid ${C.line}`,background:'var(--wt-surface)',fontSize:12,fontWeight:700,color:C.sub,cursor:'pointer',marginTop:12}}>
               ⬇️ {t('users_download_sample')} (.xlsx)
             </button>
@@ -805,7 +808,7 @@ function AddUserModal({show,groups,onClose,onSave}){
   const [showPw,setShowPw]=useState(false);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
-    if(!f.username||!f.full_name||!f.password) return alert(t('users_fill_all'));
+    if(!f.username||!f.full_name||!f.password) return notify(t('users_fill_all'));
     onSave(f); // server kiểm tra lại vai trò được phép gán
   };
   return (
@@ -899,7 +902,7 @@ function RoleSelect({ value, onChange, lockedRole, userId, savedRole }) {
     if (!reason) return;
     setBusy(true);
     try { await api.put('/permissions/delegate', { user_id: userId, perm: row.key, allowed, reason }); clearApiCache(); await loadMember(); }
-    catch (e) { alert(errMsg(e)); }
+    catch (e) { notify(e); }
     finally { setBusy(false); }
   };
   const note = !info.can_switch ? '' : !userId ? t('users_perm_after_create', 'Tạo tài khoản xong mới bật / tắt quyền riêng được')
@@ -937,33 +940,35 @@ function RoleSelect({ value, onChange, lockedRole, userId, savedRole }) {
 }
 
 // Modal: Kết quả nhập tài khoản từ Excel — tổng kết + từng dòng trùng / lỗi kèm lý do và cách sửa
+// Các khối nhỏ của khung kết quả nhập (để ngoài component → không bị tạo lại mỗi lần vẽ)
+const Stat = ({ n, label, color, bg, icon }) => (
+  <div style={{ flex: '1 1 120px', padding: '12px 14px', borderRadius: 12, background: bg, border: `1px solid ${color}33` }}>
+    <div style={{ fontSize: 24, fontWeight: 900, color, fontFamily: FONT_MONO, lineHeight: 1 }}>{n}</div>
+    <div style={{ fontSize: 11.5, color: C.sub, marginTop: 5, fontWeight: 700 }}>{icon} {label}</div>
+  </div>
+);
+const Row = ({ name, msnv, reason, color }) => (
+  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 12px', borderTop: `1px solid ${C.lineSoft}` }}>
+    <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, marginTop: 6, flexShrink: 0 }} />
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 700 }}>{name}{msnv ? <span style={{ color: C.faint, fontWeight: 500, fontFamily: FONT_MONO, marginLeft: 6 }}>{msnv}</span> : null}</div>
+      <div style={{ fontSize: 12, color: C.sub, marginTop: 2, overflowWrap: 'anywhere' }}>{reason}</div>
+    </div>
+  </div>
+);
+const Section = ({ title, color, bg, hint, children }) => (
+  <div style={{ background: 'var(--wt-surface)', border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+    <div style={{ padding: '9px 12px', background: bg, fontSize: 12.5, fontWeight: 800, color }}>{title}</div>
+    <div style={{ maxHeight: 220, overflowY: 'auto' }}>{children}</div>
+    {hint && <div style={{ padding: '8px 12px', borderTop: `1px solid ${C.lineSoft}`, fontSize: 11, color: C.faint }}>💡 {hint}</div>}
+  </div>
+);
+
 function ImportResultModal({ result, onClose, onViewUsers }) {
   const { t } = useTranslation();
   if (!result) return null;
   const dup = result.duplicates || [], err = result.errors || [];
   const allOk = !dup.length && !err.length;
-  const Stat = ({ n, label, color, bg, icon }) => (
-    <div style={{ flex: '1 1 120px', padding: '12px 14px', borderRadius: 12, background: bg, border: `1px solid ${color}33` }}>
-      <div style={{ fontSize: 24, fontWeight: 900, color, fontFamily: FONT_MONO, lineHeight: 1 }}>{n}</div>
-      <div style={{ fontSize: 11.5, color: C.sub, marginTop: 5, fontWeight: 700 }}>{icon} {label}</div>
-    </div>
-  );
-  const Row = ({ name, msnv, reason, color }) => (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 12px', borderTop: `1px solid ${C.lineSoft}` }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, marginTop: 6, flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 700 }}>{name}{msnv ? <span style={{ color: C.faint, fontWeight: 500, fontFamily: FONT_MONO, marginLeft: 6 }}>{msnv}</span> : null}</div>
-        <div style={{ fontSize: 12, color: C.sub, marginTop: 2, overflowWrap: 'anywhere' }}>{reason}</div>
-      </div>
-    </div>
-  );
-  const Section = ({ title, color, bg, hint, children }) => (
-    <div style={{ background: 'var(--wt-surface)', border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
-      <div style={{ padding: '9px 12px', background: bg, fontSize: 12.5, fontWeight: 800, color }}>{title}</div>
-      <div style={{ maxHeight: 220, overflowY: 'auto' }}>{children}</div>
-      {hint && <div style={{ padding: '8px 12px', borderTop: `1px solid ${C.lineSoft}`, fontSize: 11, color: C.faint }}>💡 {hint}</div>}
-    </div>
-  );
   return (
     <Modal show title={allOk ? `✅ ${t('users_import_done', 'Nhập tài khoản thành công')}` : `📥 ${t('users_import_result', 'Kết quả nhập tài khoản')}`} onClose={onClose} width={560}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1163,7 +1168,7 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
   },[user]);
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const submit=()=>{
-    if(!f.username||!f.username.trim()) return alert(t('users_missing_msnv','Thiếu MSNV'));
+    if(!f.username||!f.username.trim()) return notify(t('users_missing_msnv','Thiếu MSNV'));
     // Leader mở tài khoản có vai trò mình không gán được → không gửi role (giữ nguyên)
     onSave(isLeader && !['user','assistant'].includes(user?.role) ? {...f, role: undefined} : f);
   };
@@ -1194,7 +1199,7 @@ function EditUserModal({show,user,groups=[],currentUserRole,onClose,onSave}){
             <img src={avatarSrc(user.avatar_url)} alt="" style={{width:36,height:36,borderRadius:'50%',objectFit:'cover'}}/>
             <span style={{flex:1,fontSize:12,color:C.sub}}>{t('users_has_photo','Người này đang dùng ảnh tự tải lên')}</span>
             <button type="button" onClick={async()=>{ if(!window.confirm(t('users_remove_photo_confirm','Xóa ảnh đại diện của người này?'))) return;
-                try { await api.delete(`/users/${user.id}/avatar`); onClose(); toast({ kind:'success', title:t('users_photo_removed','Đã xóa ảnh đại diện') }); } catch(e){ alert(errMsg(e)); } }}
+                try { await api.delete(`/users/${user.id}/avatar`); onClose(); toast({ kind:'success', title:t('users_photo_removed','Đã xóa ảnh đại diện') }); } catch(e){ notify(e); } }}
               style={{padding:'6px 11px',borderRadius:8,border:`1.5px solid ${C.danger}55`,background:C.dangerSoft,color:C.danger,fontSize:12,fontWeight:800,cursor:'pointer'}}>🗑 {t('users_remove_photo','Xóa ảnh')}</button>
           </div>
         )}
@@ -1213,7 +1218,7 @@ function AddGroupModal({show,users,onClose,onSave}){
   const [f,setF]=useState({name:'',icon:'🏭',leader_id:''});
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
   const leaders=users.filter(u=>['admin','manager','leader'].includes(u.role));
-  const submit=()=>{ if(!f.name.trim()) return alert(t('users_enter_group_name')); onSave(f); setF({name:'',icon:'🏭',leader_id:''}); };
+  const submit=()=>{ if(!f.name.trim()) return notify(t('users_enter_group_name')); onSave(f); setF({name:'',icon:'🏭',leader_id:''}); };
   return (
     <Modal show={show} title={`🏭 ${t('users_create_new_group')}`} onClose={onClose}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>

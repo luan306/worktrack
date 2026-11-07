@@ -65,9 +65,13 @@ async function membersWithLeader(userIds) {
  * mà ngày CHƯA CHẤM phải ẩn (người có Leader). Không phải Manager / chưa bật → tập rỗng.
  */
 async function leaderGated(viewer, userIds) {
-  if (viewer.role !== 'manager' || !require('../config/settings').on('daily.manager_after_leader')) return new Set();
-  const s = await membersWithLeader(userIds.filter(id => +id !== viewer.id));
-  return s;
+  if (viewer.role !== 'manager' || !require('../config/workflow').dailyFlags().hideUntilLeader) return new Set();
+  return membersWithLeader(userIds.filter(id => +id !== viewer.id));
+}
+// Quy trình "bước 1: chỉ Leader của nhóm chấm" → Manager không chấm TRƯỚC Leader cho những người này
+async function leaderFirstSet(viewer, userIds) {
+  if (viewer.role !== 'manager' || !require('../config/workflow').dailyFlags().leaderFirst) return new Set();
+  return membersWithLeader(userIds.filter(id => +id !== viewer.id));
 }
 
-module.exports = { leaderGated, membersWithLeader, pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };
+module.exports = { leaderGated, leaderFirstSet, membersWithLeader, pendingScoreDays, holidayMap, holidaysBetween, clearHolidayCache, isRestDay };

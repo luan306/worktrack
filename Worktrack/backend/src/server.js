@@ -2,14 +2,15 @@ process.env.TZ = process.env.APP_TZ || 'Asia/Ho_Chi_Minh'; // giờ VN kể cả
 require('dotenv').config();
 const express      = require('express');
 const http         = require('http');
-const { Server }   = require('socket.io');
 const cors         = require('cors');
 const path         = require('path');
 const compression  = require('compression');
 const helmet       = require('helmet');
 const rateLimit    = require('express-rate-limit');
+const jwt          = require('jsonwebtoken');
+const JWT_KEY      = require('./utils/jwtKey');
 
-const { verifyAccessToken } = require('./middleware/auth');
+const { setupRealtime } = require('./realtime');
 
 const app = express();
 
@@ -45,6 +46,16 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path.startsWith('/uploads'), // skip static files
+  // Đếm theo TÀI KHOẢN khi đã đăng nhập (token hợp lệ), chưa đăng nhập thì theo IP.
+  // Trước đây chỉ theo IP → cả văn phòng ra Internet qua 1 IP (NAT / VPN / proxy) dùng chung 600 lượt/phút
+  // → đông người là bị 429 hàng loạt. Chỉ kiểm chữ ký (không đọc DB) nên gần như không tốn gì.
+  keyGenerator: (req) => {
+    const h = req.headers.authorization;
+    if (h && h.startsWith('Bearer ')) {
+      try { const id = jwt.verify(h.slice(7), JWT_KEY, { algorithms: ['HS256'] }).id; if (id) return 'u:' + id; } catch { /* token hỏng/hết hạn → theo IP */ }
+    }
+    return 'ip:' + rateLimit.ipKeyGenerator(req.ip || '');
+  },
 });
 
 app.use('/api', apiLimiter);
@@ -119,28 +130,13 @@ app.use((err, _, res, __) => {
   res.status(status).json({ success: false, message });
 });
 
-// Socket.IO
+// HTTP + Socket.IO
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
-});
-
-// Xác thực socket bằng access token
-io.use(async (socket, next) => {
-  try {
-    const user = await verifyAccessToken(socket.handshake.auth?.token);
-    socket.data.userId = user.id;
-    next();
-  } catch (e) {
-    next(new Error(e.status ? e.message : 'Server error'));
-  }
-});
-
-io.on('connection', (socket) => {
-  const { userId } = socket.data;
-  socket.join(`user:${userId}`);
-  // Không log từng lần kết nối / ngắt: hàng trăm người × mỗi lần mở tab, rớt mạng → log phình vô hạn
-});
+// nginx giữ kết nối tới backend để dùng lại (keepalive 60s, frontend/nginx.conf) → backend phải giữ LÂU HƠN,
+// nếu không Node (mặc định 5s) đóng đúng lúc nginx vừa gửi request → thỉnh thoảng lỗi 502
+server.keepAliveTimeout = 65 * 1000;
+server.headersTimeout = 66 * 1000;
+const io = setupRealtime(server); // xác thực socket, online/treo, phòng CV — src/realtime/
 
 // Cho các route/controller lấy io qua req.app.get('io')
 app.set('io', io);
@@ -176,6 +172,8 @@ require('./config/indexes').ensureIndexes();
 require('./config/permissions').init(); // bảng phân quyền (tự tạo nếu chưa có)
 require('./config/settings').init();    // cài đặt thông báo (Admin bật / tắt)
 require('./services/approvalService').init(); // yêu cầu cần Leader nhóm khác duyệt
+require('./config/access').init();
+require('./config/workflow').init();        // quy trình (Quản trị → 🔀 Quy trình)          // bộ phân quyền mới — chạy song song (chỉ so sánh)
 require('./cron/maintenance.cron');
 // ── Nhắc chấm điểm (leader) + nhắc ghi việc (nhân viên) — 08:00 sáng T2–T6 ──
 require('./cron/worklogReminder.cron')(io);

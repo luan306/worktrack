@@ -25,6 +25,8 @@ async function init() {
     const has = new Set(cols.map(x => x.c || x.COLUMN_NAME));
     if (!has.has('summary')) await db.query('ALTER TABLE approval_requests ADD COLUMN summary VARCHAR(500) NULL AFTER changes');
     if (!has.has('requester_hidden')) await db.query('ALTER TABLE approval_requests ADD COLUMN requester_hidden TINYINT(1) NOT NULL DEFAULT 0');
+    // nhiều bước duyệt (🔀 Quy trình): bước hiện tại, danh sách bước, ai đã đồng ý ở bước trước
+    if (!has.has('stage')) await db.query('ALTER TABLE approval_requests ADD COLUMN stage TINYINT NOT NULL DEFAULT 1, ADD COLUMN stages JSON NULL, ADD COLUMN progress JSON NULL');
   } catch (e) { console.error('[approval] lỗi tạo bảng:', e.message); }
 }
 
@@ -49,4 +51,30 @@ async function groupLeadersOf(userId, excludeId) {
   return { groups, leaders };
 }
 
-module.exports = { init, shareGroup, groupLeadersOf };
+/**
+ * Ai duyệt, theo quy trình "Duyệt thay đổi tài khoản" (Quản trị → 🔀 Quy trình).
+ * → { skip: true }  không cần duyệt (áp dụng ngay)
+ * → { error }       không gửi được (vd nhóm chưa có Leader)
+ * → { groups, stages: [{ kind:'leader'|'manager', ids:[...], names:[...] }] }
+ */
+async function approvalPlan(targetId, requesterId) {
+  const c = require('../config/workflow').acct();
+  const { groups, leaders } = await groupLeadersOf(targetId, requesterId);
+  const stages = [];
+  const wantLeader = c.approver !== 'manager', wantManager = c.approver !== 'group_leader';
+  let needManager = wantManager;
+  if (wantLeader) {
+    if (!groups.length) { if (!wantManager) return { skip: true, groups }; }        // như trước: không thuộc nhóm nào → áp dụng ngay
+    else if (leaders.length) stages.push({ kind: 'leader', ids: leaders.map(l => l.id), names: leaders.map(l => l.full_name) });
+    else if (c.no_leader === 'manager') needManager = true;
+    else if (!wantManager) return { error: `Nhóm ${groups.map(g => g.name).join(', ')} chưa có Leader để duyệt — nhờ Manager / Admin thực hiện`, groups };
+  }
+  if (needManager) {
+    const [m] = await db.query("SELECT id, full_name FROM users WHERE role='manager' AND is_active=1 AND id<>? ORDER BY full_name", [requesterId]);
+    if (!m.length) return { error: 'Chưa có Manager nào để duyệt — nhờ Admin thực hiện', groups };
+    stages.push({ kind: 'manager', ids: m.map(x => x.id), names: m.map(x => x.full_name) });
+  }
+  return { groups, stages };
+}
+
+module.exports = { init, shareGroup, groupLeadersOf, approvalPlan };

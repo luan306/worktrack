@@ -5,12 +5,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api, { clearApiCache } from '../../api/client';
 import useNotificationStore from '../../store/notificationStore';
 
+import { notify } from '../../components/AppToast';
 const C = {
   ink: 'var(--wt-ink)', sub: 'var(--wt-text-2)', faint: 'var(--wt-text-3)', line: 'var(--wt-line)', lineSoft: 'var(--wt-surface-3)',
   surface: 'var(--wt-surface)', primary: '#3654ff', success: '#17b26a', successSoft: 'var(--wt-tint-success)',
   danger: '#e5384d', dangerSoft: 'var(--wt-tint-danger)', warning: '#f59e0b', warningSoft: 'var(--wt-tint-warning)',
 };
-const errMsg = (e) => e.response?.data?.message || e.message;
 const STATUS = {
   pending: ['⏳ Chờ duyệt', C.warning, C.warningSoft], approved: ['✅ Đã đồng ý', C.success, C.successSoft],
   rejected: ['❌ Bị từ chối', C.danger, C.dangerSoft], cancelled: ['↩ Đã hủy', C.faint, C.lineSoft],
@@ -43,7 +43,7 @@ export default function ApprovalsPanel({ onChanged, focus, openMine = false }) {
     try {
       await api.post(`/users/approvals/${a.id}/${kind}`, kind === 'reject' ? { note } : {});
       setRejecting(null); setNote(''); clearApiCache(); await load(); onChanged?.();
-    } catch (e) { alert(errMsg(e)); await load(); }
+    } catch (e) { notify(e); await load(); }
     finally { setBusy(0); }
   };
   const minePending = mine.filter(a => a.status === 'pending').length;
@@ -51,7 +51,7 @@ export default function ApprovalsPanel({ onChanged, focus, openMine = false }) {
   const hide = async (a) => {
     setBusy(a ? a.id : -1);
     try { await api.post(a ? `/users/approvals/${a.id}/hide` : '/users/approvals/hide-done'); await load(); }
-    catch (e) { alert(errMsg(e)); }
+    catch (e) { notify(e); }
     finally { setBusy(0); }
   };
 
@@ -60,14 +60,14 @@ export default function ApprovalsPanel({ onChanged, focus, openMine = false }) {
       {toMe.length > 0 && (
         <div style={{ background: C.surface, border: `1.5px solid ${C.warning}88`, borderRadius: 12, overflow: 'hidden' }}>
           <div style={{ padding: '9px 14px', background: C.warningSoft, fontWeight: 800, fontSize: 13, color: C.ink }}>
-            📨 {toMe.length} yêu cầu chờ bạn duyệt <span style={{ fontWeight: 600, fontSize: 11.5, color: C.sub }}>— Leader nhóm khác muốn sửa tài khoản trong nhóm của bạn</span>
+            📨 {toMe.length} yêu cầu chờ bạn duyệt <span style={{ fontWeight: 600, fontSize: 11.5, color: C.sub }}>— Leader muốn đổi vai trò / khóa / chuyển nhóm tài khoản</span>
           </div>
           {toMe.map(a => (
             <div key={a.id} style={{ padding: '10px 14px', borderTop: `1px solid ${C.lineSoft}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                 <div style={{ fontSize: 12.5, color: C.ink }}><b>{a.requester_name}</b> muốn sửa <b>{a.target_name}</b> <span style={{ color: C.faint }}>({a.target_username})</span></div>
                 <div style={{ fontSize: 12, color: C.sub, marginTop: 2, overflowWrap: 'anywhere' }}>→ {a.what}</div>
-                <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>gửi lúc {fmt(a.created_at)}</div>
+                <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>gửi lúc {fmt(a.created_at)}<StageLine a={a} /></div>
               </div>
               {rejecting === a.id ? (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: '1 1 260px' }}>
@@ -107,6 +107,7 @@ export default function ApprovalsPanel({ onChanged, focus, openMine = false }) {
                   <b style={{ color: C.ink }}>{a.target_name}</b>{a.what ? ` — ${a.what}` : ''}
                   {a.decided_by_name && <span style={{ color: C.faint }}> · {a.decided_by_name}</span>}
                   {a.decision_note && <span style={{ color: C.faint }}> · “{a.decision_note}”</span>}
+                  {a.status === 'pending' && <span style={{ fontSize: 10.5, color: C.faint }}><StageLine a={a} /></span>}
                 </span>
                 <span style={{ color: C.faint, fontSize: 10.5 }}>{fmt(a.decided_at || a.created_at)}</span>
                 {a.status === 'pending'
@@ -120,4 +121,12 @@ export default function ApprovalsPanel({ onChanged, focus, openMine = false }) {
       )}
     </div>
   );
+}
+
+// Nhiều bước duyệt (🔀 Quy trình): "Bước 2/2 · chờ Manager — Leader A đã đồng ý"
+const KIND = { leader: 'Leader nhóm', manager: 'Manager' };
+function StageLine({ a }) {
+  if (!a.stages || a.stages.length < 2) return null;
+  const done = (a.progress || []).map(p => `${p.name} (${KIND[p.kind] || p.kind}) đã đồng ý`).join(', ');
+  return <> · <b style={{ color: '#7c3aed' }}>Bước {a.stage}/{a.stages.length} · chờ {KIND[a.stages[a.stage - 1]] || 'duyệt'}</b>{done ? ` — ${done}` : ''}</>;
 }

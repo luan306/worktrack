@@ -9,8 +9,11 @@ const CATALOG = [
     desc: 'Leader / Manager / Trợ lý Leader khi tạo hoặc giao CV tự chọn người làm chính và người hỗ trợ (đổi được sau). TẮT → không chọn được: người được giao đầu tiên tự làm chính, người thêm sau là hỗ trợ (riêng Admin vẫn đổi được).', default: true },
   { key: 'request.multi_main', group: 'Công việc yêu cầu', label: 'Cho phép NHIỀU người làm CHÍNH trong 1 CV',
     desc: 'BẬT → chọn được nhiều người làm chính (vẫn phải có ít nhất 1 người chính). TẮT → mỗi CV chỉ 1 người chính: chọn người khác làm chính thì người cũ tự chuyển sang hỗ trợ. CV đang có nhiều người chính vẫn giữ nguyên khi tắt.', default: true },
-  { key: 'daily.manager_after_leader', group: 'CV Hằng ngày', label: 'Manager chỉ thấy CV hằng ngày SAU KHI Leader đã chấm',
+  // ĐÃ CHUYỂN sang Quản trị → 🔀 Quy trình (chỉ còn dùng làm giá trị ban đầu khi quy trình chưa lưu lần nào)
+  { key: 'daily.manager_after_leader', hidden: true, group: 'CV Hằng ngày', label: 'Manager chỉ thấy CV hằng ngày SAU KHI Leader đã chấm',
     desc: 'Ngày nào Leader chưa chấm → Manager chỉ thấy "⏳ Chờ Leader chấm", chưa xem nội dung, chưa chấm được, không tính vào "Chờ chấm" và không nhận nhắc / báo ngay. Leader chấm xong là hiện ngay. Người không có Leader trong nhóm (vd. chính các Leader) → Manager vẫn xem và chấm như bình thường.', default: false },
+  { key: 'access.shadow', group: 'Phân quyền mới', label: 'So sánh song song bộ phân quyền mới (không ảnh hưởng người dùng)',
+    desc: 'Bộ phân quyền mới chạy NGẦM bên cạnh hệ thống cũ: hệ thống cũ vẫn quyết định, bộ mới chỉ so kết quả và ghi lại chỗ khác nhau (xem ở tab 🧭 Quyền mới). TẮT → ngừng so sánh.', default: true },
   { key: 'notif.leader_unscored', label: 'Nhắc Leader chấm điểm hằng ngày (8:00 sáng T2–T6)',
     desc: 'Leader nhận 1 thông báo gộp: còn bao nhiêu ngày công việc của người cùng nhóm chưa chấm.', default: true },
   { key: 'notif.manager_group', label: 'Manager có nhóm riêng: nhận nhắc chờ chấm như Leader',
@@ -19,6 +22,8 @@ const CATALOG = [
     desc: 'Người chấm của nhóm (Leader; cả Manager nếu bật mục trên) nhận thông báo ngay — mỗi nhân viên tối đa 1 thông báo / ngày để chuông không bị ngập.', default: false },
   { key: 'notif.staff_missing', label: 'Nhắc nhân viên chưa ghi công việc (8:00 sáng T2–T6)',
     desc: 'Ai chưa ghi việc ngày làm việc trước đó (không nghỉ) sẽ được nhắc ghi bù.', default: true },
+  { key: 'notif.daily_review', label: 'Nhắc Manager duyệt điểm CV hằng ngày (8:00 sáng T2–T6)',
+    desc: 'Chỉ khi quy trình CV hằng ngày có bước "Manager phải bấm Duyệt" (Quản trị → 🔀 Quy trình): Manager nhận 1 thông báo gộp số ngày Leader đã chấm đang chờ duyệt.', default: true },
   { key: 'notif.manager_reviewing', label: 'Nhắc Manager duyệt CV yêu cầu (8:00 sáng T2–T6)',
     desc: 'Manager nhận nhắc khi còn CV đang chờ Manager duyệt lần cuối.', default: true },
 ];
@@ -52,6 +57,6 @@ async function set(key, value, actorId) {
                     ON DUPLICATE KEY UPDATE v=VALUES(v), updated_by=VALUES(updated_by)`, [key, value ? '1' : '0', actorId]);
   await reload();
 }
-const list = () => CATALOG.map(c => ({ group: 'Thông báo', ...c, value: on(c.key), is_default: !values.has(c.key) }));
+const list = () => CATALOG.filter(c => !c.hidden).map(c => ({ group: 'Thông báo', ...c, value: on(c.key), is_default: !values.has(c.key) }));
 
 module.exports = { CATALOG, KEYS, init, reload, on, set, list };

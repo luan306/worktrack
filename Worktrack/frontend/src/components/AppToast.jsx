@@ -3,12 +3,34 @@
 //   toast({ kind: 'info' | 'success' | 'warning' | 'error', title, rows: [[nhãn, giá trị], …], note, action: { label, onClick } })
 // Vẽ 1 lần trong Layout: <AppToaster />
 import { useEffect, useState } from 'react';
+import i18n from '../i18n';
 
 let push = null;
 const queue = [];
 export function toast(t) {
   const item = { id: Date.now() + Math.random(), kind: 'info', duration: 9000, ...t };
   if (push) push(item); else queue.push(item);
+}
+
+// Thay cho alert(): notify(lỗi axios) hoặc notify('chuỗi', 'success' | 'warning' | 'error' | 'info')
+//  - 403 không có quyền → 🔒 "Không có quyền" + lời nhắc liên hệ Admin
+//  - lỗi khác → ❌ "Không thực hiện được" + lý do từ server
+export function notify(x, kind = 'warning') {
+  const t = (k, d) => i18n.t(k, { defaultValue: d });
+  if (x && typeof x === 'object') {
+    const status = x.response?.status;
+    const raw = String(x.response?.data?.message || x.message || '').trim();
+    if (status === 403) {
+      const contact = t('err_contact_admin', 'Vui lòng liên hệ Admin để được cấp quyền.');
+      const text = raw.replace(contact, '').replace(/[.\s]+$/, '') || t('err_no_permission', 'Bạn không có quyền làm việc này');
+      return toast({ kind: 'warning', icon: '🔒', title: t('err_no_permission_title', 'Không có quyền'), text: text + '.',
+        note: /liên hệ|contact|連絡/i.test(text) ? undefined : contact, duration: 7000 });
+    }
+    const text = !x.response && /network/i.test(raw) ? t('err_network', 'Mất kết nối tới máy chủ — kiểm tra mạng rồi thử lại.') : raw;
+    return toast({ kind: 'error', title: t('err_failed_title', 'Không thực hiện được'), text, duration: 8000 });
+  }
+  const msg = String(x ?? '');
+  return toast({ kind, title: msg, duration: kind === 'success' ? 5000 : 7000 });
 }
 
 const KIND = {

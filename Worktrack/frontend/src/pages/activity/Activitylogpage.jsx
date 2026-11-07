@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 
+import { notify } from '../../components/AppToast';
 const C = {
   primary: '#3654ff', dark: 'var(--wt-ink)', success: '#17b26a',
   warning: '#f59e0b', danger: '#e5384d', border: 'var(--wt-line)', bg: 'var(--wt-surface-2)',
@@ -36,6 +37,10 @@ const ACTION_META = {
   user_imported:            { icon: '📥', color: C.primary, bg: 'var(--wt-tint-primary)' },
   permission_changed:       { icon: '🔐', color: '#8e44ad', bg: 'var(--wt-tint-violet)' },
   setting_changed:          { icon: '🔔', color: '#f59e0b', bg: 'var(--wt-tint-warning)' },
+  access_changed:           { icon: '🔐', color: '#7c3aed', bg: 'var(--wt-tint-violet)' },
+  workflow_changed:         { icon: '🔀', color: '#3654ff', bg: 'var(--wt-tint-primary)' },
+  worklog_reviewed:         { icon: '✅', color: '#17b26a', bg: 'var(--wt-tint-success)' },
+  user_change_stage_approved: { icon: '☑️', color: '#7c3aed', bg: 'var(--wt-tint-violet)' },
   user_change_requested:    { icon: '📨', color: '#f59e0b', bg: 'var(--wt-tint-warning)' },
   user_avatar_changed:      { icon: '🖼', color: C.primary, bg: 'var(--wt-tint-primary)' },
   user_change_rejected:     { icon: '❌', color: C.danger,  bg: 'var(--wt-tint-danger)' },
@@ -85,6 +90,10 @@ const ACTION_LABELS = {
   user_imported:            'Nhập tài khoản',
   permission_changed:       'Đổi phân quyền',
   setting_changed:          'Đổi cài đặt thông báo',
+  access_changed:           'Chỉnh phân quyền',
+  workflow_changed:         'Đổi quy trình',
+  worklog_reviewed:         'Duyệt điểm CV hằng ngày',
+  user_change_stage_approved: 'Đồng ý 1 bước duyệt tài khoản',
   user_change_requested:    'Gửi yêu cầu sửa tài khoản nhóm khác',
   user_avatar_changed:      'Đổi ảnh đại diện',
   user_change_rejected:     'Từ chối yêu cầu sửa tài khoản',
@@ -201,7 +210,7 @@ export default function ActivityLogPage() {
   const handleExport = async () => {
     setExporting(true);
     try { await exportCsv({ type: filterType, actor: filterActor, from: filterFrom, to: filterTo }); }
-    catch (e) { alert(e.response?.data?.message || e.message); }
+    catch (e) { notify(e); }
     finally { setExporting(false); }
   };
 

@@ -43,7 +43,7 @@ async function remindUnscored(io, today) {
        JOIN users l ON l.id=gl.user_id AND l.role IN (?) AND l.is_active=1
       WHERE m.user_id IN (?)`, [roles, ids]);
   // Manager chỉ thấy sau khi Leader chấm → không nhắc Manager về người có Leader
-  if (roles.includes('manager') && settings.on('daily.manager_after_leader')) {
+  if (roles.includes('manager') && require('../config/workflow').dailyFlags().leaderFirst) {
     const led = await membersWithLeader(ids);
     links = links.filter(l => !(l.role === 'manager' && led.has(l.member_id)));
   }
@@ -113,13 +113,33 @@ async function remindReviewing(io) {
   return ids.length;
 }
 
+// 4) Manager: ngày CV hằng ngày Leader đã chấm, chờ Manager duyệt (quy trình có bước "phải bấm Duyệt")
+async function remindDailyReview(io, today) {
+  if (!settings.on('notif.daily_review') || !require('../config/workflow').dailyFlags().approve) return 0;
+  const [rows] = await db.query(
+    `SELECT s.user_id, DATE_FORMAT(s.work_date,'%Y-%m-%d') AS d FROM daily_day_scores s JOIN users u ON u.id=s.user_id AND u.is_active=1
+      WHERE s.reviewed_by IS NULL AND s.work_date BETWEEN ? AND ? ORDER BY s.work_date`, [addDays(today, -LOOKBACK_DAYS), addDays(today, -1)]);
+  if (!rows.length) return 0;
+  const led = await membersWithLeader([...new Set(rows.map(r => r.user_id))]);
+  const list = rows.filter(r => led.has(r.user_id));
+  if (!list.length) return 0;
+  const [managers] = await db.query("SELECT id FROM users WHERE role='manager' AND is_active=1");
+  const done = await alreadyReminded('worklog_review_reminder');
+  const ids = managers.map(m => m.id).filter(id => !done.has(id));
+  if (ids.length) await notifyMany(io, ids, {
+    actorId: null, type: 'worklog_review_reminder', entityType: 'worklog_team', entityId: 0,
+    payload: { total: list.length, people: new Set(list.map(r => r.user_id)).size, from: list[0].d },
+  });
+  return ids.length;
+}
+
 async function runReminders(io) {
   const today = localDate();
   try {
     const hol = await holidayMap();
     if (isRestDay(today, hol)) return; // cuối tuần / công ty nghỉ lễ → không nhắc ai
-    const [leaders, staff, managers] = await Promise.all([remindUnscored(io, today), remindMissing(io, today, hol), remindReviewing(io)]);
-    if (leaders || staff || managers) console.log(`[reminder] Nhắc chấm điểm: ${leaders} người chấm · nhắc ghi việc: ${staff} người · nhắc duyệt CV: ${managers} manager`);
+    const [leaders, staff, managers, reviewers] = await Promise.all([remindUnscored(io, today), remindMissing(io, today, hol), remindReviewing(io), remindDailyReview(io, today)]);
+    if (leaders || staff || managers || reviewers) console.log(`[reminder] Nhắc chấm điểm: ${leaders} người chấm · nhắc ghi việc: ${staff} người · nhắc duyệt CV: ${managers} manager · nhắc duyệt điểm ngày: ${reviewers} manager`);
   } catch (e) {
     console.error('[reminder] lỗi:', e.message);
   }

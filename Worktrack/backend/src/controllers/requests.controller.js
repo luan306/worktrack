@@ -1,4 +1,7 @@
 const { hasPerm } = require('../config/permissions');
+const taskRooms = require('../realtime/taskRooms');
+const access = require('../config/access'); // phân quyền theo hành động — chưa chỉnh thì như cũ
+const workflow = require('../config/workflow'); // quy trình CV yêu cầu (🔀 Quy trình)
 const db   = require('../config/db');
 const cache = require('../config/cache');
 const { sendCachedJson } = require('../utils/cachedJson');
@@ -219,7 +222,10 @@ exports.getOne = async (req, res) => {
            FROM request_task_links l LEFT JOIN users u ON u.id=l.added_by WHERE l.task_id=? ORDER BY l.id`, [req.params.id]),
     ]);
 
-    res.json({ success: true, data: { ...task, assignees, files, comments, links } });
+    // nút Xóa: chỉ hiện khi API xóa thực sự cho phép (theo tab 🔐 Phân quyền)
+    //  chưa chỉnh "Xóa CV" → hiện như cũ (chỉ người có quyền "Xóa CV" ở trang Phân quyền: Manager/Admin)
+    const can_delete = (access.isTuned(req.user, 'req.delete') || hasPerm(req.user, 'req.delete')) && !(await deleteDenied(req.user, req.params.id, task));
+    res.json({ success: true, data: { ...task, assignees, files, comments, links, can_delete } });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -352,10 +358,13 @@ const toMySQL = (d) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, priority, status, deadline, started_at, completed_at, hours_spent } = req.body;
-    let { score } = req.body;
+    const { title, description, priority, deadline, started_at, completed_at, hours_spent } = req.body;
+    let { score, status } = req.body;
     const [[task]] = await db.query('SELECT * FROM request_tasks WHERE id=?', [id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
+    // 🔀 Quy trình CV yêu cầu (Quản trị → Quy trình): nút trên giao diện giữ nguyên, máy chủ chuyển đúng bước
+    const reqFlow = workflow.req();
+    if (status !== undefined && status !== task.status) status = workflow.reqNextStatus(task.status, status);
 
     // Theo trang Phân quyền: quyền Manager / Leader trong CV
     const isAdmin   = hasPerm(req.user, 'req.manager');
@@ -363,23 +372,33 @@ exports.update = async (req, res) => {
     const isCreator = task.created_by === req.user.id;
     // Trợ lý Leader tạo CV thay Leader: chỉ sửa thông tin CV, không có quyền chấm / duyệt / đổi trạng thái của người tạo
     const creatorPower = isCreator && req.user.role !== 'assistant';
-    const [[assigned]] = await db.query('SELECT 1 AS x FROM request_task_assignees WHERE task_id=? AND user_id=?', [id, req.user.id]);
-    const isAssignee = !!assigned;
+    const [assignedRows] = await db.query('SELECT user_id FROM request_task_assignees WHERE task_id=?', [id]);
+    const isAssignee = assignedRows.some(a => a.user_id === req.user.id);
     const statusChanged = status !== undefined && status !== task.status;
     const deny = (message) => res.status(403).json({ success: false, message });
 
+    // Bộ phân quyền (Quản trị → 🔐 Phân quyền): Admin chưa chỉnh → đúng như cũ (giá trị thứ 4)
+    const T = { task: { created_by: task.created_by, group_id: task.group_id, assignee_ids: assignedRows.map(a => a.user_id) } };
+    const [canEditDone, canEditInfo, canStatus, canScoreT, canApprove] = await Promise.all([
+      access.decide('req.edit_done', req.user, T, isAdmin),
+      access.decide('req.edit_info', req.user, T, isCreator || isAdmin),
+      access.decide('req.change_status', req.user, T, isLeaderRole || creatorPower),
+      access.decide('req.score_prelim', req.user, T, isLeaderRole || creatorPower),
+      access.decide('req.approve', req.user, T, isAdmin),
+    ]);
+
     // Phân quyền ở SERVER — không dựa vào việc frontend ẩn nút, vì ai cũng có thể gọi thẳng API bằng token của mình
-    if (!isLeaderRole && !isCreator && !isAssignee)
+    if (!isLeaderRole && !isCreator && !isAssignee && !canEditInfo && !canStatus && !canScoreT && !canApprove && !canEditDone)
       return deny('Bạn không tham gia CV này');
-    if (['done', 'archived'].includes(task.status) && !isAdmin)
+    if (['done', 'archived'].includes(task.status) && !canEditDone)
       return deny('CV đã hoàn thành — chỉ Manager/Admin mới được chỉnh sửa');
-    if ([title, description, priority, deadline, started_at].some(v => v !== undefined) && !isCreator && !isAdmin)
+    if ([title, description, priority, deadline, started_at].some(v => v !== undefined) && !canEditInfo)
       return deny('Chỉ người tạo CV hoặc Manager/Admin mới được sửa thông tin CV');
-    if (completed_at !== undefined && !isLeaderRole && !creatorPower)
+    if (completed_at !== undefined && !canStatus)
       return deny('Bạn không có quyền sửa thời gian hoàn thành');
 
     // Người thực hiện (không phải leader/người tạo) chỉ được đi đúng luồng
-    if (statusChanged && !isLeaderRole && !creatorPower) {
+    if (statusChanged && !canStatus) {
       if (!isAssignee) return deny('Chỉ người thực hiện mới được đổi trạng thái CV');
       const FLOW = {
         in_progress: ['pending', 'assigned'],
@@ -388,7 +407,10 @@ exports.update = async (req, res) => {
       };
       if (!FLOW[status]?.includes(task.status))
         return deny('Bạn không được chuyển CV sang trạng thái này');
-      if (status === 'reviewing') {
+      // Nộp hoàn thành phải bấm "Bắt đầu" trước (để có giờ bắt đầu → tính giờ công)
+      if (['scoring', 'reviewing'].includes(status) && !task.started_at)
+        return res.status(400).json({ success: false, message: 'CV chưa bắt đầu — bấm "Bắt đầu" trước rồi mới nộp hoàn thành' });
+      if (status === 'reviewing' && reqFlow.prelim === 'auto') { // 'off': ai nộp cũng lên thẳng Manager
         const [[creator]] = await db.query('SELECT role FROM users WHERE id=?', [task.created_by]);
         if (!['admin', 'manager'].includes(creator?.role))
           return deny('CV này phải qua Leader chấm điểm trước');
@@ -426,8 +448,10 @@ exports.update = async (req, res) => {
         if (!task.completed_at) { fields.push('completed_at=?'); vals.push(now); }
       }
       else if (status === 'done') {
-        // ⚠️ Duyệt hoàn thành lần cuối CHỈ dành cho Manager/Admin
-        if (!isAdmin) {
+        // ⚠️ Duyệt hoàn thành lần cuối CHỈ dành cho Manager/Admin (hoặc người Admin cấp quyền "Duyệt hoàn thành")
+        // Quy trình không có bước Manager duyệt: người chấm sơ bộ xong là Hoàn thành
+        const prelimFinish = reqFlow.final === 'off' && task.status === 'scoring' && canScoreT;
+        if (!canApprove && !prelimFinish) {
           return res.status(403).json({
             success: false,
             message: 'Chỉ Manager/Admin mới được duyệt hoàn thành CV. Vui lòng chờ Manager chấm điểm lần cuối.'
@@ -448,7 +472,7 @@ exports.update = async (req, res) => {
     // Chấm RIÊNG từng người: assignee_scores = [{ user_id, score }]
     let perPerson = null;
     if (Array.isArray(req.body.assignee_scores) && req.body.assignee_scores.length) {
-      if (!isLeaderRole && !creatorPower) return deny('Bạn không có quyền chấm điểm CV này');
+      if (!canScoreT) return deny('Bạn không có quyền chấm điểm CV này');
       const [rows] = await db.query(
         `SELECT a.user_id, a.role, u.full_name AS name FROM request_task_assignees a JOIN users u ON u.id=a.user_id WHERE a.task_id=?`, [id]);
       const byId = new Map(rows.map(r => [r.user_id, r]));
@@ -466,7 +490,7 @@ exports.update = async (req, res) => {
       score = Math.round(perPerson.reduce((s, p) => s + p.score, 0) / perPerson.length * 10) / 10;
     }
 
-    const scoreChanged = score !== undefined && (isLeaderRole||creatorPower);
+    const scoreChanged = score !== undefined && canScoreT;
 
     // Score do leader/manager/admin (hoặc creator) chấm
     if (scoreChanged) {
@@ -545,11 +569,11 @@ exports.update = async (req, res) => {
 };
 
 // Tải CV để thay đổi người thực hiện
-async function loadAssignableTask(req, res, id, doneMessage = 'CV đã hoàn thành, không thể chỉnh sửa người thực hiện nữa') {
+async function loadAssignableTask(req, res, id, doneMessage = 'CV đã hoàn thành, không thể chỉnh sửa người thực hiện nữa', key = 'req.assign') {
   const [[task]] = await db.query('SELECT title, status, created_by FROM request_tasks WHERE id=?', [id]);
   if (!task) { res.status(404).json({ success: false, message: 'Not found' }); return null; }
   if (['done', 'cancelled'].includes(task.status)) { res.status(400).json({ success: false, message: doneMessage }); return null; }
-  if (!hasPerm(req.user, 'req.manager') && task.created_by !== req.user.id) {
+  if (!(await access.decide(key, req.user, () => taskCtx(id), hasPerm(req.user, 'req.manager') || task.created_by === req.user.id))) {
     res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được thay đổi người thực hiện' });
     return null;
   }
@@ -620,7 +644,7 @@ exports.setAssigneeRole = async (req, res) => {
     const { id, userId } = req.params;
     const role = req.body.role === 'support' ? 'support' : 'main';
     if (!canPickRole(req.user)) return res.status(403).json({ success: false, message: PICK_ROLE_OFF });
-    const task = await loadAssignableTask(req, res, id);
+    const task = await loadAssignableTask(req, res, id, undefined, 'req.assign_role');
     if (!task) return;
 
     const [rows] = await conn.query(
@@ -628,16 +652,19 @@ exports.setAssigneeRole = async (req, res) => {
     const target = rows.find(r => r.user_id === +userId);
     if (!target) return res.status(404).json({ success: false, message: 'Người này không thuộc CV' });
     if (target.role === role) return res.json({ success: true });
-    if (role === 'support' && !rows.some(r => r.role === 'main' && r.user_id !== +userId))
-      return res.status(400).json({ success: false, message: multiMain()
-        ? 'CV phải có ít nhất 1 người làm chính — hãy chọn thêm người khác làm chính trước'
-        : 'CV phải có 1 người làm chính — hãy chọn người khác làm chính (người này sẽ tự chuyển sang hỗ trợ)' });
+    // hạ người chính cuối cùng → người kế tiếp tự lên làm chính (CV luôn còn ít nhất 1 người chính)
+    let promoted = null;
+    if (role === 'support' && !rows.some(r => r.role === 'main' && r.user_id !== +userId)) {
+      promoted = rows.find(r => r.user_id !== +userId);
+      if (!promoted) return res.status(400).json({ success: false, message: 'CV chỉ có 1 người nên người này phải làm Chính — thêm người khác vào rồi mới chuyển sang Hỗ trợ' });
+    }
 
     // chỉ 1 người chính → người chính cũ tự sang hỗ trợ; nhiều người chính → giữ nguyên
     const oldMains = role === 'main' && !multiMain() ? rows.filter(r => r.role === 'main') : [];
     await conn.beginTransaction();
     if (oldMains.length) await conn.query("UPDATE request_task_assignees SET role='support' WHERE task_id=? AND role='main'", [id]);
     await conn.query('UPDATE request_task_assignees SET role=? WHERE task_id=? AND user_id=?', [role, id, userId]);
+    if (promoted) await conn.query("UPDATE request_task_assignees SET role='main' WHERE task_id=? AND user_id=?", [id, promoted.user_id]);
     await conn.commit();
 
     const actor = req.user.full_name || req.user.username;
@@ -645,8 +672,8 @@ exports.setAssigneeRole = async (req, res) => {
       actorId: req.user.id, actionType: 'request_updated', entityType: 'request', entityId: +id,
       description: role === 'main'
         ? `${actor} đã chọn ${target.full_name} làm CHÍNH trong CV "${task.title}"${oldMains.length ? ` (${oldMains.map(m => m.full_name).join(', ')} chuyển sang hỗ trợ)` : ''}`
-        : `${actor} đã chuyển ${target.full_name} sang HỖ TRỢ trong CV "${task.title}"`,
-      metadata: { user_id: +userId, role, demoted: oldMains.map(m => m.user_id) },
+        : `${actor} đã chuyển ${target.full_name} sang HỖ TRỢ trong CV "${task.title}"${promoted ? ` (${promoted.full_name} lên làm chính)` : ''}`,
+      metadata: { user_id: +userId, role, demoted: oldMains.map(m => m.user_id), promoted: promoted?.user_id || null },
     });
     broadcastRequests(req, { taskId: +id, action: 'edited' });
     res.json({ success: true });
@@ -752,6 +779,10 @@ exports.addComment = async (req, res) => {
     if (!text && !req.file) {
       return res.status(400).json({ success: false, message: 'content required' });
     }
+    if (!(await access.decide('req.comment', req.user, () => taskCtx(req.params.id), true))) {
+      if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền bình luận trong CV này' });
+    }
 
     const colNames = await getColumns('request_task_comments');
 
@@ -781,6 +812,8 @@ exports.addComment = async (req, res) => {
       vals
     );
 
+    // 💬 người đang mở CV này thấy tin mới ngay + tắt "… đang nhắn" của người gửi
+    taskRooms.emitComment(req.app.get('io'), req.params.id, { id: r.insertId, userId: req.user.id });
     await notifyComment(req).catch(err => console.error('[notify commented]', err.message));
     res.status(201).json({ success: true, data: { id: r.insertId } });
   } catch (e) {
@@ -842,12 +875,8 @@ exports.remove = async (req, res) => {
   try {
     const [[task]] = await db.query('SELECT title, created_by, status FROM request_tasks WHERE id=?', [req.params.id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
-    // Trước đây route chỉ cần đăng nhập → user thường xóa được CV của bất kỳ ai
-    const isAdmin = hasPerm(req.user, 'req.delete');
-    if (!isAdmin && (task.created_by !== req.user.id || req.user.role === 'assistant'))
-      return res.status(403).json({ success: false, message: 'Chỉ người tạo CV hoặc Manager/Admin mới được xóa CV' });
-    if (!isAdmin && ['done', 'archived'].includes(task.status))
-      return res.status(403).json({ success: false, message: 'CV đã hoàn thành (đã tính điểm) — chỉ Manager/Admin mới được xóa' });
+    const why = await deleteDenied(req.user, req.params.id, task);
+    if (why) return res.status(403).json({ success: false, message: why });
     // Ghi lại điểm + người thực hiện TRƯỚC khi xóa (xóa CV đã tính điểm = trừ điểm của họ)
     const [[scoreRow]] = await db.query('SELECT score FROM request_tasks WHERE id=?', [req.params.id]);
     const who = await getAssigneeInfo(req.params.id);
@@ -884,6 +913,10 @@ exports.uploadFile = async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, message: 'No file' });
     const { id } = req.params;
     const { originalname, filename, size, mimetype } = req.file;
+    if (!(await access.decide('req.attach_file', req.user, () => taskCtx(id), true))) {
+      fs.promises.unlink(req.file.path).catch(() => {}); // file đã lưu tạm → xóa
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền đính kèm file vào CV này' });
+    }
 
     // Kiểm tra cột nào tồn tại
     const colNames = await getColumns('request_task_files');
@@ -923,7 +956,8 @@ exports.deleteFile = async (req, res) => {
       [req.params.fileId, req.params.id]);
     if (!file) return res.status(404).json({ success: false, message: 'Not found' });
     // Chỉ người tải file lên, người tạo CV hoặc Manager/Admin mới được xóa
-    if (![file.uploaded_by, file.task_creator].includes(req.user.id) && !hasPerm(req.user, 'req.delete'))
+    if (file.uploaded_by !== req.user.id && !(await access.decide('req.attach_delete', req.user, () => taskCtx(file.task_id),
+      file.task_creator === req.user.id || hasPerm(req.user, 'req.delete'))))
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa file này' });
     // Xóa file vật lý
     if (file.stored_name) {
@@ -947,6 +981,33 @@ function cleanUrl(raw) {
   } catch { return null; }
 }
 
+// Ngữ cảnh 1 CV cho bộ phân quyền (chỉ truy vấn khi Admin đã chỉnh hành động đó)
+// Ai xóa được CV này — dùng chung cho nút Xóa (getOne → can_delete) và API xóa → không còn nút hiện mà bấm bị chặn
+// trả về lý do bị chặn, hoặc null nếu được xóa
+async function deleteDenied(user, taskId, task) {
+  const doneTask = ['done', 'archived'].includes(task.status);
+  if (access.isTuned(user, 'req.delete')) {
+    // Admin đã chỉnh "Xóa CV": theo phạm vi; CV đã hoàn thành chỉ xóa được khi có "Tất cả CV"
+    const r = await access.can(user, 'req.delete', await taskCtx(taskId));
+    if (!r.ok) return 'Bạn không có quyền xóa CV này';
+    if (doneTask && !r.scope.s.includes('all')) return 'CV đã hoàn thành (đã tính điểm) — bạn không có quyền xóa';
+    return null;
+  }
+  // Trước đây route chỉ cần đăng nhập → user thường xóa được CV của bất kỳ ai
+  const isAdmin = hasPerm(user, 'req.delete');
+  if (!isAdmin && (task.created_by !== user.id || user.role === 'assistant')) return 'Chỉ người tạo CV hoặc Manager/Admin mới được xóa CV';
+  if (!isAdmin && doneTask) return 'CV đã hoàn thành (đã tính điểm) — chỉ Manager/Admin mới được xóa';
+  return null;
+}
+
+async function taskCtx(taskId) {
+  const [[[t]], [a]] = await Promise.all([
+    db.query('SELECT created_by, group_id FROM request_tasks WHERE id=?', [taskId]),
+    db.query('SELECT user_id FROM request_task_assignees WHERE task_id=?', [taskId]),
+  ]);
+  return { task: { created_by: t?.created_by, group_id: t?.group_id, assignee_ids: a.map(x => x.user_id) } };
+}
+
 // Người tạo CV, người thực hiện, Leader/Manager/Admin
 async function canTouchTask(req, task) {
   if (hasPerm(req.user, 'req.leader') || hasPerm(req.user, 'req.manager') || task.created_by === req.user.id) return true;
@@ -959,7 +1020,8 @@ exports.addLink = async (req, res) => {
   try {
     const [[task]] = await db.query('SELECT id, title, created_by FROM request_tasks WHERE id=?', [req.params.id]);
     if (!task) return res.status(404).json({ success: false, message: 'Not found' });
-    if (!(await canTouchTask(req, task))) return res.status(403).json({ success: false, message: 'Bạn không tham gia CV này' });
+    if (!(await access.decide('req.attach_link', req.user, () => taskCtx(task.id), await canTouchTask(req, task))))
+      return res.status(403).json({ success: false, message: 'Bạn không tham gia CV này' });
     const url = cleanUrl(req.body.url);
     if (!url) return res.status(400).json({ success: false, message: 'Link không hợp lệ (chỉ nhận http:// hoặc https://)' });
     const title = String(req.body.title || '').trim().slice(0, 200) || null;
@@ -981,7 +1043,8 @@ exports.deleteLink = async (req, res) => {
       `SELECT l.*, rt.created_by AS task_creator, rt.title AS task_title FROM request_task_links l
          JOIN request_tasks rt ON rt.id=l.task_id WHERE l.id=? AND l.task_id=?`, [req.params.linkId, req.params.id]);
     if (!link) return res.status(404).json({ success: false, message: 'Not found' });
-    if (![link.added_by, link.task_creator].includes(req.user.id) && !hasPerm(req.user, 'req.delete'))
+    if (link.added_by !== req.user.id && !(await access.decide('req.attach_delete', req.user, () => taskCtx(link.task_id),
+      link.task_creator === req.user.id || hasPerm(req.user, 'req.delete'))))
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa link này' });
     await db.query('DELETE FROM request_task_links WHERE id=?', [link.id]);
     await logActivity({

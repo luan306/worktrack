@@ -3,8 +3,11 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import api, { clearApiCache } from '../../api/client';
 import useAuth from '../../store/authStore';
-import { getSocket, onRealtime } from '../../lib/socket';
+import { toast, notify } from '../../components/AppToast';
+import { onRealtime } from '../../lib/socket';
 import { useNow } from '../../lib/useNow';
+import { WithPresence } from '../../components/PresenceDot';
+import useTaskRoom from '../../lib/useTaskRoom';
 
 const C = {
   primary:'#3654ff', dark:'var(--wt-ink)', success:'#17b26a',
@@ -70,8 +73,10 @@ const Linkify = ({ text }) => String(text).split(URL_RE).map((part, i) =>
     </a>
   ) : part);
 
-const Chip = ({color=C.primary,name='?',size=28})=>{
+// uid: kèm chấm 🟢 online / 🟡 treo / ⚪ offline ở góc avatar
+const Chip = ({color=C.primary,name='?',size=28,uid})=>{
   const ini=(name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  if (uid) return <WithPresence userId={uid} size={Math.max(7, Math.round(size*.34))}><Chip color={color} name={name} size={size}/></WithPresence>;
   return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:color,color:'#fff',fontSize:size>24?12:9,fontWeight:700}}>{ini}</div>;
 };
 
@@ -107,6 +112,8 @@ const RolePicker = ({value, onChange, mainDisabled, mainTitle, supportDisabled, 
     </span>
   );
 };
+
+const ALONE_MSG = 'CV chỉ có 1 người nên người này phải làm Chính — thêm người khác vào rồi mới chuyển sang Hỗ trợ.';
 
 const LOCALE_MAP = { vi:'vi-VN', en:'en-US', ja:'ja-JP' };
 const makeFmtDt = locale => d => {
@@ -408,6 +415,10 @@ export default function RequestsPage() {
         .req-root .req-list-item { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .req-root .req-list-item:active { background: var(--wt-tint-primary) !important; }
         .req-root *:focus-visible { outline: 2px solid ${C.primary}; outline-offset: 2px; border-radius: 4px; }
+        .req-typing-dots { display: inline-flex; gap: 3px; flex-shrink: 0; }
+        .req-typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--wt-text-4); animation: reqTyping 1.2s infinite ease-in-out; }
+        .req-typing-dots i:nth-child(2) { animation-delay: .15s; } .req-typing-dots i:nth-child(3) { animation-delay: .3s; }
+        @keyframes reqTyping { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
         @media (hover: none) and (pointer: coarse) { .req-root input, .req-root select, .req-root textarea { font-size: 16px !important; } }
         .req-root ::-webkit-scrollbar { width: 8px; height: 8px; }
         .req-root ::-webkit-scrollbar-track { background: transparent; }
@@ -561,6 +572,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const [pendingRole, setPendingRole] = useState('main');
   const canPickRole = useAuth(s => s.user?.role==='admin' || !!s.user?.features?.assign_roles);
   const multiMain = useAuth(s => !!s.user?.features?.multi_main);
+  // 🔀 Quy trình CV yêu cầu (Admin chỉnh): ẩn bước bị tắt trên thanh tiến trình, đổi chữ nút cho đúng
+  const reqFlow = useAuth(s => s.user?.features?.req_flow) || { prelim: 'auto', final: 'manager' };
+  const flowSteps = STEPS.filter(s => !(s.key === 'scoring' && reqFlow.prelim === 'off') && !(s.key === 'reviewing' && reqFlow.final === 'off'));
   const [attachFile, setAttachFile]   = useState(null);
   const [sendingMsg, setSendingMsg]   = useState(false);
   const feedRef = useRef();
@@ -571,43 +585,37 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const hasPerm = useAuth(s => s.hasPerm);
   const isAdmin = hasPerm('req.manager'); // quyền Manager trong CV (trang Phân quyền)
   const isSuper = user?.role === 'admin'; // Admin: đổi trạng thái tùy ý, sửa điểm cả khi đã hoàn thành
-  const canDelete = isSuper || hasPerm('req.delete');
+  // nút Xóa: máy chủ tính theo đúng luật xóa (tab 🔐 Phân quyền) cho từng CV → tắt quyền là ẩn nút.
+  // Chưa chỉnh gì ở Phân quyền → hiện như cũ (Manager/Admin)
+  const canDelete = task?.can_delete ?? (isSuper || hasPerm('req.delete'));
 
 
-  const loadTask = async()=>{
-    setLoading(true);
+  // quiet: tải lại ngầm khi người khác nhắn / sửa (không thay cả khung bằng ⏳, giữ chỗ đang cuộn nếu đang đọc tin cũ)
+  const loadTask = async(quiet=false)=>{
+    if (!quiet) setLoading(true);
+    const f = feedRef.current, atBottom = !f || f.scrollHeight - f.scrollTop - f.clientHeight < 80;
     try{
-      const{data}=await api.get(`/requests/${taskId}`);
+      const{data}=await api.get(`/requests/${taskId}`, quiet ? { cache: false } : undefined);
       setTask(data.data);
       setActivityTick(n=>n+1);
-      setTimeout(()=>feedRef.current?.scrollTo(0,feedRef.current.scrollHeight),100);
+      if (!quiet || atBottom) setTimeout(()=>feedRef.current?.scrollTo(0,feedRef.current.scrollHeight),100);
     }catch(e){console.error(e);}
-    finally{setLoading(false);}
+    finally{ if (!quiet) setLoading(false); }
   };
   useEffect(()=>{ loadTask(); },[taskId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // 📡 Realtime — nếu CV đang mở bị người khác đổi
-  useEffect(()=>{
-    if (!user?.id) return;
-    const socket = getSocket(user.id);
-    const onUpdate = (payload) => {
-      if (payload?.taskId !== taskId) return;
-      clearApiCache();
-      if (payload.action === 'deleted') { onClose(); return; }
-      loadTask();
-    };
-    socket.on('requests:updated', onUpdate);
-    return () => socket.off('requests:updated', onUpdate);
-  }, [taskId, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 📡 Realtime: người khác sửa / nhắn tin → tải lại ngầm · CV bị xóa → đóng · "… đang nhắn"
+  const { typerNames, typingInput, stopTyping } = useTaskRoom(taskId, user?.id, { onChanged: () => loadTask(true), onDeleted: onClose });
 
   const save = async updates=>{
     setSaving(true);
     try{await api.put(`/requests/${taskId}`,updates);await loadTask();onSaved?.(task);}
-    catch(e){alert(e.response?.data?.message||e.message);}
+    catch(e){notify(e);}
     finally{setSaving(false);}
   };
 
   const sendComment = async()=>{
     if(!comment.trim() && !attachFile) return;
+    stopTyping();
     setSendingMsg(true);
     try{
       if (attachFile) {
@@ -622,9 +630,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
       }
       setComment('');
       setAttachFile(null);
-      loadTask();
+      loadTask(true);
     }
-    catch(e){alert(e.response?.data?.message||e.message);}
+    catch(e){notify(e);}
     finally{setSendingMsg(false);}
   };
 
@@ -650,21 +658,23 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
   const addAssignee = async (uid, role='main')=>{
     try{await api.post(`/requests/${taskId}/assign`,{user_id:uid,role});loadTask();setShowAddUser(false);}
-    catch(e){alert(e.response?.data?.message||e.message);}
+    catch(e){notify(e);}
   };
 
   const removeAssignee = async uid=>{
     try{await api.delete(`/requests/${taskId}/assign/${uid}`);loadTask();}
-    catch(e){alert(e.message);}
+    catch(e){notify(e);}
   };
 
   // Mỗi CV chỉ 1 người làm CHÍNH — chọn người khác làm chính thì người cũ tự sang hỗ trợ
   const toggleAssigneeRole = async (a)=>{
     const newRole = a.role==='support' ? 'main' : 'support';
+    if (newRole==='support' && (task.assignees||[]).length===1)
+      return toast({ kind:'warning', title:t('req_need_one_main_title','Cần ít nhất 1 người làm Chính'), note:t('req_alone_main', ALONE_MSG) });
     try{
       await api.put(`/requests/${taskId}/assign/${a.user_id}/role`,{role:newRole});
       loadTask();
-    }catch(e){alert(e.response?.data?.message||e.message);}
+    }catch(e){notify(e);}
   };
 
   const claimTask = async()=>{
@@ -672,9 +682,9 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
       await api.post(`/requests/${taskId}/claim`);
       await loadTask();
       onSaved?.(task);
-      alert(t('req_self_assign_success', { defaultValue: 'Bạn đã nhận và bắt đầu công việc thành công.' }));
+      notify(t('req_self_assign_success', { defaultValue: 'Bạn đã nhận và bắt đầu công việc thành công.' }), 'success');
     }
-    catch(e){alert(e.response?.data?.message||e.message);}
+    catch(e){notify(e);}
   };
 
   const deleteTask = async()=>{
@@ -682,7 +692,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
     if (!window.confirm(`${t('req_delete_confirm')}\n"${task.title}"${pts}`)) return;
     setSaving(true);
     try { await api.delete(`/requests/${taskId}`); clearApiCache(); await onSaved?.(null); onClose(); }
-    catch(e){ alert(e.response?.data?.message||e.message); }
+    catch(e){ notify(e); }
     finally { setSaving(false); }
   };
   // Admin đổi thẳng trạng thái; quay về chờ / đang làm thì xóa giờ hoàn thành
@@ -712,7 +722,6 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
   const hasPeople=(task.assignees||[]).length>0;
   const mainPerson=(task.assignees||[]).find(a=>a.role==='main');
   const hasMain=!!mainPerson;
-  const mainCount=(task.assignees||[]).filter(a=>a.role==='main').length;
   const mainLocked=hasMain && !multiMain; // chỉ 1 người chính → đã có thì không thêm "chính" được
   const peopleKey=(task.assignees||[]).map(a=>`${a.user_id}:${a.score??''}`).join(',')+`|${task.score??''}`;
   // Điểm từng người (riêng nếu có, không thì điểm chung của CV)
@@ -722,7 +731,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
         const sc = a.score ?? task.score;
         return (
           <span key={a.user_id} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--wt-text-2)',background:'var(--wt-surface)',border:`1px solid ${C.border}`,padding:'4px 6px 4px 4px',borderRadius:14}}>
-            <Chip color={a.avatar_color||C.primary} name={a.full_name} size={20}/>
+            <Chip color={a.avatar_color||C.primary} name={a.full_name} size={20} uid={a.user_id}/>
             {a.full_name}<RoleBadge role={a.role} clickable={false}/>
             <b style={{color:sc!=null?C.success:'var(--wt-text-4)',marginLeft:2}}>{sc!=null?`${+sc}đ`:'—'}</b>
           </span>
@@ -763,11 +772,11 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
       {/* Status bar */}
       <div className="req-steps-bar" style={{padding:'9px 18px',background:C.bg,borderBottom:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:4,flexShrink:0,flexWrap:'wrap'}}>
-        {(isAdmin||isCreator||isLeader ? STEPS : [
+        {(isAdmin||isCreator||isLeader ? flowSteps : [
           {key:'in_progress', tkey:'in_progress'},
           {key:'done',        tkey:'done'},
         ]).map((s,i,arr)=>{
-          const steps = isAdmin||isCreator||isLeader ? STEPS : arr;
+          const steps = isAdmin||isCreator||isLeader ? flowSteps : arr;
           const idx   = steps.findIndex(x=>x.key===task.status);
           const effectiveIdx = task.status==='scoring'||task.status==='reviewing' ? (isAdmin||isCreator||isLeader?idx:1) : idx;
           const done  = i < effectiveIdx;
@@ -897,14 +906,10 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
                 {(task.assignees||[]).map(a=>(
                   <div key={a.user_id} style={{display:'flex',alignItems:'center',gap:6,padding:'5px 10px',borderRadius:20,background:'var(--wt-tint-primary)',border:'1.5px solid var(--wt-tint-primary-bd)',fontSize:12,color:C.primary,fontWeight:600}}>
-                    <div style={{width:20,height:20,borderRadius:'50%',background:a.avatar_color||C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:700}}>
-                      {(a.full_name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
-                    </div>
+                    <Chip color={a.avatar_color||C.primary} name={a.full_name} size={20} uid={a.user_id}/>
                     {a.full_name}
                     {canManageAssignees&&canPickRole
-                      ? <RolePicker size="sm" value={a.role} onChange={r=>r!==a.role&&toggleAssigneeRole(a)}
-                          supportDisabled={multiMain && a.role==='main' && mainCount<=1}
-                          supportTitle={t('req_need_one_main','CV cần ít nhất 1 người làm Chính — chọn thêm người khác làm Chính trước')}/>
+                      ? <RolePicker size="sm" value={a.role} onChange={r=>r!==a.role&&toggleAssigneeRole(a)}/>
                       : <RoleBadge role={a.role}/>}
                     {!!a.added_late && <span title={t('req_late_added_tip', 'Người này được thêm vào SAU KHI công việc đã nộp')} style={{display:'inline-flex',alignItems:'center',gap:3,padding:'1px 7px',borderRadius:20,background:'var(--wt-tint-danger)',border:'1px solid var(--wt-tint-danger-bd)',color:C.danger,fontSize:10,fontWeight:800,whiteSpace:'nowrap'}}>⚠️ {t('req_late_added', 'Thêm sau khi nộp')}</span>}
                     {canManageAssignees&&<span onClick={()=>removeAssignee(a.user_id)} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:15,lineHeight:1}} onMouseEnter={e=>e.target.style.color=C.danger} onMouseLeave={e=>e.target.style.color='var(--wt-text-4)'}>×</span>}
@@ -978,11 +983,12 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                     hint={hasPeople
                       ? t('req_leader_score_prompt_each', { defaultValue: 'Chấm điểm sơ bộ cho TỪNG người trong công việc trước khi gửi Manager duyệt lần cuối.' })
                       : t('req_leader_score_prompt', { defaultValue: 'Nhập điểm chấm sơ bộ trước khi gửi lên Manager duyệt lần cuối.' })}
+                    {...(reqFlow.final === 'off' ? { hint: t('req_score_finish_hint', 'Quy trình không có bước Manager duyệt — chấm xong là CV Hoàn thành và được tính điểm.') } : null)}
                     actions={collect=>(<>
                       <button onClick={()=>save({status:'in_progress',completed_at:null})}
                         style={{padding:'7px 14px',borderRadius:8,border:`1.5px solid ${C.border}`,background:'var(--wt-surface)',color:'var(--wt-text-3)',fontSize:12,fontWeight:600,cursor:'pointer'}}>↩️ {t('req_send_back')}</button>
                       <button disabled={saving} onClick={()=>{const p=collect(); if(p) save({status:'reviewing',...p});}}
-                        style={{padding:'7px 14px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_scoring_done')}</button>
+                        style={{padding:'7px 14px',borderRadius:8,border:'none',background:reqFlow.final === 'off' ? C.success : C.primary,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {reqFlow.final === 'off' ? t('req_score_finish', 'Chấm xong — Hoàn thành CV') : t('req_scoring_done')}</button>
                     </>)}/>
                 )}
 
@@ -1037,7 +1043,8 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
 
           <div className="req-form-footer" style={{padding:'10px 16px',borderTop:`1.5px solid ${C.border}`,display:'flex',gap:8,alignItems:'center',background:'var(--wt-surface)',flexShrink:0}}>
             <div style={{flex:1,minWidth:0,fontSize:12,color:'var(--wt-text-4)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t('req_created_by',{time:fmtDt(task.created_at),name:task.creator_name})}</div>
-            {(task.status==='in_progress'||task.status==='assigned') ? (
+            {/* Chỉ cho nộp hoàn thành khi đã bấm Bắt đầu — chưa bắt đầu thì chỉ có nút Lưu */}
+            {(task.status==='in_progress'||(task.status==='assigned'&&task.started_at)) ? (
               <button onClick={markDone} style={{padding:'6px 14px',borderRadius:7,border:'none',background:C.warning,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>✅ {t('req_submit_done')}</button>
             ) : (
               <button onClick={()=>save({})} disabled={saving} style={{padding:'6px 14px',borderRadius:7,border:'none',background:saving?'var(--wt-text-4)':C.success,color:'#fff',fontSize:12,fontWeight:600,cursor:'pointer'}}>💾 {t('save')}</button>
@@ -1054,7 +1061,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
               const isMe=c.user_id===user?.id;
               return (
                 <div key={i} style={{display:'flex',gap:8,flexDirection:isMe?'row-reverse':'row'}}>
-                  <Chip color={c.avatar_color||C.primary} name={c.full_name||'?'} size={26}/>
+                  <Chip color={c.avatar_color||C.primary} name={c.full_name||'?'} size={26} uid={c.user_id}/>
                   <div style={{maxWidth:'80%',minWidth:0}}>
                     <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3,flexDirection:isMe?'row-reverse':'row'}}>
                       <span style={{fontSize:11,fontWeight:700,color:isMe?C.primary:C.dark}}>{c.full_name}</span>
@@ -1076,6 +1083,16 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
             })}
           </div>
 
+          {typerNames.length>0&&(
+            <div aria-live="polite" style={{padding:'5px 12px',fontSize:11,color:'var(--wt-text-3)',display:'flex',alignItems:'center',gap:6,flexShrink:0,minWidth:0}}>
+              <span className="req-typing-dots"><i/><i/><i/></span>
+              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>
+                {typerNames.length===1 ? t('req_typing_one',{name:typerNames[0]})
+                  : typerNames.length===2 ? t('req_typing_two',{a:typerNames[0],b:typerNames[1]})
+                  : t('req_typing_many',{name:typerNames[0],count:typerNames.length-1})}
+              </span>
+            </div>
+          )}
           <div style={{padding:'10px 12px',borderTop:`1.5px solid ${C.border}`,flexShrink:0}}>
             {attachFile&&(
               <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,padding:'5px 9px',borderRadius:8,background:'var(--wt-tint-primary)',border:'1px solid var(--wt-tint-primary-bd)',fontSize:11,color:C.primary,fontWeight:600}}>
@@ -1084,7 +1101,7 @@ function DetailPanel({taskId,users,isLeader,user,onClose,onSaved}){
                 <span onClick={()=>setAttachFile(null)} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:14}}>×</span>
               </div>
             )}
-            <textarea value={comment} onChange={e=>setComment(e.target.value)}
+            <textarea value={comment} onChange={e=>{setComment(e.target.value); typingInput(e.target.value);}}
               placeholder={t('req_message_placeholder')}
               onKeyDown={e=>{
                 if (e.key!=='Enter' || e.nativeEvent.isComposing) return; // đang gõ dấu (IME) thì bỏ qua
@@ -1143,9 +1160,12 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
   const setFormRole = (uid, role)=>{
     const target = form.assignees.find(a=>a.user_id===uid);
     if (!target || target.role===role) return;
+    if (role==='support' && form.assignees.length===1)
+      return toast({ kind:'warning', title:t('req_need_one_main_title','Cần ít nhất 1 người làm Chính'), note:t('req_alone_main', ALONE_MSG) });
     if (!multiMain) return toggleFormAssigneeRole(uid);
-    if (role==='support' && mainCountF<=1) return; // phải còn ít nhất 1 người chính
-    s('assignees', form.assignees.map(a=>a.user_id===uid ? {...a, role} : a));
+    // hạ người chính cuối cùng → người kế tiếp tự lên làm chính
+    const next = role==='support' && mainCountF<=1 ? form.assignees.find(a=>a.user_id!==uid) : null;
+    s('assignees', form.assignees.map(a=>a.user_id===uid ? {...a, role} : next && a.user_id===next.user_id ? {...a, role:'main'} : a));
   };
   const mainCountF = form.assignees.filter(a=>a.role==='main').length;
   const removePerson = (uid)=>{
@@ -1170,14 +1190,14 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
   };
 
   const submit=async()=>{
-    if(!form.title.trim()) return alert(t('req_title_required_alert'));
+    if(!form.title.trim()) return notify(t('req_title_required_alert'));
     setSaving(true);
     try{
       const payload = { ...form, score: form.score===''?undefined:+form.score };
       const{data}=await api.post('/requests',payload);
       onSaved(data.data?.id);
     }
-    catch(e){alert(e.response?.data?.message||e.message);}
+    catch(e){notify(e);}
     finally{setSaving(false);}
   };
 
@@ -1220,9 +1240,7 @@ function CreatePanel({groups,users,canScore=true,onClose,onSaved}){
                 <Chip color={a.avatar_color||C.primary} name={a.full_name} size={22}/>
                 <span style={{flex:1,minWidth:0,fontSize:12.5,fontWeight:700,color:C.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.full_name}</span>
                 {canPickRole
-                  ? <RolePicker size="sm" value={a.role} onChange={r=>setFormRole(a.user_id,r)}
-                      supportDisabled={multiMain && a.role==='main' && mainCountF<=1}
-                      supportTitle={t('req_need_one_main','CV cần ít nhất 1 người làm Chính — chọn thêm người khác làm Chính trước')} />
+                  ? <RolePicker size="sm" value={a.role} onChange={r=>setFormRole(a.user_id,r)} />
                   : <RoleBadge role={a.role}/>}
                 <span onClick={()=>removePerson(a.user_id)} title={t('remove','Bỏ')} style={{cursor:'pointer',color:'var(--wt-text-4)',fontSize:16,lineHeight:1,padding:'0 2px'}}>×</span>
               </div>
@@ -1289,7 +1307,7 @@ function FileSection({ taskId, files, links = [], onReload }) {
   const deleteLink = async (id) => {
     if (!confirm(t('req_link_delete_confirm', 'Xóa link này?'))) return;
     try { await api.delete(`/requests/${taskId}/links/${id}`); onReload(); }
-    catch (e) { alert(e.response?.data?.message || e.message); }
+    catch (e) { notify(e); }
   };
   const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
 
@@ -1305,7 +1323,7 @@ function FileSection({ taskId, files, links = [], onReload }) {
       });
       onReload();
     } catch(err) {
-      alert(err.response?.data?.message || t('req_upload_failed'));
+      notify(err);
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -1317,7 +1335,7 @@ function FileSection({ taskId, files, links = [], onReload }) {
     try {
       await api.delete(`/requests/${taskId}/files/${fileId}`);
       onReload();
-    } catch(e) { alert(e.message); }
+    } catch(e) { notify(e); }
   };
 
   const getIcon = (name) => {

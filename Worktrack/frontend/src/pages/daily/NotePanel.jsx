@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import api from '../../api/client';
 import { C, FONT_SANS, FONT_MONO, dmy, addDays, scoreColor, initialsOf, OFF_KINDS, idLine, offLabel, isWeekendDate, inputStyle } from './shared';
 import { Btn, SectionTitle, ErrBox } from './ui';
+import useAuth from '../../store/authStore';
 
 /* ---------------- khoảng ngày: Bắt đầu → Kết thúc (thêm mới + sửa) ---------------- */
 // onStart không truyền = ngày bắt đầu cố định (ngày đang mở)
@@ -148,8 +149,18 @@ function AddTask({ date, onAdded }) {
 }
 
 /* ---------------- khung chấm / sửa điểm ---------------- */
-function ScoreBox({ member, date, score, maxScore, canScore, scorable, onSaved }) {
+function ScoreBox({ member, date, score, maxScore, canScore, scorable, flow, onSaved }) {
   const { t } = useTranslation();
+  const isReviewer = useAuth(s => ['admin', 'manager'].includes(s.user?.role));
+  const [reviewing, setReviewing] = useState(false);
+  // Quy trình có bước Manager duyệt: duyệt xong → Leader không sửa được nữa
+  const locked = !!score?.reviewed_by && !isReviewer;
+  const review = async () => {
+    setReviewing(true); setErr('');
+    try { await api.put('/worklog/review', { user_id: member.id, work_date: date }); onSaved(); }
+    catch (e) { setErr(e.response?.data?.message || e.message); }
+    finally { setReviewing(false); }
+  };
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState('');
   const [comment, setComment] = useState('');
@@ -224,7 +235,17 @@ function ScoreBox({ member, date, score, maxScore, canScore, scorable, onSaved }
           {score.comment
             ? <div style={{ fontSize: 13, color: C.ink, background: C.canvas, borderRadius: 9, padding: '7px 10px', borderLeft: `3px solid ${col}`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>“{score.comment}”</div>
             : <div style={{ fontSize: 12, color: C.faint }}>{t('wl_no_comment', 'Không có nhận xét')}</div>}
-          {canScore && scorable && <div><Btn small onClick={open}>✏️ {t('wl_edit_score', 'Sửa điểm')}</Btn></div>}
+          {score.reviewed_by
+            ? <div style={{ fontSize: 11.5, fontWeight: 700, color: C.success }}>✔ {t('wl_reviewed_by', 'Đã duyệt bởi')} {score.reviewer_name || '?'}{score.reviewed_at ? <span style={{ color: C.faint, fontWeight: 500 }}> · {score.reviewed_at.slice(11, 16)} {dmy(score.reviewed_at.slice(0, 10))}</span> : null}</div>
+            : flow?.needs_review && <div style={{ fontSize: 11.5, fontWeight: 700, color: C.warning }}>⏳ {t('wl_wait_review', 'Chờ Manager duyệt')}</div>}
+          <ErrBox>{err}</ErrBox>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {flow?.can_review && !score.reviewed_by && (
+              <Btn kind="violet" small onClick={review} disabled={reviewing} style={{ background: C.success, borderColor: C.success }}>{reviewing ? '…' : `✔ ${t('wl_review_btn', 'Duyệt điểm')}`}</Btn>
+            )}
+            {canScore && scorable && !locked && <Btn small onClick={open}>✏️ {t('wl_edit_score', 'Sửa điểm')}</Btn>}
+          </div>
+          {locked && canScore && <div style={{ fontSize: 11, color: C.faint }}>🔒 {t('wl_review_locked', 'Manager đã duyệt — muốn sửa điểm, nhờ Manager')}</div>}
         </div>
       </div>
     );
@@ -241,14 +262,16 @@ function ScoreHistory({ items }) {
       <SectionTitle icon="🕘">{t('wl_history', 'Lịch sử chấm điểm')}</SectionTitle>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {items.map(h => {
-          const edit = h.action_type === 'worklog_score_edited';
+          const edit = h.action_type === 'worklog_score_edited', rev = h.action_type === 'worklog_reviewed';
           return (
             <div key={h.id} style={{ display: 'flex', gap: 9, fontSize: 12.5 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: edit ? C.warning : C.success, marginTop: 5, flexShrink: 0 }} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: rev ? C.primary : edit ? C.warning : C.success, marginTop: 5, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: C.ink }}>
                   <b>{h.actor_name || '?'}</b>{' '}
-                  {edit
+                  {rev
+                    ? <>✔ {t('wl_h_reviewed', 'duyệt điểm')} <b style={{ fontFamily: FONT_MONO }}>{+h.new_score}đ</b></>
+                    : edit
                     ? <>{t('wl_h_edited', 'sửa điểm')} <b style={{ fontFamily: FONT_MONO }}>{h.old_score != null ? `${+h.old_score}đ` : '—'} → {+h.new_score}đ</b></>
                     : <>{t('wl_h_scored', 'chấm')} <b style={{ fontFamily: FONT_MONO }}>{+h.new_score}đ</b></>}
                   <span style={{ color: C.faint, fontSize: 11, fontFamily: FONT_MONO }}> · {h.at.slice(8, 10)}/{h.at.slice(5, 7)} {h.at.slice(11)}</span>
@@ -432,7 +455,7 @@ export default function NotePanel({ day, member, entries, score, off, data, hist
         <div>
           <SectionTitle icon="⭐">{t('wl_evaluation', 'Đánh giá')}</SectionTitle>
           <ScoreBox key={`${day.date}-${score?.score}-${score?.comment}`} member={member} date={day.date} score={score} maxScore={data.max_score}
-            canScore={data.can_score} scorable={scorable} onSaved={onChanged} />
+            canScore={data.can_score} scorable={scorable} flow={data.flow} onSaved={onChanged} />
         </div>
         </>}
 

@@ -16,7 +16,7 @@ const TYPE_ICON = {
   request_commented: '💬', request_scored: '⭐', request_claimed: '🙋',
   daily_scored: '📅', daily_score_edited: '✏️',
   request_activity: '📋',
-  worklog_scored: '🗓', worklog_score_edited: '✏️',
+  worklog_scored: '🗓', worklog_score_edited: '✏️', worklog_reviewed: '✅', worklog_review_reminder: '🧾',
   worklog_unscored_reminder: '⏳', worklog_missing_reminder: '📝', worklog_entry_new: '🆕',
   user_change_request: '📨', user_change_approved: '✅', user_change_rejected: '❌',
   request_review_reminder: '🧾',
@@ -65,6 +65,10 @@ function NotificationText({ n, t }) {
     // Công việc hằng ngày: chấm điểm cả ngày / sửa điểm đã chấm
     case 'worklog_scored':
       return t('notif_worklog_scored', { actor, date: p.workDate, score: p.score, defaultValue: `${actor} đã chấm điểm ngày ${p.workDate} của bạn: ${p.score}đ${p.comment ? ` — ${p.comment}` : ''}` });
+    case 'worklog_review_reminder':
+      return t('notif_worklog_review_reminder', { total: p.total, people: p.people, defaultValue: `Còn ${p.total} ngày CV hằng ngày (${p.people} người) Leader đã chấm, đang chờ bạn duyệt` });
+    case 'worklog_reviewed':
+      return t('notif_worklog_reviewed', { actor, date: p.workDate, score: p.score, name: p.targetName, defaultValue: `${actor} đã duyệt điểm ngày ${p.workDate} của ${p.targetName}: ${p.score}đ` });
     case 'worklog_score_edited':
       return t('notif_worklog_score_edited', { actor, date: p.workDate, old: p.oldScore, new: p.score, name: p.targetName, defaultValue: `${actor} đã sửa điểm ngày ${p.workDate} của ${p.targetName}: ${+p.oldScore}đ → ${p.score}đ` });
     // Nhắc việc tự động mỗi sáng (cron 08:00 T2–T6)

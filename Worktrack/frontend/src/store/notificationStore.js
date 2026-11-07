@@ -15,7 +15,7 @@ const useNotificationStore = create((set, get) => ({
     try {
       const { data } = await api.get('/notifications');
       set({ items: data.data, loading: false });
-    } catch (e) {
+    } catch {
       set({ loading: false });
     }
   },
@@ -24,7 +24,7 @@ const useNotificationStore = create((set, get) => ({
     try {
       const { data } = await api.get('/notifications/unread-count');
       set({ unreadCount: data.data.count });
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   },
@@ -37,7 +37,7 @@ const useNotificationStore = create((set, get) => ({
     }));
     try {
       await api.post(`/notifications/${id}/read`);
-    } catch (e) {
+    } catch {
       /* ignore — UI đã optimistic update, không cần rollback phức tạp cho tính năng nhỏ này */
     }
   },
@@ -46,15 +46,15 @@ const useNotificationStore = create((set, get) => ({
     set((s) => ({ items: s.items.map((n) => ({ ...n, is_read: 1 })), unreadCount: 0 }));
     try {
       await api.post('/notifications/read-all');
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   },
 
   // Gọi 1 lần sau khi login thành công (vd trong App.jsx hoặc MainLayout)
-  connect: (userId) => {
+  connect: () => {
     if (get().connected) return;
-    const socket = getSocket(userId);
+    const socket = getSocket();
 
     socket.on('notification:new', (notification) => {
       set((s) => ({

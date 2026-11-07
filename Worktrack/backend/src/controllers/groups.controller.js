@@ -82,6 +82,11 @@ exports.remove = async (req, res) => {
 
 // Kiểm tra dùng chung cho addMember/removeMember
 async function canManageGroupMembers(req) {
+  const access = require('../config/access');
+  if (access.isTuned(req.user, 'group.members')) { // Admin đã chỉnh → theo phạm vi Admin chọn
+    const r = await access.can(req.user, 'group.members', { groupId: +req.params.id });
+    return r.ok ? { ok: true } : { ok: false, status: 403, message: r.reason };
+  }
   const isPrivileged = ['admin','manager'].includes(req.user.role);
   if (isPrivileged) return { ok: true };
 

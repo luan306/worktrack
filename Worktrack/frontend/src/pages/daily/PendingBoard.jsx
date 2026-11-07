@@ -95,7 +95,7 @@ export default function PendingBoard({ isMobile, isNarrow, onOpenPerson }) {
                     return (
                       <div key={`${it.user.id}-${it.work_date}`} onClick={() => setSel({ userId: it.user.id, date: it.work_date })} className="wl-pend-row" style={{
                         display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, cursor: 'pointer', background: 'var(--wt-surface)',
-                        border: `1.5px solid ${on ? C.primary : C.line}`, borderLeft: `4px solid ${C.warning}`, boxShadow: on ? `0 0 0 3px ${C.primary}22` : '0 1px 2px rgba(15,23,41,.04)',
+                        border: `1.5px solid ${on ? C.primary : C.line}`, borderLeft: `4px solid ${it.stage === 'review' ? C.success : C.warning}`, boxShadow: on ? `0 0 0 3px ${C.primary}22` : '0 1px 2px rgba(15,23,41,.04)',
                       }}>
                         <button onClick={(e) => { e.stopPropagation(); onOpenPerson(it.user.id, it.work_date); }} title={t('wl_open_person', 'Mở lịch của người này')}
                           style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', cursor: 'pointer', flexShrink: 0, background: it.user.avatar_color || C.primary, color: '#fff', fontWeight: 800, fontSize: 14, fontFamily: FONT_SANS }}>
@@ -107,15 +107,19 @@ export default function PendingBoard({ isMobile, isNarrow, onOpenPerson }) {
                             {!isMobile && <span style={{ fontSize: 11, color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{idLine(it.user)}</span>}
                           </div>
                           <div style={{ display: 'flex', gap: 5, marginTop: 4, minWidth: 0, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-                            {it.titles.map((ti, k) => (
+                            {it.stage === 'review' && (
+                              <span style={{ fontSize: 11.5, color: C.success, fontWeight: 800, whiteSpace: 'nowrap' }}>★ {it.score} · {t('wl_scored_by', 'Chấm bởi')} {it.scorer_name || '?'}</span>
+                            )}
+                            {(it.titles || []).map((ti, k) => (
                               <span key={k} style={{ fontSize: 11.5, color: C.sub, background: C.board, padding: '2px 8px', borderRadius: 6, maxWidth: isMobile ? '100%' : 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ti}</span>
                             ))}
-                            {it.n > it.titles.length && <span style={{ fontSize: 11, color: C.faint, fontWeight: 700, whiteSpace: 'nowrap', alignSelf: 'center' }}>+{it.n - it.titles.length}</span>}
+                            {it.n > (it.titles || []).length && it.stage !== 'review' && <span style={{ fontSize: 11, color: C.faint, fontWeight: 700, whiteSpace: 'nowrap', alignSelf: 'center' }}>+{it.n - it.titles.length}</span>}
                           </div>
                         </div>
                         <span style={{ fontSize: 11.5, fontWeight: 700, color: C.faint, whiteSpace: 'nowrap' }}>{it.n} {t('wl_tasks', 'việc')}</span>
                         <span className="wl-btn" style={{ padding: '7px 12px', borderRadius: 10, fontSize: 12, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap',
-                          background: `linear-gradient(135deg, ${C.violet}, #7c3aed)`, boxShadow: `0 3px 10px ${C.violet}44` }}>⭐ {t('wl_score_btn', 'Chấm')}</span>
+                          background: it.stage === 'review' ? `linear-gradient(135deg, ${C.success}, #0f9d58)` : `linear-gradient(135deg, ${C.violet}, #7c3aed)`,
+                          boxShadow: `0 3px 10px ${it.stage === 'review' ? C.success : C.violet}44` }}>{it.stage === 'review' ? `✔ ${t('wl_review_short', 'Duyệt')}` : `⭐ ${t('wl_score_btn', 'Chấm')}`}</span>
                       </div>
                     );
                   })}

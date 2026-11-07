@@ -23,6 +23,6 @@ router.get('/exports', auth(['admin','manager']), dashboardController.getExportL
 router.get('/excel/:filename', auth(['admin','manager']), dashboardController.downloadExcel);
 
 // GET /api/dashboard/debug — endpoint debug dữ liệu (chỉ nên bật ở dev)
-router.get('/debug', auth(['admin','manager']), dashboardController.debug);
+router.get('/debug', auth(['admin']), dashboardController.debug);
 
 module.exports = router;

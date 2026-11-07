@@ -77,6 +77,17 @@ const auth = (roles = []) => async (req, res, next) => {
 auth.perm = (...keys) => [auth(), (req, res, next) => keys.some(k => hasPerm(req.user, k)) ? next()
   : res.status(403).json({ success: false, message: 'Bạn không có quyền thực hiện thao tác này' })];
 
+// Cổng theo HÀNH ĐỘNG (Quản trị → 🔐 Phân quyền): auth.can('dash.lock', { perms: ['dash.lock'] }) hoặc { roles: ['admin','manager'] }
+//  • Admin chưa chỉnh hành động này cho người / vai trò → đúng như cũ (perms / roles)
+//  • Đã chỉnh → qua cổng nếu có phạm vi; phạm vi chi tiết (cùng nhóm, CV mình tạo…) kiểm tra tiếp trong controller
+auth.can = (keys, legacy = {}) => [auth(), (req, res, next) => {
+  const access = require('../config/access');
+  const list = Array.isArray(keys) ? keys : [keys];
+  const old = (legacy.perms || []).some(k => hasPerm(req.user, k)) || (legacy.roles || []).includes(req.user.role) || req.user.role === 'admin';
+  const ok = list.some(k => access.isTuned(req.user, k)) ? list.some(k => access.hasAny(req.user, k)) || (!list.every(k => access.isTuned(req.user, k)) && old) : old;
+  return ok ? next() : res.status(403).json({ success: false, message: 'Bạn không có quyền thực hiện thao tác này' });
+}];
+
 module.exports = auth;
 module.exports.revokeToken = revokeToken;
 module.exports.invalidateUser = invalidateUser;
